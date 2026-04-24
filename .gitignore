@@ -1,18 +1,23 @@
 # Rust
-/target
 **/target
 
 # Node
 **/node_modules
-tauri-app/package-lock.json
 
 # Tauri generated (not source-controlled)
 tauri-app/src-tauri/gen/
 tauri-app/src/style.css
 
 # Environment / secrets
-.env
 *.env
+
+# TLS material — never check in customer certs/keys
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+*.cer
 
 # Private dev notes
 .dev/

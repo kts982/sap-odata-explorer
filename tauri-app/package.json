@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "scripts": {
     "css": "npx tailwindcss -i src/input.css -o src/style.css --minify",
-    "dev": "npx serve src -l 1420",
+    "dev": "npm run css && npx serve src -l 1420",
     "tauri": "tauri"
   },
   "devDependencies": {
