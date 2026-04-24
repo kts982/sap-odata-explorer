@@ -146,10 +146,9 @@ Things intentionally left out of SAP View for now, with the reasoning:
 
 Still on the roadmap (above the deliberate-gap line — we *will* do these):
 
-- **ABAP-CDS "fix hints"** in lint findings — each finding names the likely CDS annotation to add (`@ObjectModel.text.element`, `@Consumption.valueHelpDefinition`, `@Search.searchable`, ...). Makes the linter *teach* rather than just grade.
-- **Lint profiles** — today's linter judges every entity as a list-report. An F4 service (`*VH`) doesn't need `UI.LineItem`. Auto-detect the profile from annotations present + naming conventions, allow manual override.
-- **Consistency-rule lint checks** — beyond presence: flag `SelectionFields` pointing at non-filterable properties, `SortOrder` using non-sortable ones, `ValueList` without a writable `Out`/`InOut` mapping back to the local property, `TextArrangement` without a `Common.Text`, etc.
 - **Prominence of the readiness panel** — currently below the describe tables; a summary pill or a separate button may work better depending on how the describe view evolves.
+- **CLI `--profile` override + `--fail-on`** — let users ask "how list-report-ready is this entity if I use it that way?" and let CI pipelines non-zero-exit on any warn/miss.
+- **Clickable lint findings** — jump from a finding to the affected property row, or open the annotation inspector filtered to the relevant term.
 
 ## Fiori-readiness checklist
 

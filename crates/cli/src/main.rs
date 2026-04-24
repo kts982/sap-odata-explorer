@@ -1712,9 +1712,18 @@ async fn cmd_lint(
             .ok_or_else(|| anyhow::anyhow!("entity '{name}' vanished"))?;
         let mut findings = lint::evaluate_entity_type(et);
         if let Some(s) = min_sev {
-            findings.retain(|f| severity_at_least(f.severity, s));
+            // Keep the "profile" banner regardless of severity so the
+            // user still sees which profile was assumed when they ask
+            // for only warns/misses. Every other Pass is filtered out
+            // as intended.
+            findings.retain(|f| f.code == "profile" || severity_at_least(f.severity, s));
         }
-        if !findings.is_empty() {
+        // A lone "profile" banner with nothing else at the requested
+        // severity isn't informative — it just says "shape=X, no
+        // warns/misses". Suppress to keep the output clean; users
+        // see the banner when they run without --min-severity.
+        let has_actionable = findings.iter().any(|f| f.code != "profile");
+        if has_actionable {
             reports.push(Report { entity: *name, findings });
         }
     }
