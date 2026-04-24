@@ -1,0 +1,36 @@
+# Rust
+/target
+**/target
+
+# Node
+**/node_modules
+tauri-app/package-lock.json
+
+# Tauri generated (not source-controlled)
+tauri-app/src-tauri/gen/
+tauri-app/src/style.css
+
+# Environment / secrets
+.env
+*.env
+
+# Private dev notes
+.dev/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build artifacts
+*.log
+
+# User config (local connections)
+connections.toml

@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SAP OData Explorer</title>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    @font-face { font-family: 'DM Sans'; src: url('fonts/dm-sans-latin.woff2') format('woff2'); font-weight: 300 600; font-display: swap; }
+    @font-face { font-family: 'JetBrains Mono'; src: url('fonts/jetbrains-mono-latin.woff2') format('woff2'); font-weight: 300 500; font-display: swap; }
+  </style>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: 'DM Sans', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #252a36; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #353d50; }
+
+    /* Spinner */
+    .spinner {
+      width: 14px; height: 14px;
+      border: 2px solid #252a36;
+      border-top-color: #e5a200;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      display: inline-block;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Table */
+    table th { position: sticky; top: 0; z-index: 1; }
+
+    /* Sidebar items */
+    .sidebar-item { transition: background 0.1s, border-left-color 0.1s; border-left: 2px solid transparent; }
+    .sidebar-item:hover { background: #1e2330; border-left-color: #454d5e; }
+    .sidebar-item.active { background: #1e2330; border-left-color: #e5a200; }
+
+    /* Inputs */
+    input, select {
+      transition: border-color 0.15s;
+    }
+    input:focus, select:focus {
+      border-color: #e5a200 !important;
+      box-shadow: 0 0 0 1px rgba(229, 162, 0, 0.15);
+    }
+
+    /* Buttons */
+    .btn-primary {
+      background: linear-gradient(135deg, #e5a200 0%, #c48b00 100%);
+      color: #0c0e13;
+      font-weight: 500;
+      transition: all 0.15s;
+    }
+    .btn-primary:hover { filter: brightness(1.12); transform: translateY(-0.5px); }
+    .btn-primary:active { transform: translateY(0); filter: brightness(0.95); }
+
+    .btn-ghost {
+      background: #181c25;
+      border: 1px solid #252a36;
+      color: #d4d8e0;
+      transition: all 0.15s;
+    }
+    .btn-ghost:hover { background: #1e2330; border-color: #353d50; }
+
+    /* Version badges */
+    .badge-v2 { background: rgba(61, 220, 132, 0.1); color: #3ddc84; border: 1px solid rgba(61, 220, 132, 0.2); }
+    .badge-v4 { background: rgba(76, 154, 255, 0.1); color: #4c9aff; border: 1px solid rgba(76, 154, 255, 0.2); }
+
+    /* Describe panel slide */
+    #describePanel { transition: max-height 0.25s ease, opacity 0.2s ease; }
+
+    /* Row count badge */
+    .row-count {
+      background: rgba(229, 162, 0, 0.1);
+      color: #e5a200;
+      border: 1px solid rgba(229, 162, 0, 0.2);
+    }
+
+    /* Expand badge */
+    .expand-badge {
+      background: rgba(76, 154, 255, 0.1);
+      color: #4c9aff;
+      border: 1px solid rgba(76, 154, 255, 0.15);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .expand-badge:hover { background: rgba(76, 154, 255, 0.2); }
+
+    /* Modal overlay */
+    .modal-overlay {
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(4px);
+      animation: fadeIn 0.15s ease;
+    }
+    .modal-content {
+      animation: slideUp 0.2s ease;
+    }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+    /* ── Tabs ── */
+    #tabBar {
+      display: flex;
+      align-items: stretch;
+      background: #12151c;
+      border-bottom: 1px solid #252a36;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: none;
+      flex-shrink: 0;
+      min-height: 32px;
+    }
+    #tabBar::-webkit-scrollbar { display: none; }
+
+    .tab-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 12px;
+      cursor: pointer;
+      font-size: 11px;
+      color: #454d5e;
+      border-right: 1px solid #252a36;
+      border-bottom: 2px solid transparent;
+      white-space: nowrap;
+      min-width: 80px;
+      max-width: 180px;
+      transition: color 0.12s, background 0.12s;
+      position: relative;
+      user-select: none;
+    }
+    .tab-item:hover { background: #1e2330; color: #d4d8e0; }
+    .tab-item.active { color: #d4d8e0; border-bottom-color: #e5a200; background: #181c25; }
+    .tab-item .tab-title { flex: 1; overflow: hidden; text-overflow: ellipsis; font-family: 'JetBrains Mono', monospace; }
+    .tab-item .tab-close {
+      opacity: 0;
+      color: #454d5e;
+      font-size: 12px;
+      line-height: 1;
+      padding: 1px 2px;
+      border-radius: 2px;
+      cursor: pointer;
+      transition: opacity 0.1s, color 0.1s;
+      flex-shrink: 0;
+    }
+    .tab-item:hover .tab-close { opacity: 1; }
+    .tab-item .tab-close:hover { color: #ff5c5c; background: rgba(255,92,92,0.12); }
+
+    #btnAddTab {
+      padding: 0 10px;
+      color: #454d5e;
+      font-size: 16px;
+      cursor: pointer;
+      transition: color 0.12s;
+      flex-shrink: 0;
+      align-self: center;
+      background: none;
+      border: none;
+      line-height: 1;
+    }
+    #btnAddTab:hover { color: #e5a200; }
+
+    /* ── Favorite star ── */
+    .svc-star {
+      color: #454d5e;
+      cursor: pointer;
+      font-size: 13px;
+      line-height: 1;
+      flex-shrink: 0;
+      transition: color 0.12s;
+      padding: 1px;
+    }
+    .svc-star:hover { color: #e5a200; }
+    .svc-star.starred { color: #e5a200; }
+
+    /* ── Stats bar ── */
+    #statsBar {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+    }
+    .timing-fast { color: #3ddc84; }
+    .timing-ok   { color: #e5a200; }
+    .timing-slow { color: #ff5c5c; }
+
+    /* ── History panel ── */
+    #historyPanel {
+      border-top: 1px solid #252a36;
+      background: #12151c;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .history-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 12px;
+      cursor: pointer;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      border-bottom: 1px solid rgba(37,42,54,0.5);
+      transition: background 0.1s;
+    }
+    .history-item:hover { background: #1e2330; }
+
+    /* ── Copy buttons ── */
+    .copy-btn {
+      opacity: 0;
+      cursor: pointer;
+      color: #454d5e;
+      transition: opacity 0.1s, color 0.1s;
+      background: none;
+      border: none;
+      padding: 1px 3px;
+      border-radius: 2px;
+      font-size: 10px;
+      line-height: 1;
+      vertical-align: middle;
+    }
+    .copy-btn:hover { color: #e5a200; background: rgba(229,162,0,0.1); }
+    th:hover .copy-btn,
+    tr:hover .row-copy-btn { opacity: 1; }
+
+    /* ── Filter tooltip ── */
+    #filterTooltip {
+      position: fixed;
+      z-index: 60;
+      background: #181c25;
+      border: 1px solid #252a36;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      color: #d4d8e0;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+      animation: slideUp 0.12s ease;
+      white-space: nowrap;
+      pointer-events: auto;
+      cursor: pointer;
+    }
+    #filterTooltip:hover { border-color: #e5a200; }
+
+    /* ── Service path display ── */
+    #servicePathBar {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: #454d5e;
+      padding: 3px 12px;
+      border-bottom: 1px solid #252a36;
+      background: #12151c;
+      display: none;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    #servicePathBar.visible { display: flex; }
+  </style>
+</head>
+<body class="bg-ox-bg text-ox-text h-screen flex flex-col overflow-hidden select-none">
+
+  <!-- ═══ Top bar ═══ -->
+  <header class="bg-ox-panel border-b border-ox-border px-4 py-2 flex items-center gap-5 shrink-0">
+    <!-- Logo -->
+    <div class="flex items-center gap-2">
+      <div class="w-5 h-5 rounded bg-gradient-to-br from-ox-amber to-ox-amberDim flex items-center justify-center">
+        <span class="text-[10px] font-bold text-ox-bg">O</span>
+      </div>
+      <h1 class="text-sm font-medium text-ox-text tracking-tight">OData <span class="text-ox-amber">Explorer</span></h1>
+    </div>
+
+    <!-- Divider -->
+    <div class="w-px h-5 bg-ox-border"></div>
+
+    <!-- Profile -->
+    <div class="flex items-center gap-2">
+      <span class="text-[10px] uppercase tracking-widest text-ox-dim font-medium">System</span>
+      <select id="profileSelect"
+        class="bg-ox-surface text-ox-text text-sm border border-ox-border rounded-md px-2.5 py-1 outline-none min-w-[140px]">
+        <option value="">Select profile...</option>
+      </select>
+      <button id="btnProfileSignIn" class="btn-ghost text-xs px-2.5 py-1 rounded hidden" title="Sign in with browser SSO">Sign In</button>
+      <button id="btnAddProfile" class="btn-ghost text-xs px-1.5 py-1 rounded" title="Add system">+</button>
+    </div>
+
+    <!-- Divider -->
+    <div class="w-px h-5 bg-ox-border"></div>
+
+    <!-- Search -->
+    <div class="flex items-center gap-2 flex-1">
+      <span class="text-[10px] uppercase tracking-widest text-ox-dim font-medium">Service</span>
+      <div class="relative flex-1 max-w-md">
+        <input id="serviceInput" type="text" placeholder="Search services or enter path..."
+          class="bg-ox-surface text-ox-text text-sm border border-ox-border rounded-md pl-3 pr-8 py-1 w-full outline-none font-mono" />
+        <svg class="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-ox-dim" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
+      </div>
+      <button id="btnSearch" class="btn-primary text-xs px-3.5 py-1 rounded-md">Search</button>
+    </div>
+
+    <!-- Spinner -->
+    <div id="globalSpinner" class="hidden"><div class="spinner"></div></div>
+  </header>
+
+  <!-- ═══ Main layout ═══ -->
+  <div class="flex flex-1 overflow-hidden">
+
+    <!-- ─── Sidebar ─── -->
+    <aside class="w-60 bg-ox-surface border-r border-ox-border flex flex-col shrink-0">
+      <div class="px-3 py-2 flex items-center justify-between border-b border-ox-border">
+        <span id="sidebarTitle" class="text-[10px] uppercase tracking-widest text-ox-dim font-medium">Services</span>
+        <span id="sidebarCount" class="text-[10px] text-ox-dim"></span>
+      </div>
+      <div id="entityList" class="flex-1 overflow-y-auto">
+        <div class="px-4 py-8 text-center">
+          <div class="text-ox-dim text-xs">Select a profile and search</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ─── Main content ─── -->
+    <main class="flex-1 flex flex-col overflow-hidden bg-ox-bg">
+
+      <!-- Tab bar -->
+      <div id="tabBar">
+        <!-- tabs rendered here -->
+        <button id="btnAddTab" title="New tab">+</button>
+      </div>
+
+      <!-- Service path display -->
+      <div id="servicePathBar">
+        <span id="servicePathVersion" class="text-[10px] px-1 py-px rounded font-mono badge-v4"></span>
+        <span id="servicePathText" class="truncate"></span>
+      </div>
+
+      <!-- Entity describe panel -->
+      <div id="describePanel" class="border-b border-ox-border bg-ox-surface overflow-auto max-h-80 hidden">
+        <div class="px-4 py-2.5 flex items-center justify-between border-b border-ox-border bg-ox-panel">
+          <div class="flex items-center gap-2">
+            <div class="w-1.5 h-1.5 rounded-full bg-ox-amber"></div>
+            <h2 id="entityTitle" class="text-xs font-mono font-medium text-ox-text"></h2>
+          </div>
+          <button id="btnCloseDescribe" class="text-ox-dim hover:text-ox-text text-xs px-2 py-0.5 rounded hover:bg-ox-hover transition-colors">close</button>
+        </div>
+        <div id="describeContent" class="p-4"></div>
+      </div>
+
+      <!-- Query bar -->
+      <div id="queryBar" class="bg-ox-panel border-b border-ox-border px-4 py-2 hidden">
+        <div class="flex items-center gap-2 flex-wrap">
+          <div class="flex items-center gap-1.5 mr-1">
+            <div class="w-1.5 h-1.5 rounded-full bg-ox-green"></div>
+            <span id="queryEntitySet" class="text-xs font-mono font-medium text-ox-text"></span>
+          </div>
+          <input id="qSelect" type="text" placeholder="$select" title="Click properties above to add"
+            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded px-2 py-1 w-44 outline-none" />
+          <input id="qFilter" type="text" placeholder="$filter"
+            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded px-2 py-1 w-52 outline-none" />
+          <input id="qExpand" type="text" placeholder="$expand" title="Click nav properties above to add"
+            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded px-2 py-1 w-36 outline-none" />
+          <input id="qOrderby" type="text" placeholder="$orderby"
+            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded px-2 py-1 w-32 outline-none" />
+          <input id="qTop" type="number" placeholder="top" value="20"
+            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded px-2 py-1 w-16 outline-none" />
+          <input id="qSkip" type="number" placeholder="skip"
+            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded px-2 py-1 w-16 outline-none" />
+          <button id="btnRun" class="btn-primary text-xs px-3 py-1 rounded">Run</button>
+          <button id="btnJson" class="btn-ghost text-xs px-2.5 py-1 rounded">{&thinsp;}</button>
+          <button id="btnCopyUrl" class="btn-ghost text-xs px-2 py-1 rounded" title="Copy OData URL">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;vertical-align:middle"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            <span style="margin-left:3px">URL</span>
+          </button>
+          <button id="btnHistoryToggle" class="btn-ghost text-xs px-2 py-1 rounded">History</button>
+        </div>
+      </div>
+
+      <!-- History panel -->
+      <div id="historyPanel" class="hidden"></div>
+
+      <!-- Stats bar -->
+      <div id="statsBar" class="hidden px-4 py-1.5 bg-ox-panel border-b border-ox-border text-ox-dim flex items-center gap-3 shrink-0">
+        <span id="statRows"></span>
+        <span class="text-ox-border">·</span>
+        <span id="statSize"></span>
+        <span class="text-ox-border">·</span>
+        <span id="statTiming"></span>
+      </div>
+
+      <!-- Results area -->
+      <div id="resultsArea" class="flex-1 overflow-auto">
+        <div class="flex items-center justify-center h-full">
+          <div class="text-center">
+            <div class="text-ox-amber text-3xl mb-3 opacity-20">&#9670;</div>
+            <div class="text-ox-dim text-xs leading-relaxed">
+              Select a <span class="text-ox-text">profile</span> &middot; search for a <span class="text-ox-text">service</span> &middot; explore <span class="text-ox-text">entities</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Status bar -->
+      <footer class="bg-ox-panel border-t border-ox-border px-4 py-1 text-[11px] text-ox-text flex items-center gap-4 shrink-0 font-mono">
+        <span id="statusText">Ready</span>
+        <span id="statusTime" class="ml-auto text-ox-amber"></span>
+      </footer>
+    </main>
+  </div>
+
+  <!-- ═══ Add Profile Modal ═══ -->
+  <div id="addProfileModal" class="hidden fixed inset-0 z-50 modal-overlay flex items-center justify-center">
+    <div class="modal-content bg-ox-panel border border-ox-border rounded-lg shadow-2xl w-[420px]">
+      <div class="px-5 py-3 border-b border-ox-border flex items-center justify-between">
+        <h3 class="text-sm font-medium text-ox-text">Add SAP System</h3>
+        <button id="btnModalClose" class="text-ox-dim hover:text-ox-text text-xs px-2 py-0.5 rounded hover:bg-ox-hover">close</button>
+      </div>
+      <div class="p-5 space-y-3">
+        <div>
+          <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Profile Name</label>
+          <input id="mpName" type="text" placeholder="e.g. DEV, QAS, PRD"
+            class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-none" />
+        </div>
+        <div>
+          <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Base URL</label>
+          <input id="mpUrl" type="text" placeholder="https://hostname:port"
+            class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-none" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Client</label>
+            <input id="mpClient" type="text" value="100"
+              class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-none" />
+          </div>
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Language</label>
+            <input id="mpLang" type="text" value="EN"
+              class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-none" />
+          </div>
+        </div>
+        <div>
+          <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Authentication</label>
+          <select id="mpAuthMode"
+            class="bg-ox-surface text-ox-text text-sm border border-ox-border rounded-md px-3 py-1.5 w-full outline-none">
+            <option value="basic">Username / Password</option>
+            <option value="sso">Windows SSO (Kerberos)</option>
+            <option value="browser">Browser SSO (Azure / SAML)</option>
+          </select>
+          <div id="mpAuthHint" class="text-[10px] text-ox-dim mt-1">Stores the password in Windows Credential Manager.</div>
+        </div>
+        <div id="mpCredFields">
+          <div class="mb-3">
+            <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Username</label>
+            <input id="mpUser" type="text"
+              class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-none" />
+          </div>
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Password</label>
+            <input id="mpPass" type="password"
+              class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-none" />
+            <div class="text-[10px] text-ox-dim mt-1">Stored in Windows Credential Manager</div>
+          </div>
+        </div>
+        <div id="mpError" class="text-ox-red text-xs hidden"></div>
+        <div id="mpSuccess" class="text-ox-green text-xs hidden"></div>
+      </div>
+      <div class="px-5 py-3 border-t border-ox-border flex items-center justify-between">
+        <button id="btnTest" class="btn-ghost text-xs px-3 py-1 rounded">Test</button>
+        <div class="flex gap-2">
+          <button id="btnCancel" class="btn-ghost text-xs px-3 py-1 rounded">Cancel</button>
+          <button id="btnSave" class="btn-primary text-xs px-4 py-1 rounded">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Filter tooltip (shared singleton) -->
+  <div id="filterTooltip" style="display:none"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

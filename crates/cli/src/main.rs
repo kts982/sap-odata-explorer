@@ -1,0 +1,1163 @@
+use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
+use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
+use sap_odata_core::{
+    auth::{AuthConfig, SapConnection},
+    client::SapClient,
+    config::{self, ConnectionProfile},
+    metadata::ODataVersion,
+    query::ODataQuery,
+};
+
+#[derive(Parser)]
+#[command(
+    name = "sap-odata",
+    version,
+    about = "SAP OData Service Explorer — browse entities, build queries, test services"
+)]
+struct Cli {
+    /// Connection profile name (from connections.toml)
+    #[arg(long, short = 'p', global = true)]
+    profile: Option<String>,
+
+    /// SAP system base URL (overrides profile)
+    #[arg(long, env = "SAP_BASE_URL")]
+    url: Option<String>,
+
+    /// SAP client number (overrides profile)
+    #[arg(long, env = "SAP_CLIENT")]
+    client: Option<String>,
+
+    /// Language key (overrides profile)
+    #[arg(long, env = "SAP_LANGUAGE")]
+    language: Option<String>,
+
+    /// Username for basic auth (overrides profile)
+    #[arg(long, env = "SAP_USER")]
+    user: Option<String>,
+
+    /// Password for basic auth (overrides profile)
+    #[arg(long, env = "SAP_PASSWORD")]
+    password: Option<String>,
+
+    /// OData service path (e.g., /sap/opu/odata/sap/ZMY_SERVICE_SRV).
+    /// Required for all commands except 'services' and 'profile'.
+    #[arg(long, short = 's')]
+    service: Option<String>,
+
+    /// Output as JSON instead of table
+    #[arg(long, global = true)]
+    json: bool,
+
+    /// Show debug logs
+    #[arg(long, short = 'v', global = true)]
+    verbose: bool,
+
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Manage connection profiles
+    Profile {
+        #[command(subcommand)]
+        action: ProfileAction,
+    },
+
+    /// Manage service aliases for a profile (requires -p)
+    Alias {
+        #[command(subcommand)]
+        action: AliasAction,
+    },
+
+    /// List all available OData services from the SAP Gateway catalog
+    Services {
+        /// Filter services by name, title, or description (case-insensitive)
+        #[arg(long, short = 'f')]
+        filter: Option<String>,
+
+        /// Show only V2 services
+        #[arg(long)]
+        v2: bool,
+
+        /// Show only V4 services
+        #[arg(long)]
+        v4: bool,
+
+        /// Max number of services to display
+        #[arg(long)]
+        top: Option<usize>,
+    },
+
+    /// List all entity sets in the service
+    Entities,
+
+    /// Describe an entity type — show properties, keys, and navigation properties
+    Describe {
+        /// Entity set name (e.g., CustomerSet)
+        entity_set: String,
+    },
+
+    /// List function imports in the service
+    Functions,
+
+    /// Build and display an OData query URL (dry-run)
+    Build {
+        /// Entity set name
+        entity_set: String,
+
+        /// Fields to select (comma-separated)
+        #[arg(long)]
+        select: Option<String>,
+
+        /// Filter expression
+        #[arg(long)]
+        filter: Option<String>,
+
+        /// Navigation properties to expand (comma-separated)
+        #[arg(long)]
+        expand: Option<String>,
+
+        /// Order by clause (comma-separated, e.g. "Name asc,Date desc")
+        #[arg(long)]
+        orderby: Option<String>,
+
+        /// Max number of results
+        #[arg(long)]
+        top: Option<u32>,
+
+        /// Number of results to skip
+        #[arg(long)]
+        skip: Option<u32>,
+
+        /// Entity key (e.g., "'CUST01'" or "CustomerID='CUST01',CompanyCode='1000'")
+        #[arg(long)]
+        key: Option<String>,
+
+        /// Request inline count
+        #[arg(long)]
+        count: bool,
+    },
+
+    /// Execute an OData query and display the results
+    Run {
+        /// Entity set name
+        entity_set: String,
+
+        /// Fields to select (comma-separated)
+        #[arg(long)]
+        select: Option<String>,
+
+        /// Filter expression
+        #[arg(long)]
+        filter: Option<String>,
+
+        /// Navigation properties to expand (comma-separated)
+        #[arg(long)]
+        expand: Option<String>,
+
+        /// Order by clause
+        #[arg(long)]
+        orderby: Option<String>,
+
+        /// Max number of results
+        #[arg(long)]
+        top: Option<u32>,
+
+        /// Number of results to skip
+        #[arg(long)]
+        skip: Option<u32>,
+
+        /// Entity key
+        #[arg(long)]
+        key: Option<String>,
+
+        /// Request inline count
+        #[arg(long)]
+        count: bool,
+    },
+
+    /// Fetch and display the raw $metadata XML
+    Metadata,
+}
+
+#[derive(Subcommand)]
+enum ProfileAction {
+    /// List all saved connection profiles
+    List,
+
+    /// Add or update a connection profile
+    Add {
+        /// Profile name (e.g., DEV, QAS, PRD)
+        name: String,
+
+        /// SAP system base URL
+        #[arg(long)]
+        url: String,
+
+        /// SAP client number
+        #[arg(long, default_value = "100")]
+        client: String,
+
+        /// Language key
+        #[arg(long, default_value = "EN")]
+        language: String,
+
+        /// Username (not needed for --sso)
+        #[arg(long, default_value = "")]
+        user: String,
+
+        /// Password (not needed for --sso; stored in OS keyring by default)
+        #[arg(long, default_value = "")]
+        password: String,
+
+        /// Use Windows SSO (SPNEGO/Kerberos) — no username/password needed
+        #[arg(long)]
+        sso: bool,
+
+        /// Store password in config file instead of OS keyring (not recommended)
+        #[arg(long)]
+        plaintext: bool,
+
+        /// Create portable config next to the executable
+        #[arg(long)]
+        portable: bool,
+    },
+
+    /// Remove a connection profile
+    Remove {
+        /// Profile name to remove
+        name: String,
+    },
+
+    /// Test a connection profile
+    Test {
+        /// Profile name to test
+        name: String,
+    },
+
+    /// Show where the config file is located
+    Where,
+}
+
+#[derive(Subcommand)]
+enum AliasAction {
+    /// List all aliases for a profile
+    List,
+
+    /// Add or update a service alias
+    Add {
+        /// Short name (e.g., warehouse, orders)
+        name: String,
+
+        /// Full OData service path
+        path: String,
+    },
+
+    /// Remove a service alias
+    Remove {
+        /// Alias name to remove
+        name: String,
+    },
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    let log_level = if cli.verbose { "sap_odata=debug" } else { "sap_odata=warn" };
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive(log_level.parse().unwrap()),
+        )
+        .with_target(false)
+        .init();
+
+    // Handle commands that don't need a SAP connection
+    if let Commands::Profile { action } = &cli.command {
+        return handle_profile_command(action).await;
+    }
+    if let Commands::Alias { action } = &cli.command {
+        return handle_alias_command(action, cli.profile.as_deref());
+    }
+
+    // Resolve connection: profile → env vars → CLI flags
+    let connection = resolve_connection(&cli)?;
+    let sap_client = SapClient::new(connection).context("failed to create SAP client")?;
+
+    // Resolve service path: alias → catalog lookup → raw path
+    let resolved_service = resolve_service_path(&cli, &sap_client).await?;
+
+    let require_service = || -> Result<String> {
+        resolved_service
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("--service / -s is required for this command"))
+    };
+
+    match &cli.command {
+        Commands::Profile { .. } | Commands::Alias { .. } => unreachable!(),
+        Commands::Services { filter, v2, v4, top } => {
+            cmd_services(&sap_client, filter.as_deref(), *v2, *v4, *top, cli.json).await
+        }
+        Commands::Entities => {
+            let svc = require_service()?;
+            cmd_entities(&sap_client, &svc, cli.json).await
+        }
+        Commands::Describe { entity_set } => {
+            let svc = require_service()?;
+            cmd_describe(&sap_client, &svc, entity_set, cli.json).await
+        }
+        Commands::Functions => {
+            let svc = require_service()?;
+            cmd_functions(&sap_client, &svc, cli.json).await
+        }
+        Commands::Build {
+            entity_set,
+            select,
+            filter,
+            expand,
+            orderby,
+            top,
+            skip,
+            key,
+            count,
+        } => {
+            let svc = require_service()?;
+            let query = build_query(entity_set, select.clone(), filter.clone(), expand.clone(), orderby.clone(), *top, *skip, key.clone(), *count, None);
+            let full_url = format!(
+                "{}/{}",
+                svc.trim_end_matches('/'),
+                query.build()
+            );
+            println!("{full_url}");
+            Ok(())
+        }
+        Commands::Run {
+            entity_set,
+            select,
+            filter,
+            expand,
+            orderby,
+            top,
+            skip,
+            key,
+            count,
+        } => {
+            let svc = require_service()?;
+            let meta = sap_client
+                .fetch_metadata(&svc)
+                .await
+                .context("failed to fetch metadata")?;
+            let query = build_query(entity_set, select.clone(), filter.clone(), expand.clone(), orderby.clone(), *top, *skip, key.clone(), *count, Some(meta.version));
+            cmd_run(&sap_client, &svc, &query, cli.json).await
+        }
+        Commands::Metadata => {
+            let svc = require_service()?;
+            cmd_metadata(&sap_client, &svc).await
+        }
+    }
+}
+
+/// Resolve connection from profile, env vars, or CLI flags.
+/// Priority: CLI flags > env vars > profile.
+fn resolve_connection(cli: &Cli) -> Result<SapConnection> {
+    // If a profile is specified, load it as the base
+    let (profile_conn, profile_name) = if let Some(ref name) = cli.profile {
+        let (cfg, _) = config::load_config().context("failed to load config")?;
+        let profile = cfg
+            .connections
+            .get(name)
+            .ok_or_else(|| anyhow::anyhow!("profile '{}' not found. Run 'sap-odata profile list' to see available profiles.", name))?;
+        let conn = config::resolve_connection(name, profile)
+            .with_context(|| format!("failed to resolve profile '{name}'"))?;
+        (Some(conn), Some(name.clone()))
+    } else {
+        (None, None)
+    };
+
+    // Build final connection, CLI/env overriding profile
+    let base_url = cli.url.clone()
+        .or_else(|| profile_conn.as_ref().map(|c| c.base_url.clone()))
+        .ok_or_else(|| anyhow::anyhow!(
+            "no SAP URL specified. Use --url, SAP_BASE_URL env, or --profile.{}",
+            if profile_name.is_none() { " Run 'sap-odata profile list' to see saved profiles." } else { "" }
+        ))?;
+
+    let client = cli.client.clone()
+        .or_else(|| profile_conn.as_ref().map(|c| c.client.clone()))
+        .unwrap_or_else(|| "100".to_string());
+
+    let language = cli.language.clone()
+        .or_else(|| profile_conn.as_ref().map(|c| c.language.clone()))
+        .unwrap_or_else(|| "EN".to_string());
+
+    // Check if profile uses a non-password auth mode
+    let uses_non_basic_auth = profile_conn
+        .as_ref()
+        .is_some_and(|c| matches!(&c.auth, AuthConfig::Sso | AuthConfig::Browser));
+
+    let insecure_tls = profile_conn.as_ref().is_some_and(|c| c.insecure_tls);
+
+    if uses_non_basic_auth && cli.user.is_none() && cli.password.is_none() {
+        let auth = profile_conn
+            .as_ref()
+            .map(|c| c.auth.clone())
+            .unwrap_or(AuthConfig::Sso);
+        return Ok(SapConnection {
+            base_url,
+            client,
+            language,
+            auth,
+            insecure_tls,
+        });
+    }
+
+    let username = cli.user.clone()
+        .or_else(|| profile_conn.as_ref().and_then(|c| match &c.auth {
+            AuthConfig::Basic { username, .. } => Some(username.clone()),
+            AuthConfig::Sso | AuthConfig::Browser => None,
+        }))
+        .ok_or_else(|| anyhow::anyhow!("no username specified. Use --user, SAP_USER env, --profile, or --sso."))?;
+
+    let password = cli.password.clone()
+        .or_else(|| profile_conn.as_ref().and_then(|c| match &c.auth {
+            AuthConfig::Basic { password, .. } => Some(password.clone()),
+            AuthConfig::Sso | AuthConfig::Browser => None,
+        }))
+        .ok_or_else(|| anyhow::anyhow!("no password specified. Use --password, SAP_PASSWORD env, --profile, or --sso."))?;
+
+    Ok(SapConnection {
+        base_url,
+        client,
+        language,
+        auth: AuthConfig::Basic { username, password },
+        insecure_tls,
+    })
+}
+
+/// Resolve the -s flag: alias → catalog lookup → raw path.
+/// Returns None if no -s was given (OK for services/profile commands).
+async fn resolve_service_path(cli: &Cli, sap_client: &SapClient) -> Result<Option<String>> {
+    let raw = match &cli.service {
+        Some(s) => s.clone(),
+        None => return Ok(None),
+    };
+
+    // If it starts with /, treat as a full path
+    if raw.starts_with('/') {
+        return Ok(Some(raw));
+    }
+
+    // Try profile aliases first
+    if let Some(ref profile_name) = cli.profile {
+        let (cfg, _) = config::load_config().context("failed to load config")?;
+        if let Some(profile) = cfg.connections.get(profile_name) {
+            // Case-insensitive alias lookup
+            let alias_lower = raw.to_lowercase();
+            for (alias_name, alias_path) in &profile.aliases {
+                if alias_name.to_lowercase() == alias_lower {
+                    println!("  Resolved alias '{}' -> {}", raw, alias_path);
+                    return Ok(Some(alias_path.clone()));
+                }
+            }
+        }
+    }
+
+    // Try catalog resolution (searches V2 + V4 by technical name)
+    println!("  Resolving service '{}'...", raw);
+    match sap_odata_core::catalog::resolve_service_by_name(sap_client, &raw).await {
+        Ok(path) => {
+            println!("  Resolved '{}' -> {}", raw, path);
+            Ok(Some(path))
+        }
+        Err(e) => {
+            Err(anyhow::anyhow!(
+                "could not resolve service '{}': {}. Use a full path starting with / or add an alias.",
+                raw, e
+            ))
+        }
+    }
+}
+
+// ── Alias commands ──
+
+fn handle_alias_command(action: &AliasAction, profile_name: Option<&str>) -> Result<()> {
+    let profile_name = profile_name
+        .ok_or_else(|| anyhow::anyhow!("--profile / -p is required for alias commands"))?;
+
+    match action {
+        AliasAction::List => cmd_alias_list(profile_name),
+        AliasAction::Add { name, path } => cmd_alias_add(profile_name, name, path),
+        AliasAction::Remove { name } => cmd_alias_remove(profile_name, name),
+    }
+}
+
+fn cmd_alias_list(profile_name: &str) -> Result<()> {
+    let (cfg, _) = config::load_config().context("failed to load config")?;
+    let profile = cfg
+        .connections
+        .get(profile_name)
+        .ok_or_else(|| anyhow::anyhow!("profile '{}' not found", profile_name))?;
+
+    if profile.aliases.is_empty() {
+        println!("No aliases for profile '{}'. Use 'sap-odata -p {} alias add <name> <path>' to create one.", profile_name, profile_name);
+        return Ok(());
+    }
+
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL);
+    table.set_header(vec![
+        Cell::new("Alias").fg(Color::DarkCyan),
+        Cell::new("Service Path").fg(Color::DarkCyan),
+    ]);
+
+    for (name, path) in &profile.aliases {
+        table.add_row(vec![Cell::new(name), Cell::new(path)]);
+    }
+
+    println!("{table}");
+    Ok(())
+}
+
+fn cmd_alias_add(profile_name: &str, alias_name: &str, service_path: &str) -> Result<()> {
+    let (mut cfg, config_dir) = config::load_config().context("failed to load config")?;
+    let profile = cfg
+        .connections
+        .get_mut(profile_name)
+        .ok_or_else(|| anyhow::anyhow!("profile '{}' not found", profile_name))?;
+
+    profile.aliases.insert(alias_name.to_string(), service_path.to_string());
+    config::save_config(&cfg, &config_dir.path)?;
+    println!("  Alias '{}' -> {} saved for profile '{}'.", alias_name, service_path, profile_name);
+    Ok(())
+}
+
+fn cmd_alias_remove(profile_name: &str, alias_name: &str) -> Result<()> {
+    let (mut cfg, config_dir) = config::load_config().context("failed to load config")?;
+    let profile = cfg
+        .connections
+        .get_mut(profile_name)
+        .ok_or_else(|| anyhow::anyhow!("profile '{}' not found", profile_name))?;
+
+    if profile.aliases.remove(alias_name).is_none() {
+        anyhow::bail!("alias '{}' not found in profile '{}'", alias_name, profile_name);
+    }
+
+    config::save_config(&cfg, &config_dir.path)?;
+    println!("  Alias '{}' removed from profile '{}'.", alias_name, profile_name);
+    Ok(())
+}
+
+// ── Profile commands ──
+
+async fn handle_profile_command(action: &ProfileAction) -> Result<()> {
+    match action {
+        ProfileAction::List => cmd_profile_list(),
+        ProfileAction::Add {
+            name,
+            url,
+            client,
+            language,
+            user,
+            password,
+            sso,
+            plaintext,
+            portable,
+        } => cmd_profile_add(name, url, client, language, user, password, *sso, *plaintext, *portable),
+        ProfileAction::Remove { name } => cmd_profile_remove(name),
+        ProfileAction::Test { name } => cmd_profile_test(name).await,
+        ProfileAction::Where => cmd_profile_where(),
+    }
+}
+
+fn cmd_profile_list() -> Result<()> {
+    let (cfg, config_dir) = config::load_config().context("failed to load config")?;
+
+    if cfg.connections.is_empty() {
+        println!("No profiles saved yet. Use 'sap-odata profile add' to create one.");
+        return Ok(());
+    }
+
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL);
+    table.set_header(vec![
+        Cell::new("Profile").fg(Color::DarkCyan),
+        Cell::new("URL").fg(Color::DarkCyan),
+        Cell::new("Client").fg(Color::DarkCyan),
+        Cell::new("User").fg(Color::DarkCyan),
+        Cell::new("Password").fg(Color::DarkCyan),
+    ]);
+
+    for (name, profile) in &cfg.connections {
+        let auth_info = if profile.sso {
+            "SSO (Windows)".to_string()
+        } else if profile.password.is_some() {
+            "config (plaintext)".to_string()
+        } else if config::get_password_from_keyring(name, &profile.username).is_some() {
+            "OS keyring".to_string()
+        } else {
+            "NOT SET".to_string()
+        };
+
+        table.add_row(vec![
+            Cell::new(name),
+            Cell::new(&profile.base_url),
+            Cell::new(&profile.client),
+            Cell::new(if profile.sso { "(SSO)" } else { &profile.username }),
+            Cell::new(auth_info),
+        ]);
+    }
+
+    println!("{table}");
+    let mode = if config_dir.is_portable { "portable" } else { "user" };
+    println!("\n  Config: {} ({})\n", config_dir.path.display(), mode);
+
+    Ok(())
+}
+
+fn cmd_profile_add(
+    name: &str,
+    url: &str,
+    client: &str,
+    language: &str,
+    user: &str,
+    password: &str,
+    sso: bool,
+    plaintext: bool,
+    portable: bool,
+) -> Result<()> {
+    let (mut cfg, config_dir) = config::load_config().context("failed to load config")?;
+
+    let existing_aliases = cfg
+        .connections
+        .get(name)
+        .map(|p| p.aliases.clone())
+        .unwrap_or_default();
+
+    let profile = ConnectionProfile {
+        base_url: url.to_string(),
+        client: client.to_string(),
+        language: language.to_string(),
+        username: user.to_string(),
+        password: if plaintext && !sso {
+            Some(password.to_string())
+        } else {
+            None
+        },
+        sso,
+        browser_sso: false,
+        insecure_tls: false,
+        aliases: existing_aliases,
+    };
+
+    // SSO profiles don't need password storage
+    if sso {
+        cfg.connections.insert(name.to_string(), profile);
+        let save_path = if portable {
+            config::init_portable_config(&cfg)?
+        } else if config_dir.path.as_os_str().is_empty() {
+            let dir = config::get_or_create_config_dir()?;
+            config::save_config(&cfg, &dir.path)?
+        } else {
+            config::save_config(&cfg, &config_dir.path)?
+        };
+        println!("  Profile '{}' saved with SSO to {}", name, save_path.display());
+        return Ok(());
+    }
+
+    // Store password in keyring unless plaintext requested
+    if !plaintext {
+        match config::set_password_in_keyring(name, user, password) {
+            Ok(()) => println!("  Password stored in OS keyring."),
+            Err(e) => {
+                println!("  Warning: could not store password in OS keyring: {e}");
+                println!("  Falling back to plaintext in config file.");
+                // Re-create profile with plaintext password
+                let profile_with_pw = ConnectionProfile {
+                    password: Some(password.to_string()),
+                    ..profile
+                };
+                cfg.connections.insert(name.to_string(), profile_with_pw);
+                let save_path = if portable {
+                    config::init_portable_config(&cfg)?
+                } else {
+                    let dir = config::get_or_create_config_dir()?;
+                    config::save_config(&cfg, &dir.path)?
+                };
+                println!("  Profile '{}' saved to {}", name, save_path.display());
+                return Ok(());
+            }
+        }
+    }
+
+    cfg.connections.insert(name.to_string(), profile);
+
+    let save_path = if portable {
+        config::init_portable_config(&cfg)?
+    } else if config_dir.path.as_os_str().is_empty() {
+        let dir = config::get_or_create_config_dir()?;
+        config::save_config(&cfg, &dir.path)?
+    } else {
+        config::save_config(&cfg, &config_dir.path)?
+    };
+
+    println!("  Profile '{}' saved to {}", name, save_path.display());
+    Ok(())
+}
+
+fn cmd_profile_remove(name: &str) -> Result<()> {
+    let (mut cfg, config_dir) = config::load_config().context("failed to load config")?;
+
+    let profile = cfg.connections.remove(name);
+    if profile.is_none() {
+        anyhow::bail!("profile '{}' not found", name);
+    }
+
+    let profile = profile.unwrap();
+
+    // Try to remove from keyring too
+    let _ = config::delete_password_from_keyring(name, &profile.username);
+
+    config::save_config(&cfg, &config_dir.path)?;
+    println!("  Profile '{}' removed.", name);
+    Ok(())
+}
+
+async fn cmd_profile_test(name: &str) -> Result<()> {
+    let (cfg, _) = config::load_config().context("failed to load config")?;
+    let profile = cfg
+        .connections
+        .get(name)
+        .ok_or_else(|| anyhow::anyhow!("profile '{}' not found", name))?;
+
+    let connection = config::resolve_connection(name, profile)
+        .with_context(|| format!("failed to resolve profile '{name}'"))?;
+
+    println!("  Testing connection to {} (client {})...", connection.base_url, connection.client);
+
+    let client = SapClient::new(connection).context("failed to create SAP client")?;
+
+    // Try to establish a session
+    client
+        .ensure_session("/sap/opu/odata/IWFND/CATALOGSERVICE;v=2")
+        .await
+        .context("connection test failed")?;
+
+    println!("  Connection successful!");
+    Ok(())
+}
+
+fn cmd_profile_where() -> Result<()> {
+    match config::find_config_dir() {
+        Some(dir) => {
+            let mode = if dir.is_portable { "portable" } else { "user" };
+            println!("  Config directory: {} ({})", dir.path.display(), mode);
+        }
+        None => {
+            // Show where it would be created
+            let dir = config::get_or_create_config_dir()?;
+            let mode = if dir.is_portable { "portable" } else { "user" };
+            println!("  Config directory: {} ({}, will be created on first use)", dir.path.display(), mode);
+        }
+    }
+    Ok(())
+}
+
+// ── Query builder ──
+
+fn build_query(
+    entity_set: &str,
+    select: Option<String>,
+    filter: Option<String>,
+    expand: Option<String>,
+    orderby: Option<String>,
+    top: Option<u32>,
+    skip: Option<u32>,
+    key: Option<String>,
+    count: bool,
+    version: Option<ODataVersion>,
+) -> ODataQuery {
+    let mut q = ODataQuery::new(entity_set).format("json");
+    if let Some(v) = version {
+        q = q.version(v);
+    }
+
+    if let Some(s) = select {
+        let fields: Vec<&str> = s.split(',').map(str::trim).collect();
+        q = q.select(&fields);
+    }
+    if let Some(f) = filter {
+        q = q.filter(&f);
+    }
+    if let Some(e) = expand {
+        let navs: Vec<&str> = e.split(',').map(str::trim).collect();
+        q = q.expand(&navs);
+    }
+    if let Some(o) = orderby {
+        let clauses: Vec<&str> = o.split(',').map(str::trim).collect();
+        q = q.orderby(&clauses);
+    }
+    if let Some(t) = top {
+        q = q.top(t);
+    }
+    if let Some(s) = skip {
+        q = q.skip(s);
+    }
+    if let Some(k) = key {
+        q = q.key(&k);
+    }
+    if count {
+        q = q.count();
+    }
+    q
+}
+
+// ── Service commands ──
+
+async fn cmd_services(
+    client: &SapClient,
+    search: Option<&str>,
+    v2_only: bool,
+    v4_only: bool,
+    top: Option<usize>,
+    json: bool,
+) -> Result<()> {
+    let result = sap_odata_core::catalog::fetch_service_catalog(client)
+        .await
+        .context("failed to fetch service catalog")?;
+
+    for w in &result.warnings {
+        eprintln!("  Warning: {w}");
+    }
+
+    let mut filtered: Vec<_> = result.entries
+        .iter()
+        .filter(|e| {
+            if v2_only && e.is_v4 {
+                return false;
+            }
+            if v4_only && !e.is_v4 {
+                return false;
+            }
+            if let Some(s) = search {
+                return e.matches(s);
+            }
+            true
+        })
+        .collect();
+
+    let total = filtered.len();
+    if let Some(n) = top {
+        filtered.truncate(n);
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&filtered)?);
+        return Ok(());
+    }
+
+    if filtered.is_empty() {
+        println!("No services found.");
+        return Ok(());
+    }
+
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL);
+    table.set_header(vec![
+        Cell::new("#").fg(Color::DarkCyan),
+        Cell::new("Ver").fg(Color::DarkCyan),
+        Cell::new("Technical Name").fg(Color::DarkCyan),
+        Cell::new("Title").fg(Color::DarkCyan),
+        Cell::new("Service URL").fg(Color::DarkCyan),
+    ]);
+
+    for (i, entry) in filtered.iter().enumerate() {
+        table.add_row(vec![
+            Cell::new(i + 1),
+            Cell::new(entry.version_label()),
+            Cell::new(&entry.technical_name),
+            Cell::new(&entry.title),
+            Cell::new(&entry.service_url),
+        ]);
+    }
+
+    println!("{table}");
+    if filtered.len() < total {
+        println!("\n  Showing {} of {} service(s)\n", filtered.len(), total);
+    } else {
+        println!("\n  {} service(s) found\n", total);
+    }
+
+    Ok(())
+}
+
+async fn cmd_entities(client: &SapClient, service: &str, json: bool) -> Result<()> {
+    let meta = client
+        .fetch_metadata(service)
+        .await
+        .context("failed to fetch metadata")?;
+
+    if json {
+        let sets: Vec<_> = meta
+            .entity_sets
+            .iter()
+            .map(|es| {
+                serde_json::json!({
+                    "name": es.name,
+                    "entity_type": es.entity_type,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&sets)?);
+    } else {
+        let mut table = Table::new();
+        table.load_preset(UTF8_FULL);
+        table.set_header(vec![
+            Cell::new("#").fg(Color::DarkCyan),
+            Cell::new("Entity Set").fg(Color::DarkCyan),
+            Cell::new("Entity Type").fg(Color::DarkCyan),
+            Cell::new("Keys").fg(Color::DarkCyan),
+        ]);
+
+        for (i, es) in meta.entity_sets.iter().enumerate() {
+            let et = meta.entity_type_for_set(&es.name);
+            let keys = et
+                .map(|t| t.keys.join(", "))
+                .unwrap_or_default();
+            table.add_row(vec![
+                Cell::new(i + 1),
+                Cell::new(&es.name),
+                Cell::new(&es.entity_type),
+                Cell::new(keys),
+            ]);
+        }
+
+        println!("{table}");
+    }
+    Ok(())
+}
+
+async fn cmd_describe(
+    client: &SapClient,
+    service: &str,
+    entity_set: &str,
+    json: bool,
+) -> Result<()> {
+    let meta = client
+        .fetch_metadata(service)
+        .await
+        .context("failed to fetch metadata")?;
+
+    let et = meta
+        .entity_type_for_set(entity_set)
+        .ok_or_else(|| anyhow::anyhow!("entity set '{entity_set}' not found"))?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&et)?);
+        return Ok(());
+    }
+
+    println!("\n  Entity Type: {}", et.name);
+    println!("  Keys: {}\n", et.keys.join(", "));
+
+    let mut prop_table = Table::new();
+    prop_table.load_preset(UTF8_FULL);
+    prop_table.set_header(vec![
+        Cell::new("Property").fg(Color::DarkCyan),
+        Cell::new("Type").fg(Color::DarkCyan),
+        Cell::new("Key").fg(Color::DarkCyan),
+        Cell::new("Nullable").fg(Color::DarkCyan),
+        Cell::new("MaxLen").fg(Color::DarkCyan),
+        Cell::new("Label").fg(Color::DarkCyan),
+    ]);
+
+    for p in &et.properties {
+        let is_key = if et.keys.contains(&p.name) { "*" } else { "" };
+        prop_table.add_row(vec![
+            Cell::new(&p.name),
+            Cell::new(&p.edm_type),
+            Cell::new(is_key),
+            Cell::new(if p.nullable { "yes" } else { "no" }),
+            Cell::new(
+                p.max_length
+                    .map(|l| l.to_string())
+                    .unwrap_or_default(),
+            ),
+            Cell::new(p.label.as_deref().unwrap_or("")),
+        ]);
+    }
+    println!("{prop_table}");
+
+    let nav_targets = meta.nav_targets(et);
+    if !nav_targets.is_empty() {
+        println!("\n  Navigation Properties:\n");
+        let mut nav_table = Table::new();
+        nav_table.load_preset(UTF8_FULL);
+        nav_table.set_header(vec![
+            Cell::new("Nav Property").fg(Color::DarkCyan),
+            Cell::new("Target Type").fg(Color::DarkCyan),
+            Cell::new("Multiplicity").fg(Color::DarkCyan),
+        ]);
+        for (name, target, mult) in &nav_targets {
+            nav_table.add_row(vec![
+                Cell::new(name),
+                Cell::new(target),
+                Cell::new(mult),
+            ]);
+        }
+        println!("{nav_table}");
+    }
+
+    println!("\n  Example query:");
+    let select_fields: Vec<&str> = et.properties.iter().take(3).map(|p| p.name.as_str()).collect();
+    println!("  sap-odata ... run {entity_set} --select {} --top 10\n", select_fields.join(","));
+    println!("  URL: {}/{}\n", service, ODataQuery::new(entity_set).select(&select_fields).top(10).format("json").build());
+
+    Ok(())
+}
+
+async fn cmd_functions(client: &SapClient, service: &str, json: bool) -> Result<()> {
+    let meta = client
+        .fetch_metadata(service)
+        .await
+        .context("failed to fetch metadata")?;
+
+    if meta.function_imports.is_empty() {
+        println!("No function imports in this service.");
+        return Ok(());
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&meta.function_imports)?);
+    } else {
+        let mut table = Table::new();
+        table.load_preset(UTF8_FULL);
+        table.set_header(vec![
+            Cell::new("Function").fg(Color::DarkCyan),
+            Cell::new("Method").fg(Color::DarkCyan),
+            Cell::new("Return Type").fg(Color::DarkCyan),
+            Cell::new("Parameters").fg(Color::DarkCyan),
+        ]);
+
+        for fi in &meta.function_imports {
+            let params: Vec<String> = fi
+                .parameters
+                .iter()
+                .map(|p| format!("{}: {}", p.name, p.edm_type))
+                .collect();
+            table.add_row(vec![
+                Cell::new(&fi.name),
+                Cell::new(&fi.http_method),
+                Cell::new(fi.return_type.as_deref().unwrap_or("-")),
+                Cell::new(params.join(", ")),
+            ]);
+        }
+        println!("{table}");
+    }
+    Ok(())
+}
+
+async fn cmd_run(
+    client: &SapClient,
+    service: &str,
+    query: &ODataQuery,
+    json_output: bool,
+) -> Result<()> {
+    let data = client
+        .query_json(service, query)
+        .await
+        .context("query execution failed")?;
+
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&data)?);
+        return Ok(());
+    }
+
+    let results = extract_results(&data);
+
+    match results {
+        Some(serde_json::Value::Array(rows)) if !rows.is_empty() => {
+            print_results_table(&rows);
+        }
+        Some(obj @ serde_json::Value::Object(_)) => {
+            print_results_table(&[obj]);
+        }
+        _ => {
+            println!("{}", serde_json::to_string_pretty(&data)?);
+        }
+    }
+
+    Ok(())
+}
+
+async fn cmd_metadata(client: &SapClient, service: &str) -> Result<()> {
+    let metadata_path = format!("{}/$metadata", service.trim_end_matches('/'));
+    let xml = client
+        .get_raw(service, &metadata_path)
+        .await
+        .context("failed to fetch metadata")?;
+    println!("{xml}");
+    Ok(())
+}
+
+// ── Helpers ──
+
+fn extract_results(data: &serde_json::Value) -> Option<serde_json::Value> {
+    if let Some(d) = data.get("d") {
+        if let Some(results) = d.get("results") {
+            return Some(results.clone());
+        }
+        return Some(d.clone());
+    }
+    if let Some(value) = data.get("value") {
+        return Some(value.clone());
+    }
+    None
+}
+
+fn print_results_table(rows: &[serde_json::Value]) {
+    let Some(first) = rows.first() else { return };
+    let Some(obj) = first.as_object() else {
+        println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_default());
+        return;
+    };
+
+    let columns: Vec<&String> = obj
+        .keys()
+        .filter(|k| {
+            !k.starts_with('@')
+                && *k != "__metadata"
+                && !matches!(obj.get(*k), Some(serde_json::Value::Object(_) | serde_json::Value::Array(_)))
+        })
+        .collect();
+
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL);
+    table.set_header(
+        columns
+            .iter()
+            .map(|c| Cell::new(c.as_str()).fg(Color::DarkCyan)),
+    );
+
+    for row in rows {
+        let cells: Vec<Cell> = columns
+            .iter()
+            .map(|col| {
+                let val = row.get(*col);
+                let text = match val {
+                    Some(serde_json::Value::String(s)) => s.clone(),
+                    Some(serde_json::Value::Null) => String::new(),
+                    Some(v) => v.to_string(),
+                    None => String::new(),
+                };
+                Cell::new(text)
+            })
+            .collect();
+        table.add_row(cells);
+    }
+
+    println!("{table}");
+    println!("\n  {} row(s) returned\n", rows.len());
+}
