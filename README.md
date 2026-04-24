@@ -166,16 +166,19 @@ The `sap-odata-core` crate holds all protocol logic. CLI and Tauri are thin wrap
 ## Roadmap
 
 Short term:
-- [ ] Write operations (POST / PATCH / DELETE)
-- [ ] Saved requests / collections
-- [ ] Import/export to Postman / Bruno / curl / OpenAPI
-- [ ] Raw request/response inspector panel
+- [ ] Raw request/response inspector panel (Tauri) + richer HTTP tracing in the CLI
+- [ ] Better SAP-specific error diagnostics (service not activated, missing auth, common 4xx/5xx patterns)
+- [ ] Auth validation on real federated landscapes (Azure AD + SAP IAS, Okta, ADFS)
+- [ ] Code signing and release pipeline (CI builds for Windows / Linux / macOS, signed Windows artifacts)
 
 Later:
-- [ ] MCP server (expose core to AI agents)
+- [ ] Write operations (POST / PATCH / DELETE) — gated on a real create/update/delete workflow
+- [ ] Saved requests / collections, import/export to Postman / Bruno / curl / OpenAPI
+- [ ] VS Code extension (browse metadata and run queries inline against your editor's open service) — likely the next frontend after Phase A
+- [ ] MCP server (expose core to AI agents) — gated on a concrete consumer
 - [ ] Schema diff between systems (DEV vs QAS vs PRD)
 - [ ] Export metadata to JSON Schema / TypeScript types
-- [ ] Code signing and auto-update
+- [ ] Auto-update
 
 ## Contributing
 
