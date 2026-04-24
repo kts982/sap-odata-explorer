@@ -85,6 +85,7 @@ struct EntityTypeInfo {
     skip_supported: Option<bool>,
     expandable: Option<bool>,
     non_expandable_properties: Vec<String>,
+    semantic_keys: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -114,6 +115,8 @@ struct PropertyInfo {
     hidden_filter: bool,
     display_format: Option<String>,
     sap_value_list: Option<String>,
+    semantic_object: Option<String>,
+    masked: bool,
 }
 
 #[derive(Serialize)]
@@ -669,6 +672,7 @@ async fn describe_entity(
         skip_supported: et.skip_supported,
         expandable: et.expandable,
         non_expandable_properties: et.non_expandable_properties.clone(),
+        semantic_keys: et.semantic_keys.clone(),
         properties: et
             .properties
             .iter()
@@ -698,6 +702,8 @@ async fn describe_entity(
                 hidden_filter: p.hidden_filter,
                 display_format: p.display_format.clone(),
                 sap_value_list: p.sap_value_list.clone(),
+                semantic_object: p.semantic_object.clone(),
+                masked: p.masked,
             })
             .collect(),
         nav_properties: nav_targets

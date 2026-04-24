@@ -119,6 +119,11 @@ pub struct EntityType {
     /// `Capabilities.ExpandRestrictions.Expandable` — `$expand` is
     /// supported at all on this set. `None` = unspecified (assume true).
     pub expandable: Option<bool>,
+    /// Property paths that form the *business* key, from
+    /// `Common.SemanticKey`. Often smaller (and more human-meaningful)
+    /// than the technical primary key — e.g. `Product` instead of a
+    /// generated UUID. Empty when the service doesn't declare one.
+    pub semantic_keys: Vec<String>,
 }
 
 /// One `UI.SelectionVariant` record — the declarative shape of a
@@ -312,6 +317,17 @@ pub struct Property {
     /// `$metadata` (unlike V4's `Common.ValueList`), so this is hint-
     /// only: there's no picker target to open. Stored verbatim.
     pub sap_value_list: Option<String>,
+    /// `Common.SemanticObject` — the name of a Fiori cross-app
+    /// navigation target (e.g. `"Product"`, `"Customer"`). When
+    /// present, clicking the property in Fiori would intent-navigate
+    /// to another app. For the explorer this is a hint pill; future
+    /// work could wire it to a "open in Fiori launchpad" action.
+    pub semantic_object: Option<String>,
+    /// `Common.Masked` marker — the property's value is sensitive
+    /// (PII, secrets). Fiori renders it masked; the explorer should
+    /// surface a warning so the user thinks twice before sharing
+    /// screenshots or logs containing the column.
+    pub masked: bool,
 }
 
 /// `Common.FieldControl` value. Fixed numeric codes map to the SAP
@@ -721,6 +737,8 @@ fn parse_entity_types(schema: &roxmltree::Node, version: ODataVersion) -> Vec<En
                     sap_value_list: p
                         .attribute(("http://www.sap.com/Protocols/SAPData", "value-list"))
                         .map(String::from),
+                    semantic_object: None,
+                    masked: false,
                 })
                 .collect();
 
@@ -763,6 +781,7 @@ fn parse_entity_types(schema: &roxmltree::Node, version: ODataVersion) -> Vec<En
                 skip_supported: None,
                 non_expandable_properties: Vec::new(),
                 expandable: None,
+                semantic_keys: Vec::new(),
             }
         })
         .collect()
@@ -1004,6 +1023,47 @@ fn apply_v4_typed_annotations(
                                     prop.text_arrangement = Some(ta);
                                 }
                             }
+                        }
+                    }
+                }
+            } else if lower.ends_with(".semantickey") && !target.contains('/') {
+                // Common.SemanticKey → Collection<PropertyPath> at the
+                // entity-type level. Captures the business key (often
+                // distinct from the technical primary key, e.g. Product
+                // instead of a UUID).
+                if let Some(et) = entity_types.iter_mut().find(|e| e.name == target) {
+                    for coll in children_by_tag(&annot, "Collection") {
+                        for pp in children_by_tag(&coll, "PropertyPath") {
+                            if let Some(text) = pp.text() {
+                                let trimmed = text.trim();
+                                if !trimmed.is_empty()
+                                    && !et.semantic_keys.iter().any(|x| x == trimmed)
+                                {
+                                    et.semantic_keys.push(trimmed.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if lower.ends_with(".semanticobject") {
+                if let Some((et_name, prop_name)) = target.split_once('/') {
+                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
+                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
+                            if prop.semantic_object.is_none() {
+                                prop.semantic_object = annot.attribute("String").map(String::from);
+                            }
+                        }
+                    }
+                }
+            } else if lower.ends_with(".masked") {
+                // Marker-only annotation; presence is enough. SAP may
+                // emit it with an `EnumMember` variant for "masked with
+                // stars vs dots" etc. — we collapse to a single boolean
+                // since the explorer just needs a visual warning.
+                if let Some((et_name, prop_name)) = target.split_once('/') {
+                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
+                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
+                            prop.masked = true;
                         }
                     }
                 }
@@ -3102,6 +3162,47 @@ mod tests {
         let wh = ot.properties.iter().find(|p| p.name == "Warehouse").unwrap();
         // Warehouse had no override → picks up the type default.
         assert_eq!(wh.text_arrangement, Some(TextArrangement::TextFirst));
+    }
+
+    #[test]
+    fn test_v4_semantic_key_object_and_masked() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="CustomerType">
+        <Key><PropertyRef Name="CustomerUUID"/></Key>
+        <Property Name="CustomerUUID" Type="Edm.Guid" Nullable="false"/>
+        <Property Name="CustomerID" Type="Edm.String"/>
+        <Property Name="TaxNumber" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Customers" EntityType="n.CustomerType"/></EntityContainer>
+      <Annotations Target="SAP__self.CustomerType">
+        <Annotation Term="SAP__common.SemanticKey">
+          <Collection>
+            <PropertyPath>CustomerID</PropertyPath>
+          </Collection>
+        </Annotation>
+      </Annotations>
+      <Annotations Target="SAP__self.CustomerType/CustomerID">
+        <Annotation Term="SAP__common.SemanticObject" String="Customer"/>
+      </Annotations>
+      <Annotations Target="SAP__self.CustomerType/TaxNumber">
+        <Annotation Term="SAP__common.Masked"/>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let ct = meta.find_entity_type("CustomerType").unwrap();
+        assert_eq!(ct.semantic_keys, vec!["CustomerID"]);
+        let id = ct.properties.iter().find(|p| p.name == "CustomerID").unwrap();
+        assert_eq!(id.semantic_object.as_deref(), Some("Customer"));
+        let tax = ct.properties.iter().find(|p| p.name == "TaxNumber").unwrap();
+        assert!(tax.masked);
+        let uuid = ct.properties.iter().find(|p| p.name == "CustomerUUID").unwrap();
+        assert!(uuid.semantic_object.is_none());
+        assert!(!uuid.masked);
     }
 
     #[test]

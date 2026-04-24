@@ -1000,6 +1000,14 @@ function propertyFlagHints(p) {
     const val = p.display_format;
     badges.push(`<span class="text-[9px] text-ox-green border border-ox-green/40 rounded-sm px-1 py-px" title="sap:display-format=${escapeHtml(val)}">fmt: ${escapeHtml(val)}</span>`);
   }
+  // Common.SemanticObject — Fiori cross-app navigation target.
+  if (p.semantic_object) {
+    badges.push(`<span class="text-[9px] text-ox-blue border border-ox-blue/40 rounded-sm px-1 py-px" title="Common.SemanticObject — Fiori cross-app navigation target">&#8605; ${escapeHtml(p.semantic_object)}</span>`);
+  }
+  // Common.Masked — sensitive data warning.
+  if (p.masked) {
+    badges.push(`<span class="text-[9px] text-ox-amber bg-ox-amberGlow border border-ox-amber/40 rounded-sm px-1 py-px" title="Common.Masked — sensitive / PII data; Fiori masks the value at runtime">masked</span>`);
+  }
   return badges.length ? ' ' + badges.join(' ') : '';
 }
 
@@ -2037,6 +2045,9 @@ function renderDescribe(info) {
     const titleHint = sapViewEnabled && info.header_info && info.header_info.title_path === p.name
       ? ' <span class="text-ox-amber text-[10px]" title="Used as UI.HeaderInfo.Title">title</span>'
       : '';
+    const semKeyHint = sapViewEnabled && Array.isArray(info.semantic_keys) && info.semantic_keys.includes(p.name)
+      ? ' <span class="text-ox-amber text-[10px]" title="Common.SemanticKey — business-key property (vs the technical primary key)">biz key</span>'
+      : '';
     const flagHints = sapViewEnabled ? propertyFlagHints(p) : '';
     const critHint = sapViewEnabled ? criticalityHint(p) : '';
     const vlHint = valueListHint(p);
@@ -2047,7 +2058,7 @@ function renderDescribe(info) {
     const rowCls = hiddenRow ? 'opacity-60' : '';
     const nameCls = hiddenRow ? 'text-ox-dim' : 'text-ox-text';
     html += `<tr class="hover:bg-ox-amberGlow cursor-pointer transition-colors ${rowCls}" data-action="select" data-field="${escapeHtml(p.name)}">`;
-    html += `<td class="py-0.5 pr-3 ${nameCls}">${escapeHtml(p.name)}${textHint}${currencyHint}${unitHint}${titleHint}${critHint}${flagHints}${vlHint}</td>`;
+    html += `<td class="py-0.5 pr-3 ${nameCls}">${escapeHtml(p.name)}${textHint}${currencyHint}${unitHint}${titleHint}${semKeyHint}${critHint}${flagHints}${vlHint}</td>`;
     html += `<td class="py-0.5 pr-3 text-ox-dim">${escapeHtml(p.edm_type.replace('Edm.', ''))}</td>`;
     html += `<td class="py-0.5 pr-3 text-center">${keyMark}</td>`;
     html += `<td class="py-0.5 text-ox-muted">${escapeHtml(p.label || '')}</td>`;

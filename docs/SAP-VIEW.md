@@ -31,6 +31,9 @@ Overlays on the per-property table that appears when you click an entity set:
 - **`UI.HiddenFilter` pill** — `no filter UI`.
 - **`sap:display-format` pill** — green badge `fmt: Date` / `fmt: NonNegative` / `fmt: UpperCase`.
 - **F4 marker** (`⇒ F4`) — appears when the property has a value help (see [Value-help picker](#value-help-picker-f4)).
+- **"biz key" marker** — `Common.SemanticKey` lists business-key properties (often distinct from the technical primary key, e.g. `Product` instead of a UUID). Listed properties get an amber "biz key" tag next to the name so scanning wide tables stays fast.
+- **Semantic object pill (`↪ Name`)** — `Common.SemanticObject` declares a Fiori cross-app navigation target (e.g. `Product`, `Customer`). Hint-only for now; surfaces which properties would deep-link in a Fiori runtime.
+- **"masked" pill** — `Common.Masked` marker on sensitive properties (PII, secrets, tax numbers). Amber warning style so you think twice before sharing screenshots or logs of the column.
 
 ## Query bar
 
@@ -128,7 +131,9 @@ Compact status table. "Status" reflects what `SAP View` actually uses; parser-on
 | `V2 sap:display-format` | Describe pill + results-grid formatting | ✅ |
 | `V2 sap:filterable` / `sortable` / `creatable` / `updatable` / `required-in-filter` | Same pills as V4 Capabilities.* | ✅ |
 | V2 `sap:value-list` marker (standard / fixed-values) | Muted F4 badge; click surfaces a "no mapping" hint (picker deferred until V2 convention-scan lands) | ✅ |
-| `Common.SemanticKey` / `Common.SemanticObject` / `Common.Masked` | Not handled yet | ❌ |
+| `Common.SemanticKey` | "biz key" tag on listed properties | ✅ |
+| `Common.SemanticObject` | `↪ Name` pill (cross-app nav hint) | ✅ |
+| `Common.Masked` | "masked" amber warning pill | ✅ |
 
 ## Deliberate gaps
 
