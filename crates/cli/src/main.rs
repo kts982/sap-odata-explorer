@@ -1535,9 +1535,8 @@ async fn cmd_run(
 }
 
 async fn cmd_metadata(client: &SapClient, service: &str) -> Result<()> {
-    let metadata_path = format!("{}/$metadata", service.trim_end_matches('/'));
     let xml = client
-        .get_raw(service, &metadata_path)
+        .fetch_metadata_xml(service)
         .await
         .context("failed to fetch metadata")?;
     println!("{xml}");

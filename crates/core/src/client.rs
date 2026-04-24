@@ -266,7 +266,14 @@ impl SapClient {
     /// Fetch the $metadata document for a service and parse it.
     #[instrument(skip(self))]
     pub async fn fetch_metadata(&self, service_path: &str) -> Result<ServiceMetadata, ODataError> {
-        // Establish session first to avoid 403 on first request
+        let xml = self.fetch_metadata_xml(service_path).await?;
+        metadata::parse_metadata(&xml)
+    }
+
+    /// Fetch `$metadata` as raw XML. Same session/auth handling as
+    /// [`fetch_metadata`], but skips parsing — used by diagnostics and by
+    /// the CLI's `metadata` command to inspect raw annotation structure.
+    pub async fn fetch_metadata_xml(&self, service_path: &str) -> Result<String, ODataError> {
         self.ensure_session(service_path).await?;
 
         let metadata_path = format!("{}/$metadata", service_path.trim_end_matches('/'));
@@ -277,8 +284,7 @@ impl SapClient {
         let req = self.apply_auth(req)?;
 
         let (resp, trace_id) = self.send_with_sso_redirects(req).await?;
-        let xml = self.read_text_response(resp, trace_id).await?;
-        metadata::parse_metadata(&xml)
+        self.read_text_response(resp, trace_id).await
     }
 
     /// Execute an OData query and return the response body as JSON.
