@@ -714,18 +714,25 @@ fn apply_v4_typed_annotations(
                     }
                 }
             } else if lower.ends_with(".selectionfields") {
-                // Also entity-set–scoped. The value is a bare
-                // Collection<PropertyPath> sitting directly under the
-                // <Annotation> element.
-                if let Some((_, set_name)) = target.split_once('/') {
-                    if let Some(type_ref) = entity_sets.iter().find(|s| s.name == set_name) {
-                        let type_name = extract_type_name(&type_ref.entity_type).to_string();
-                        if let Some(et) = entity_types.iter_mut().find(|t| t.name == type_name) {
-                            let paths = parse_property_path_collection(&annot);
-                            if !paths.is_empty() {
-                                et.selection_fields = paths;
-                            }
-                        }
+                // UI.SelectionFields can target either the entity set
+                // ("Container/SetName") or the entity type directly
+                // ("TypeName"). SAP-generated services put it on the type;
+                // hand-written ones often put it on the set. Handle both.
+                let paths = parse_property_path_collection(&annot);
+                if paths.is_empty() {
+                    continue;
+                }
+                let type_name = if let Some((_, set_name)) = target.split_once('/') {
+                    entity_sets
+                        .iter()
+                        .find(|s| s.name == set_name)
+                        .map(|s| extract_type_name(&s.entity_type).to_string())
+                } else {
+                    Some(target.to_string())
+                };
+                if let Some(name) = type_name {
+                    if let Some(et) = entity_types.iter_mut().find(|t| t.name == name) {
+                        et.selection_fields = paths;
                     }
                 }
             }
@@ -1473,6 +1480,34 @@ mod tests {
         // Untouched properties stay at None.
         assert_eq!(id.filterable, None);
         assert_eq!(qty.sortable, None);
+    }
+
+    #[test]
+    fn test_v4_selection_fields_on_entity_type_target() {
+        // SAP-generated services typically target the entity type directly.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="StockType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="Warehouse" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Stocks" EntityType="n.StockType"/></EntityContainer>
+      <Annotations Target="SAP__self.StockType">
+        <Annotation Term="SAP__UI.SelectionFields">
+          <Collection>
+            <PropertyPath>Warehouse</PropertyPath>
+          </Collection>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let st = meta.find_entity_type("StockType").unwrap();
+        assert_eq!(st.selection_fields, vec!["Warehouse"]);
     }
 
     #[test]
