@@ -53,6 +53,7 @@ When SAP View is on, the results table reshapes itself to look like a Fiori list
   - `TextSeparate` — two columns, unfolded
   The raw ID stays in the cell's `data-cell-val` so click-to-filter uses the key, not the description.
 - **`sap:display-format` applied** — `Date` strips the time portion (handles both V4 ISO 8601 and V2 `/Date(ms)/` format); `Time` keeps `HH:MM:SS`; `UpperCase` uppercases strings; `NonNegative` coerces negatives to `0`.
+- **`UI.Criticality` dot** — cells whose property has a `Fixed` or `Path` criticality get a small colored dot prefix: green (Positive/3), amber (Critical/2), red (Negative/1), blue (Information/5), no dot for Neutral/0. `Path` criticality reads the numeric code from the companion property per row, so the color changes row-by-row. The raw cell value stays in `data-cell-val` (click-to-filter unaffected).
 
 ## Pre-flight validator
 
@@ -81,6 +82,7 @@ Clicking the `⇒ F4` marker on a property opens a picker modal that fetches the
 
 Picker behavior:
 
+- **Variant pills** — when the property declares multiple value helps (either multiple `Common.ValueList` annotations with different qualifiers, or multiple `ValueListReferences` URLs, or both), a pill bar at the top of the modal lets you switch between them. Inline variants render as `· label`, references as `↗ service-name`. Reference variants resolve lazily the first time they're selected; resolutions are cached per URL for instant reopen/switch. Single-source pickers hide the bar.
 - **Pre-seeds its `$filter`** from the current main `$filter` — any `In` or `InOut` parameter whose local property is already pinned in the main filter gets echoed into the picker's filter. `Constant` parameters are always echoed.
 - **`$search` input** — shown when the active ValueList says `SearchSupported=true`, *or* when the resolved F4 service declares `Capabilities.SearchRestrictions.Searchable=true` at the entity-set level (SAP's modern F4 services don't put the flag on the mapping record, so the resolver lifts it from the F4 `$metadata`). Press Enter to fetch with the search term applied; V4 emits `$search="term"`, V2 falls back to `search=term`.
 - **Dynamic `$filter` placeholder** — uses the first `ValueListProperty` from the mapping as a hint (e.g. `startswith(EWMWarehouse,'HB')`), so you don't have to cross-reference the mapping line to guess the F4's column names.
@@ -96,7 +98,7 @@ Compact status table. "Status" reflects what `SAP View` actually uses; parser-on
 | `UI.HeaderInfo` | Entity title subtitle + title-column badge | ✅ |
 | `Common.Text` / V2 `sap:text` | Describe marker + results-grid fold per TextArrangement | ✅ |
 | `UI.TextArrangement` | Cell format `"text (id)"` / `"id (text)"` / text-only / separate | ✅ |
-| `UI.Criticality` | Describe panel dot (fixed level) or `⇒ PathProp` (path) | ✅ |
+| `UI.Criticality` | Describe panel dot + results-grid cell dot (fixed uniform / path per-row) | ✅ |
 | `Capabilities.FilterRestrictions` | `no filter` / `req.filter` pills + validator | ✅ |
 | `Capabilities.SortRestrictions` | `no sort` pill + validator | ✅ |
 | `Capabilities.InsertRestrictions` | `no create` pill | ✅ |
@@ -118,7 +120,7 @@ Compact status table. "Status" reflects what `SAP View` actually uses; parser-on
 | `Common.ValueListReferences` (S/4HANA) | F4 picker, dashed marker, resolved on open | ✅ |
 | `Common.ValueListMapping` | Parsed inside referenced F4 services | ✅ |
 | `Common.ValueListWithFixedValues` | Marker-only hint | ✅ |
-| `Common.ValueList` qualifier variants | Default only; qualified count shown, picker deferred | ✅ partial |
+| `Common.ValueList` qualifier variants | Multi-variant pill bar inside the picker; click switches active mapping | ✅ |
 | `Common.FieldControl` | Pills (mandatory / read-only / n/a / hidden / path) | ✅ |
 | `UI.Hidden` | Describe row dimmed | ✅ |
 | `UI.HiddenFilter` | `no filter UI` pill | ✅ |

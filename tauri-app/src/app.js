@@ -1154,42 +1154,105 @@ let _vlActiveServicePath = null;
 // F4 can back many properties).
 const _vlResolveCache = new Map();
 
+// Known variants for the active property, in the order they appear in
+// the modal's pill bar. Two kinds:
+//   { kind: 'inline', valueList, servicePath: currentServicePath, label }
+//   { kind: 'reference', url, label, resolved?: { value_list, resolved_service_path } }
+// Reference variants are resolved lazily the first time they're
+// selected; the result is memoized both here AND in the long-lived
+// _vlResolveCache (keyed by URL) so reopens stay instant.
+let _vlVariants = [];
+let _vlActiveVariantIndex = 0;
+
 async function openValueListPicker(propertyName) {
   const tab = getActiveTab();
   const info = tab && tab._lastDescribeInfo;
   if (!info) return;
   const prop = info.properties.find(p => p.name === propertyName);
   if (!prop) return;
-  const hasInline = !!prop.value_list;
-  const hasRefs = Array.isArray(prop.value_list_references) && prop.value_list_references.length > 0;
-  const fixedOnly = !hasInline && !hasRefs && prop.value_list_fixed === true;
+  const inlineVariants = Array.isArray(prop.value_list_variants) ? prop.value_list_variants : [];
+  const refs = Array.isArray(prop.value_list_references) ? prop.value_list_references : [];
+  const fixedOnly = inlineVariants.length === 0 && refs.length === 0 && prop.value_list_fixed === true;
   if (fixedOnly) {
-    // Nothing to drive a picker with — surface the hint in-line rather
-    // than open an empty modal. Borrow the status bar briefly.
     setStatus('This property has fixed values but no ValueList mapping in this service.');
     return;
   }
-  if (!hasInline && !hasRefs) return;
+  if (inlineVariants.length === 0 && refs.length === 0) return;
   _vlActiveProperty = prop;
-  const modal = document.getElementById('valueListModal');
+  _vlVariants = [];
+  for (const vl of inlineVariants) {
+    _vlVariants.push({
+      kind: 'inline',
+      valueList: vl,
+      servicePath: currentServicePath,
+      label: vl.qualifier || vl.label || vl.collection_path || 'default',
+    });
+  }
+  for (const url of refs) {
+    // Label = the human-sensible chunk of the reference URL (the F4
+    // service name), e.g. "c_travelexpensebpgeneralvh".
+    const label = vlReferenceLabel(url);
+    const cached = _vlResolveCache.get(url);
+    _vlVariants.push({
+      kind: 'reference',
+      url,
+      label,
+      resolved: cached || null,
+    });
+  }
+  // Clear volatile inputs on fresh open.
+  const search = document.getElementById('vlSearch');
+  if (search) { search.value = ''; search.classList.add('hidden'); }
+  document.getElementById('valueListModal').classList.remove('hidden');
+  document.getElementById('vlTitle').textContent = `Value Help · ${prop.name}`;
+  document.getElementById('vlSubtitle').textContent = '';
+  document.getElementById('vlMapping').textContent = '';
+  document.getElementById('vlResults').innerHTML = '<div class="p-4 text-ox-dim text-[11px]">Loading…</div>';
+  document.getElementById('vlStatus').textContent = 'Ready.';
+  // Activate the first usable variant. selectVariant handles both
+  // inline (instant) and reference (may need resolving) shapes.
+  await selectVariant(0);
+}
+
+// Extract a short label from a ValueListReferences URL — the segment
+// just before the matrix-params `;ps=...`, which is the F4 service's
+// technical name (e.g. `c_travelexpensebpgeneralvh`).
+function vlReferenceLabel(url) {
+  try {
+    const head = url.split(';')[0];
+    const segs = head.split('/').filter(Boolean);
+    return segs[segs.length - 2] || segs[segs.length - 1] || url;
+  } catch {
+    return url;
+  }
+}
+
+// Switch the active variant. For inline variants this is synchronous.
+// For reference variants, kicks off resolve_value_list_reference if
+// we haven't already (cache first). Re-renders the whole picker body
+// so the mapping, placeholder, and search-visibility match the new
+// active ValueList.
+async function selectVariant(index) {
+  if (!_vlVariants[index]) return;
+  _vlActiveVariantIndex = index;
+  const variant = _vlVariants[index];
+  const tab = getActiveTab();
+  const info = tab && tab._lastDescribeInfo;
+  const prop = _vlActiveProperty;
   const title = document.getElementById('vlTitle');
   const subtitle = document.getElementById('vlSubtitle');
   const mapping = document.getElementById('vlMapping');
   const filter = document.getElementById('vlFilter');
-  const search = document.getElementById('vlSearch');
   const results = document.getElementById('vlResults');
   const status = document.getElementById('vlStatus');
-  // Fresh opens start clean — leftover search state from a previous
-  // picker run would confuse the user.
-  if (search) { search.value = ''; search.classList.add('hidden'); }
-  modal.classList.remove('hidden');
-  if (hasInline) {
-    _vlActiveValueList = prop.value_list;
-    _vlActiveServicePath = currentServicePath;
-    title.textContent = prop.value_list.label || `Value Help · ${prop.name}`;
-    subtitle.textContent = prop.value_list.collection_path;
-    mapping.textContent = `Mapping: ${valueListSummary(prop.value_list)}`;
-    filter.value = buildInitialVlFilter(prop, info, prop.value_list);
+  renderVlVariantBar();
+  if (variant.kind === 'inline') {
+    _vlActiveValueList = variant.valueList;
+    _vlActiveServicePath = variant.servicePath;
+    title.textContent = variant.valueList.label || `Value Help · ${prop.name}`;
+    subtitle.textContent = variant.valueList.collection_path;
+    mapping.textContent = `Mapping: ${valueListSummary(variant.valueList)}`;
+    filter.value = buildInitialVlFilter(prop, info, variant.valueList);
     updateVlSearchVisibility();
     updateVlFilterPlaceholder();
     results.innerHTML = '<div class="p-4 text-ox-dim text-[11px]">Click Fetch to load values.</div>';
@@ -1197,50 +1260,65 @@ async function openValueListPicker(propertyName) {
     setTimeout(() => filter.focus(), 0);
     return;
   }
-  // Reference-backed: resolve on open. Try references in order until
-  // one succeeds; most services have a single reference.
-  title.textContent = `Value Help · ${prop.name}`;
-  subtitle.textContent = 'resolving reference…';
-  mapping.textContent = '';
-  filter.value = '';
-  results.innerHTML = '<div class="p-4 text-ox-dim text-[11px]">Resolving value-help service…</div>';
-  status.textContent = 'Resolving…';
-  let resolved = null;
-  let lastErr = null;
-  for (const refUrl of prop.value_list_references) {
-    const cached = _vlResolveCache.get(refUrl);
-    if (cached) { resolved = cached; break; }
+  // Reference variant. Resolve (cached if possible) then populate.
+  if (!variant.resolved) {
+    subtitle.textContent = 'resolving reference…';
+    mapping.textContent = '';
+    filter.value = '';
+    results.innerHTML = '<div class="p-4 text-ox-dim text-[11px]">Resolving value-help service…</div>';
+    status.textContent = 'Resolving…';
     try {
-      // timedInvoke unwraps the { data, trace } envelope and applies the
-      // trace to the current tab so the Inspector shows the F4 fetch.
-      resolved = await timedInvoke('resolve_value_list_reference', {
+      const resolved = await timedInvoke('resolve_value_list_reference', {
         profileName: currentProfile,
         servicePath: currentServicePath,
-        referenceUrl: refUrl,
+        referenceUrl: variant.url,
         localProperty: prop.name,
       });
-      _vlResolveCache.set(refUrl, resolved);
-      break;
+      _vlResolveCache.set(variant.url, resolved);
+      variant.resolved = resolved;
     } catch (e) {
-      lastErr = e;
+      status.textContent = 'Resolve error';
+      results.innerHTML = `<div class="p-4 text-ox-red text-[11px]">Could not resolve reference.\n${escapeHtml(String(e))}</div>`;
+      return;
     }
   }
-  if (!resolved) {
-    status.textContent = 'Resolve error';
-    results.innerHTML = `<div class="p-4 text-ox-red text-[11px]">Could not resolve reference.\n${escapeHtml(String(lastErr || 'unknown error'))}</div>`;
-    return;
-  }
-  _vlActiveValueList = resolved.value_list;
-  _vlActiveServicePath = resolved.resolved_service_path;
-  title.textContent = resolved.value_list.label || `Value Help · ${prop.name}`;
-  subtitle.textContent = resolved.value_list.collection_path;
-  mapping.textContent = `Mapping: ${valueListSummary(resolved.value_list)}`;
-  filter.value = buildInitialVlFilter(prop, info, resolved.value_list);
+  _vlActiveValueList = variant.resolved.value_list;
+  _vlActiveServicePath = variant.resolved.resolved_service_path;
+  title.textContent = variant.resolved.value_list.label || `Value Help · ${prop.name}`;
+  subtitle.textContent = variant.resolved.value_list.collection_path;
+  mapping.textContent = `Mapping: ${valueListSummary(variant.resolved.value_list)}`;
+  filter.value = buildInitialVlFilter(prop, info, variant.resolved.value_list);
   updateVlSearchVisibility();
   updateVlFilterPlaceholder();
   results.innerHTML = '<div class="p-4 text-ox-dim text-[11px]">Click Fetch to load values.</div>';
-  status.textContent = `Resolved → ${resolved.resolved_service_path}`;
+  status.textContent = `Resolved → ${variant.resolved.resolved_service_path}`;
   setTimeout(() => filter.focus(), 0);
+}
+
+// Render the pill bar at the top of the picker so the user can switch
+// between value-help sources. Hidden when only one variant exists.
+function renderVlVariantBar() {
+  const bar = document.getElementById('vlVariantBar');
+  const host = document.getElementById('vlVariantPills');
+  if (!bar || !host) return;
+  if (_vlVariants.length <= 1) {
+    bar.classList.add('hidden');
+    host.innerHTML = '';
+    return;
+  }
+  bar.classList.remove('hidden');
+  host.innerHTML = _vlVariants
+    .map((v, i) => {
+      const active = i === _vlActiveVariantIndex;
+      const base = 'text-[10px] font-semibold tracking-wide px-1.5 py-0.5 rounded-sm transition-colors';
+      const onCls = 'text-ox-electric border border-ox-electric bg-ox-electric/10';
+      const offCls = 'text-ox-dim border border-ox-border hover:text-ox-electric hover:border-ox-electric/50';
+      const cls = active ? `${base} ${onCls}` : `${base} ${offCls}`;
+      const kindGlyph = v.kind === 'reference' ? '↗' : '·';
+      const title = v.kind === 'reference' ? `Resolved via reference:\n${v.url}` : 'Inline Common.ValueList';
+      return `<button type="button" class="${cls}" data-action="vl-select-variant" data-variant-index="${i}" title="${escapeHtml(title)}">${kindGlyph} ${escapeHtml(v.label)}</button>`;
+    })
+    .join('');
 }
 
 // Show the $search input only when the active ValueList declares
@@ -1281,6 +1359,12 @@ function closeValueListPicker() {
   _vlActiveProperty = null;
   _vlActiveValueList = null;
   _vlActiveServicePath = null;
+  _vlVariants = [];
+  _vlActiveVariantIndex = 0;
+  const bar = document.getElementById('vlVariantBar');
+  const host = document.getElementById('vlVariantPills');
+  if (bar) bar.classList.add('hidden');
+  if (host) host.innerHTML = '';
 }
 
 // Pre-seed the VL filter with In/InOut parameter constraints by
@@ -1427,6 +1511,43 @@ function pickValueListRow(rowIndex) {
   filterInput.value = merged;
   closeValueListPicker();
   filterInput.focus();
+}
+
+// Render a small colored dot for a cell's UI.Criticality when SAP
+// View is on. Fixed criticality paints the same level for every row;
+// Path criticality reads the numeric code from a sibling column per
+// row. Codes follow the OData spec: 0=Neutral, 1=Negative, 2=Critical,
+// 3=Positive, 5=Information. Unknown levels render as neutral dim.
+// Returns an empty string when there's nothing to show (including
+// when the Path column is missing or the level is 0/Neutral — 0 is
+// the default-good state and doesn't need visual marking).
+function criticalityDot(prop, row) {
+  if (!prop || !prop.criticality) return '';
+  const c = prop.criticality;
+  let level;
+  if (c.kind === 'fixed') {
+    level = c.value;
+  } else if (c.kind === 'path') {
+    const raw = row[c.value];
+    if (raw === null || raw === undefined || raw === '') return '';
+    const n = parseInt(String(raw), 10);
+    if (isNaN(n)) return '';
+    level = n;
+  } else {
+    return '';
+  }
+  if (level === 0) return '';
+  const color = level === 3 ? 'text-ox-green' :
+                level === 2 ? 'text-ox-amber' :
+                level === 1 ? 'text-ox-red' :
+                level === 5 ? 'text-ox-blue' : '';
+  if (!color) return '';
+  const label = level === 3 ? 'positive' :
+                level === 2 ? 'critical' :
+                level === 1 ? 'negative' :
+                level === 5 ? 'info' : '';
+  const src = c.kind === 'path' ? `via ${c.value}` : 'fixed';
+  return `<span class="${color} mr-1" title="UI.Criticality (${src}) = ${label}">&#9679;</span>`;
 }
 
 // Apply a V2 `sap:display-format` hint to a raw cell value for
@@ -2681,7 +2802,8 @@ function renderResults(data, elapsedMs, params) {
             display = companionText || formatted;
           }
         }
-        html += `<td class="px-3 py-1 text-ox-text whitespace-nowrap cursor-pointer" data-action="cell-click" data-cell-col="${escapeHtml(col)}" data-cell-val="${escapeHtml(text)}">${escapeHtml(display)}</td>`;
+        const critDot = sapShape ? criticalityDot(prop, row) : '';
+        html += `<td class="px-3 py-1 text-ox-text whitespace-nowrap cursor-pointer" data-action="cell-click" data-cell-col="${escapeHtml(col)}" data-cell-val="${escapeHtml(text)}">${critDot}${escapeHtml(display)}</td>`;
       }
     }
 
@@ -3144,6 +3266,9 @@ document.addEventListener('DOMContentLoaded', () => {
       copySelectedTraceResponseBody();
     } else if (action === 'value-list') {
       openValueListPicker(el.dataset.prop);
+    } else if (action === 'vl-select-variant') {
+      const idx = parseInt(el.dataset.variantIndex, 10);
+      if (!isNaN(idx)) selectVariant(idx);
     } else if (action === 'vl-pick') {
       pickValueListRow(parseInt(el.dataset.row, 10));
     } else if (action === 'selection-field') {

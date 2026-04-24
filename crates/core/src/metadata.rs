@@ -255,13 +255,19 @@ pub struct Property {
     /// 5 = Information per OData spec) or a path to a sibling property
     /// whose runtime value supplies the level.
     pub criticality: Option<Criticality>,
-    /// Parsed `Common.ValueList` annotation — describes a value help
-    /// (F4) for this property: which entity set to pull values from,
-    /// whether it supports `$search`, and how its properties map back
-    /// to this (and sibling) properties on pick. `None` when the
-    /// service doesn't declare a value list. Qualifier variants are
-    /// not differentiated yet — the first parse wins.
+    /// The "default" value help for this property — the first parsed
+    /// `Common.ValueList` annotation (no-qualifier preferred, then
+    /// qualified in source order). Retained for callers that just want
+    /// one value help; the full set lives in `value_list_variants`.
+    /// `None` when the service declares no inline value list.
     pub value_list: Option<ValueList>,
+    /// All parsed `Common.ValueList` annotations for this property,
+    /// including the one surfaced on `value_list`. When a property
+    /// declares multiple qualified variants (e.g. "ByKey" vs
+    /// "ByDescription"), consumers iterate this list to offer a
+    /// variant picker in the F4 UI. Empty when there's no inline
+    /// value list.
+    pub value_list_variants: Vec<ValueList>,
     /// `Common.ValueListReferences` URLs captured verbatim. Each entry
     /// points at a separate Fiori value-help service whose `$metadata`
     /// contains the real `Common.ValueList` mapping. Empty when the
@@ -348,6 +354,10 @@ pub enum Criticality {
 /// back to the local entity's properties.
 #[derive(Debug, Clone, Serialize)]
 pub struct ValueList {
+    /// Optional `Qualifier` on the annotation — distinguishes multiple
+    /// value helps on the same property (e.g. `Qualifier="ByKey"` vs
+    /// `Qualifier="ByDescription"`). `None` for the default variant.
+    pub qualifier: Option<String>,
     /// Name of the entity set that serves as the value-help source.
     /// Path is relative to the service root — callers append it to
     /// the service URL directly.
@@ -692,6 +702,7 @@ fn parse_entity_types(schema: &roxmltree::Node, version: ODataVersion) -> Vec<En
                     // Populated later by the V4 annotation pass where applicable.
                     criticality: None,
                     value_list: None,
+                    value_list_variants: Vec::new(),
                     value_list_references: Vec::new(),
                     value_list_fixed: false,
                     text_arrangement: None,
@@ -1108,16 +1119,27 @@ fn apply_v4_typed_annotations(
                 && !lower.ends_with(".valuelistmapping")
                 && !lower.ends_with(".valuelistwithfixedvalues")
             {
-                // Common.ValueList targets a specific property. We take
-                // the first (unqualified) match; qualified variants
-                // (e.g. multiple value helps for the same field) are
-                // left for a later pass once the picker exposes them.
+                // Common.ValueList targets a specific property. We keep
+                // every parsed variant — the no-qualifier one lands on
+                // `value_list` (first-fill) for consumers that want a
+                // single default; all are pushed into
+                // `value_list_variants` so the picker can offer a
+                // variant switcher. Dedupe by qualifier so a repeated
+                // annotation on the same target doesn't double-count.
                 if let Some((et_name, prop_name)) = target.split_once('/') {
                     if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
                         if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
-                            if prop.value_list.is_none() {
-                                if let Some(vl) = parse_value_list_record(&annot) {
-                                    prop.value_list = Some(vl);
+                            if let Some(mut vl) = parse_value_list_record(&annot) {
+                                vl.qualifier = annot.attribute("Qualifier").map(String::from);
+                                let already_have = prop
+                                    .value_list_variants
+                                    .iter()
+                                    .any(|existing| existing.qualifier == vl.qualifier);
+                                if !already_have {
+                                    if prop.value_list.is_none() {
+                                        prop.value_list = Some(vl.clone());
+                                    }
+                                    prop.value_list_variants.push(vl);
                                 }
                             }
                         }
@@ -1553,7 +1575,7 @@ fn parse_value_list_record(annot: &roxmltree::Node) -> Option<ValueList> {
     if parameters.is_empty() {
         return None;
     }
-    Some(ValueList { collection_path, label, search_supported, parameters })
+    Some(ValueList { qualifier: None, collection_path, label, search_supported, parameters })
 }
 
 /// Parse one `<Record>` inside `Common.ValueList.Parameters`. Returns
@@ -2781,6 +2803,64 @@ mod tests {
         assert!(matches!(vl.parameters[3].kind, ValueListParameterKind::Constant));
         assert_eq!(vl.parameters[3].constant.as_deref(), Some("EN"));
         assert_eq!(vl.parameters[3].value_list_property, "Language");
+    }
+
+    #[test]
+    fn test_v4_common_value_list_multiple_qualified_variants() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edmx" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="Warehouse" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType/Warehouse">
+        <Annotation Term="SAP__common.ValueList">
+          <Record>
+            <PropertyValue Property="CollectionPath" String="WarehouseByKey"/>
+            <PropertyValue Property="Parameters">
+              <Collection>
+                <Record Type="Common.ValueListParameterInOut">
+                  <PropertyValue Property="LocalDataProperty" PropertyPath="Warehouse"/>
+                  <PropertyValue Property="ValueListProperty" String="Key"/>
+                </Record>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+        <Annotation Term="SAP__common.ValueList" Qualifier="ByDescription">
+          <Record>
+            <PropertyValue Property="CollectionPath" String="WarehouseByDescription"/>
+            <PropertyValue Property="Parameters">
+              <Collection>
+                <Record Type="Common.ValueListParameterInOut">
+                  <PropertyValue Property="LocalDataProperty" PropertyPath="Warehouse"/>
+                  <PropertyValue Property="ValueListProperty" String="Description"/>
+                </Record>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let ot = meta.find_entity_type("OrderType").unwrap();
+        let wh = ot.properties.iter().find(|p| p.name == "Warehouse").unwrap();
+        // Default (no-qualifier) surfaces on `value_list`.
+        let default = wh.value_list.as_ref().expect("default variant expected");
+        assert!(default.qualifier.is_none());
+        assert_eq!(default.collection_path, "WarehouseByKey");
+        // Both variants are captured on value_list_variants.
+        assert_eq!(wh.value_list_variants.len(), 2);
+        assert!(wh.value_list_variants[0].qualifier.is_none());
+        assert_eq!(wh.value_list_variants[0].collection_path, "WarehouseByKey");
+        assert_eq!(wh.value_list_variants[1].qualifier.as_deref(), Some("ByDescription"));
+        assert_eq!(wh.value_list_variants[1].collection_path, "WarehouseByDescription");
     }
 
     #[test]
