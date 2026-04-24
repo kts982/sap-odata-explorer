@@ -154,6 +154,42 @@ pub fn save_config(config: &ConfigFile, config_dir: &Path) -> anyhow::Result<Pat
     Ok(config_path)
 }
 
+/// Given the previous and new connection parameters for a profile, clear any
+/// persisted Browser SSO session if the connection fingerprint has changed.
+/// This prevents replaying cookies to a different SAP target after a profile
+/// is edited in place. No-op when fingerprints match or no old profile exists.
+///
+/// Returns `Ok(true)` if a clear was attempted and succeeded, `Ok(false)` if
+/// no clear was needed, and `Err(_)` if the clear was attempted but failed —
+/// in which case the caller should warn the user that a stale session may
+/// survive on the next sign-in.
+pub fn clear_session_if_connection_changed(
+    profile_name: &str,
+    old_profile: Option<&ConnectionProfile>,
+    new_base_url: &str,
+    new_client: &str,
+    new_language: &str,
+) -> anyhow::Result<bool> {
+    let new_fp = crate::session::connection_fingerprint(new_base_url, new_client, new_language);
+    let should_clear = match old_profile {
+        None => false, // brand-new profile — nothing to clear
+        Some(old) => {
+            let old_fp = crate::session::connection_fingerprint(
+                &old.base_url,
+                &old.client,
+                &old.language,
+            );
+            old_fp != new_fp
+        }
+    };
+    if should_clear {
+        crate::session::clear(profile_name)?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 /// Try to get a password from the OS keyring.
 pub fn get_password_from_keyring(profile_name: &str, username: &str) -> Option<String> {
     let target = format!("{KEYRING_SERVICE}:{profile_name}:{username}");
@@ -181,15 +217,18 @@ pub fn set_password_in_keyring(
     Ok(())
 }
 
-/// Delete a password from the OS keyring.
+/// Delete a password from the OS keyring. Idempotent: a missing entry is
+/// treated as success, since callers don't always know whether the password
+/// was stored in keyring vs. plaintext config.
 pub fn delete_password_from_keyring(profile_name: &str, username: &str) -> anyhow::Result<()> {
     let target = format!("{KEYRING_SERVICE}:{profile_name}:{username}");
     let entry = keyring::Entry::new(&target, username)
         .map_err(|e| anyhow::anyhow!("keyring error: {e}"))?;
-    entry
-        .delete_credential()
-        .map_err(|e| anyhow::anyhow!("failed to delete from keyring: {e}"))?;
-    Ok(())
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(anyhow::anyhow!("failed to delete from keyring: {e}")),
+    }
 }
 
 /// Resolve a connection profile into a SapConnection.

@@ -104,12 +104,18 @@ impl SapClient {
 
     /// Try to load a persisted Browser SSO session from the OS keyring
     /// and inject its cookies into this client. Returns true if a session
-    /// was loaded, false if none is stored.
+    /// was loaded, false if none is stored or the stored session belongs to
+    /// a different SAP target (stale — automatically cleared).
     pub fn try_load_persisted_session(&self, profile_name: &str) -> Result<bool, ODataError> {
         if !matches!(&self.connection.auth, AuthConfig::Browser) {
             return Ok(false);
         }
-        match crate::session::load(profile_name) {
+        let fingerprint = crate::session::connection_fingerprint(
+            &self.connection.base_url,
+            &self.connection.client,
+            &self.connection.language,
+        );
+        match crate::session::load_for_connection(profile_name, &fingerprint) {
             Ok(Some(session)) => {
                 self.import_cookie_strings(&session.request_url, &session.cookies)?;
                 debug!(
@@ -182,9 +188,7 @@ impl SapClient {
                 .get("location")
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("");
-            let is_idp_redirect = location.contains("login.microsoftonline.com")
-                || location.contains("accounts.ondemand.com")
-                || location.contains("/saml2/");
+            let is_idp_redirect = crate::session::is_idp_redirect_location(location);
             if is_idp_redirect {
                 return Err(ODataError::AuthFailed(
                     "browser sign-in required or session expired".to_string(),

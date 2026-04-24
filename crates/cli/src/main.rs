@@ -705,6 +705,25 @@ async fn cmd_setup_wizard() -> Result<()> {
 
     // Save config
     let (mut cfg, config_dir) = config::load_config().context("failed to load config")?;
+
+    // If the connection fingerprint changed (url/client/language), discard any
+    // persisted Browser SSO session so we don't replay cookies to a different target.
+    let old_profile = cfg.connections.get(&name).cloned();
+    match config::clear_session_if_connection_changed(
+        &name,
+        old_profile.as_ref(),
+        &url,
+        &client,
+        &language,
+    ) {
+        Ok(true) => println!("  Connection changed — cleared stale Browser SSO session."),
+        Ok(false) => {}
+        Err(e) => println!(
+            "  Warning: connection changed but could not clear stale session ({e}). \
+             Re-sign-in may be required; consider 'sap-odata signout {name}'."
+        ),
+    }
+
     cfg.connections.insert(name.clone(), profile);
     let save_path = if config_dir.path.as_os_str().is_empty() {
         let dir = config::get_or_create_config_dir()?;
@@ -853,6 +872,24 @@ fn cmd_profile_add(
         .map(|p| p.aliases.clone())
         .unwrap_or_default();
 
+    // If the connection fingerprint changed (url/client/language), discard any
+    // persisted Browser SSO session so we don't replay cookies to a different target.
+    let old_profile = cfg.connections.get(name).cloned();
+    match config::clear_session_if_connection_changed(
+        name,
+        old_profile.as_ref(),
+        url,
+        client,
+        language,
+    ) {
+        Ok(true) => println!("  Connection changed — cleared stale Browser SSO session."),
+        Ok(false) => {}
+        Err(e) => println!(
+            "  Warning: connection changed but could not clear stale session ({e}). \
+             Re-sign-in may be required; consider 'sap-odata signout {name}'."
+        ),
+    }
+
     let profile = ConnectionProfile {
         base_url: url.to_string(),
         client: client.to_string(),
@@ -934,11 +971,31 @@ fn cmd_profile_remove(name: &str) -> Result<()> {
 
     let profile = profile.unwrap();
 
-    // Try to remove from keyring too
-    let _ = config::delete_password_from_keyring(name, &profile.username);
+    // Remove password from keyring (basic auth). If the keyring is unavailable
+    // the credential stays stored — warn the user so they can clean it up.
+    let mut warnings: Vec<String> = Vec::new();
+    if !profile.username.is_empty() {
+        if let Err(e) = config::delete_password_from_keyring(name, &profile.username) {
+            warnings.push(format!("password (user: {}) — {e}", profile.username));
+        }
+    }
+    // Remove any persisted Browser SSO session — critical so that recreating
+    // a profile with the same name doesn't resurrect the old session.
+    if let Err(e) = sap_odata_core::session::clear(name) {
+        warnings.push(format!("Browser SSO session — {e}"));
+    }
 
     config::save_config(&cfg, &config_dir.path)?;
-    println!("  Profile '{}' removed.", name);
+
+    if warnings.is_empty() {
+        println!("  Profile '{}' removed (credentials and session cleared).", name);
+    } else {
+        println!("  Profile '{}' removed from config, but these items could NOT be cleared:", name);
+        for w in &warnings {
+            println!("    - {w}");
+        }
+        println!("  You may need to remove them manually from the OS credential store.");
+    }
     Ok(())
 }
 

@@ -132,6 +132,28 @@ fn build_browser_probe_url(base_url: &str, client: &str, language: &str) -> Stri
     )
 }
 
+// IMF-fixdate (RFC 7231) — the only `Expires=` format the `cookie` crate parser
+// reliably round-trips. `time::Rfc2822` emits "+0000" which the parser rejects.
+const IMF_FIXDATE: &[time::format_description::FormatItem<'_>] = time::macros::format_description!(
+    "[weekday repr:short], [day] [month repr:short] [year] [hour]:[minute]:[second] GMT"
+);
+
+/// Probe URLs for well-known federated-SSO IdPs. Used during sign-out so we
+/// don't leave Azure AD / Okta / Auth0 / SAP IAS session cookies behind that
+/// would silently re-authenticate the user on the next sign-in.
+///
+/// This is only a *seed* list — the sign-out flow also walks the entire cookie
+/// store and deletes any cookie whose domain matches `session::is_idp_host`,
+/// which catches tenant-specific subdomains these fixed URLs would miss.
+const IDP_PROBE_URLS: &[&str] = &[
+    "https://login.microsoftonline.com/",
+    "https://login.microsoft.com/",
+    "https://login.windows.net/",
+    "https://login.okta.com/",
+    "https://login.auth0.com/",
+    "https://accounts.sap.com/",   // SAP IAS
+];
+
 fn is_browser_auth_complete(url: &Url, expected: &Url) -> bool {
     url.scheme() == expected.scheme()
         && url.host_str() == expected.host_str()
@@ -146,6 +168,21 @@ fn serialize_webview_cookie(cookie: &Cookie<'_>) -> String {
     }
     if let Some(path) = cookie.path() {
         value.push_str(&format!("; Path={path}"));
+    }
+    // Preserve expiry — otherwise reqwest treats cookies as session-only and
+    // client-side expiration is effectively disabled. Must use IMF-fixdate with
+    // literal "GMT": the `cookie` crate's parser rejects RFC 2822 "+0000".
+    if let Some(expires) = cookie.expires_datetime() {
+        let expires_utc = expires.to_offset(time::UtcOffset::UTC);
+        if let Ok(formatted) = expires_utc.format(&IMF_FIXDATE) {
+            value.push_str(&format!("; Expires={formatted}"));
+        }
+    }
+    if let Some(max_age) = cookie.max_age() {
+        value.push_str(&format!("; Max-Age={}", max_age.whole_seconds()));
+    }
+    if let Some(same_site) = cookie.same_site() {
+        value.push_str(&format!("; SameSite={same_site}"));
     }
     if cookie.secure().unwrap_or(false) {
         value.push_str("; Secure");
@@ -236,12 +273,9 @@ async fn browser_sign_in_for_connection(
         let visited_idp = visited_idp.clone();
         move |url| {
             let host = url.host_str().unwrap_or("");
-            // Detect IdP domains
-            if host.contains("microsoftonline.com")
-                || host.contains("ondemand.com")
-                || host.contains("okta.com")
-                || host.contains("auth0.com")
-            {
+            // Detect IdP domains — shared list with sign-out cookie sweep and
+            // expired-session redirect detection so all three stay aligned.
+            if sap_odata_core::session::is_idp_host(host) {
                 *visited_idp.lock().unwrap() = true;
             }
 
@@ -316,7 +350,10 @@ async fn browser_sign_in_for_connection(
 
     // Persist to OS keyring if we know the profile name (so the CLI can reuse it).
     if let Some(ref pname) = profile_name {
-        match sap_odata_core::session::save(pname, &request_url, &cookie_strings) {
+        let fingerprint = sap_odata_core::session::connection_fingerprint(
+            &base_url, &client, &language,
+        );
+        match sap_odata_core::session::save(pname, &request_url, &fingerprint, &cookie_strings) {
             Ok(()) => {}
             Err(e) => {
                 eprintln!("Warning: could not persist browser session for '{pname}': {e}");
@@ -592,6 +629,25 @@ fn add_profile(
         .map(|p| p.aliases.clone())
         .unwrap_or_default();
 
+    // If the connection fingerprint changed (url/client/language), discard any
+    // persisted Browser SSO session so we don't replay cookies to a different target.
+    let old_profile = cfg.connections.get(&name).cloned();
+    let mut fp_warning: Option<String> = None;
+    match config::clear_session_if_connection_changed(
+        &name,
+        old_profile.as_ref(),
+        &base_url,
+        &client,
+        &language,
+    ) {
+        Ok(_) => {}
+        Err(e) => {
+            fp_warning = Some(format!(
+                "connection changed but could not clear stale Browser SSO session: {e}"
+            ));
+        }
+    }
+
     let sso = auth_mode == "sso";
     let browser_sso = auth_mode == "browser";
     let profile = config::ConnectionProfile {
@@ -618,7 +674,11 @@ fn add_profile(
                     .map_err(|e| format!("Config dir error: {e}"))?;
                 config::save_config(&cfg, &dir.path)
                     .map_err(|e| format!("Save error: {e}"))?;
-                return Ok(format!("Profile '{}' saved (password in config file)", name));
+                let base = format!("Profile '{}' saved (password in config file)", name);
+                return Ok(match fp_warning {
+                    Some(w) => format!("{base}. Warning: {w}"),
+                    None => base,
+                });
             }
         }
     }
@@ -633,7 +693,11 @@ fn add_profile(
         "browser" => " with browser SSO",
         _ => "",
     };
-    Ok(format!("Profile '{}' saved{mode}", name))
+    let base = format!("Profile '{}' saved{mode}", name);
+    Ok(match fp_warning {
+        Some(w) => format!("{base}. Warning: {w}"),
+        None => base,
+    })
 }
 
 #[tauri::command]
@@ -646,16 +710,29 @@ fn remove_profile(
     let profile = cfg.connections.remove(&name)
         .ok_or_else(|| format!("Profile '{}' not found", name))?;
 
+    let mut warnings: Vec<String> = Vec::new();
     if !profile.sso && !profile.browser_sso && !profile.username.is_empty() {
-        let _ = config::delete_password_from_keyring(&name, &profile.username);
+        if let Err(e) = config::delete_password_from_keyring(&name, &profile.username) {
+            warnings.push(format!("password (user: {}) — {e}", profile.username));
+        }
     }
     let key = browser_session_key(&profile.base_url, &profile.client, &profile.language);
     state.browser_sessions.lock().unwrap().remove(&key);
     // Also clear persisted browser session from keyring
-    let _ = sap_odata_core::session::clear(&name);
+    if let Err(e) = sap_odata_core::session::clear(&name) {
+        warnings.push(format!("Browser SSO session — {e}"));
+    }
     config::save_config(&cfg, &config_dir.path)
         .map_err(|e| format!("Save error: {e}"))?;
-    Ok(format!("Profile '{}' removed", name))
+    if warnings.is_empty() {
+        Ok(format!("Profile '{}' removed", name))
+    } else {
+        Ok(format!(
+            "Profile '{}' removed from config, but these items could NOT be cleared: {}. You may need to remove them manually from the OS credential store.",
+            name,
+            warnings.join("; ")
+        ))
+    }
 }
 
 #[tauri::command]
@@ -734,20 +811,151 @@ async fn browser_sign_in_profile(
 }
 
 #[tauri::command]
-fn sign_out_profile(
+async fn sign_out_profile(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     profile_name: String,
 ) -> Result<String, String> {
-    // Clear in-memory session
     let (cfg, _) = config::load_config().map_err(|e| format!("Config error: {e}"))?;
-    if let Some(profile) = cfg.connections.get(&profile_name) {
-        let key = browser_session_key(&profile.base_url, &profile.client, &profile.language);
-        state.browser_sessions.lock().unwrap().remove(&key);
+    let profile = cfg
+        .connections
+        .get(&profile_name)
+        .ok_or_else(|| format!("Profile '{}' not found", profile_name))?;
+
+    let base_url = profile.base_url.clone();
+    let client = profile.client.clone();
+    let language = profile.language.clone();
+
+    // 1. Clear in-memory session
+    let key = browser_session_key(&base_url, &client, &language);
+    state.browser_sessions.lock().unwrap().remove(&key);
+
+    // 2. Clear persisted session from keyring. Don't bail if this fails — we
+    //    still want to attempt to clear browser-level cookies so an immediate
+    //    re-sign-in still prompts for credentials. Report the partial failure.
+    let persisted_err = sap_odata_core::session::clear(&profile_name).err();
+
+    // 3. Clear cookies from the webview store itself. Covers:
+    //      - SAP base URL + catalog probe URL (first-party session cookies)
+    //      - Federated IdP hosts (Azure AD / Okta / Auth0 / SAP IAS). Without
+    //        these, the IdP will silently re-authenticate on next sign-in.
+    //    Also walks every cookie the webview currently holds and deletes any
+    //    whose domain matches an IdP — catches tenant-specific subdomains
+    //    (e.g. login.microsoftonline.com/<tenant-id>) that a fixed URL list
+    //    would otherwise miss.
+    let mut attempted = 0usize;
+    let mut deleted = 0usize;
+    if let Some(main_window) = app.get_webview_window("main") {
+        let probe_url_str = build_browser_probe_url(&base_url, &client, &language);
+        let mut probe_urls: Vec<Url> = Vec::new();
+        if let Ok(u) = Url::parse(&probe_url_str) {
+            probe_urls.push(u);
+        }
+        if let Ok(u) = Url::parse(&format!("{}/", base_url.trim_end_matches('/'))) {
+            probe_urls.push(u);
+        }
+        for raw in IDP_PROBE_URLS {
+            if let Ok(u) = Url::parse(raw) {
+                probe_urls.push(u);
+            }
+        }
+
+        let mut to_delete: Vec<Cookie<'static>> = Vec::new();
+        for url in &probe_urls {
+            if let Ok(cookies) = main_window.cookies_for_url(url.clone()) {
+                for c in cookies {
+                    to_delete.push(c);
+                }
+            }
+        }
+        // Also sweep the full cookie store for IdP-hosted cookies whose domain
+        // we can't guess (e.g. tenant-scoped Azure AD subdomains).
+        if let Ok(all) = main_window.cookies() {
+            for c in all {
+                if let Some(domain) = c.domain() {
+                    if sap_odata_core::session::is_idp_host(domain) {
+                        to_delete.push(c);
+                    }
+                }
+            }
+        }
+
+        attempted = to_delete.len();
+        for c in to_delete {
+            match main_window.delete_cookie(c) {
+                Ok(()) => deleted += 1,
+                Err(e) => {
+                    eprintln!("sign_out: failed to delete cookie: {e}");
+                }
+            }
+        }
     }
-    // Clear persisted session from keyring
-    sap_odata_core::session::clear(&profile_name)
-        .map_err(|e| format!("Failed to clear session: {e}"))?;
-    Ok(format!("Signed out of '{}'", profile_name))
+
+    let persisted_note = match &persisted_err {
+        Some(e) => format!(
+            " Warning: persisted session could NOT be cleared from keyring ({e}) — it may still be replayed on next app start."
+        ),
+        None => String::new(),
+    };
+    let msg = if attempted == 0 {
+        format!(
+            "Signed out of '{}'. No webview cookies were present.{persisted_note}",
+            profile_name
+        )
+    } else if deleted == attempted {
+        format!(
+            "Signed out of '{}'. Cleared {deleted} webview cookie(s); next sign-in will prompt for credentials.{persisted_note}",
+            profile_name
+        )
+    } else {
+        format!(
+            "Signed out of '{}'. Cleared {deleted}/{attempted} webview cookies — {} may remain and could allow silent re-authentication.{persisted_note}",
+            profile_name,
+            attempted - deleted
+        )
+    };
+    Ok(msg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tauri::webview::cookie;
+
+    #[test]
+    fn serialize_cookie_expires_roundtrips_through_parser() {
+        // Build a cookie with a concrete Expires timestamp, serialize it with
+        // our serializer, then parse it back with the same `cookie` crate
+        // reqwest uses — the Expires must survive the round-trip. Previously
+        // time::Rfc2822 emitted "+0000" which the parser rejects, silently
+        // turning persistent cookies into session-only cookies.
+        let expires = time::OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let built: cookie::Cookie<'static> = cookie::Cookie::build(("MYSAPSSO2", "abc"))
+            .domain("sap.corp")
+            .path("/")
+            .expires(expires)
+            .secure(true)
+            .http_only(true)
+            .build();
+
+        let serialized = serialize_webview_cookie(&built);
+        assert!(
+            serialized.contains("GMT"),
+            "Expires must use literal 'GMT' (not +0000); got: {serialized}"
+        );
+
+        let parsed = cookie::Cookie::parse(serialized.as_str())
+            .expect("serialized cookie must be parseable by cookie crate");
+        let parsed_expires = parsed
+            .expires_datetime()
+            .expect("parsed cookie must have an Expires datetime");
+        assert_eq!(
+            parsed_expires.unix_timestamp(),
+            expires.unix_timestamp(),
+            "Expires must round-trip to the same instant"
+        );
+    }
+
 }
 
 fn main() {
