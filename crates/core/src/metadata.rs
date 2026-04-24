@@ -75,6 +75,26 @@ pub struct EntityType {
     /// expose as selection filters out of the box. Empty if the service
     /// doesn't specify any. Paths are stored verbatim (no alias resolution).
     pub selection_fields: Vec<String>,
+    /// Columns a Fiori list report would show by default, from
+    /// `UI.LineItem`. Only `UI.DataField` records with a `Value Path="..."`
+    /// are surfaced here; `DataFieldFor*` variants (Action, Annotation,
+    /// IntentBasedNavigation, ...) are ignored because they don't map to
+    /// `$select`-able columns. Order matches the source collection.
+    pub line_item: Vec<LineItemField>,
+}
+
+/// One `UI.DataField` inside a `UI.LineItem` collection — enough to
+/// populate a Fiori-style default `$select` and label the column.
+#[derive(Debug, Clone, Serialize)]
+pub struct LineItemField {
+    /// The `Value Path="..."` — the property path the column displays.
+    pub value_path: String,
+    /// Optional static `Label String="..."` override. When absent the
+    /// frontend should fall back to the referenced property's own label.
+    pub label: Option<String>,
+    /// Optional `Importance` — one of "High", "Medium", "Low" (enum
+    /// member on `UI.ImportanceType`). Stored as-is for the UI to style.
+    pub importance: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -116,6 +136,25 @@ pub struct Property {
     /// 5 = Information per OData spec) or a path to a sibling property
     /// whose runtime value supplies the level.
     pub criticality: Option<Criticality>,
+    /// Parsed `Common.ValueList` annotation — describes a value help
+    /// (F4) for this property: which entity set to pull values from,
+    /// whether it supports `$search`, and how its properties map back
+    /// to this (and sibling) properties on pick. `None` when the
+    /// service doesn't declare a value list. Qualifier variants are
+    /// not differentiated yet — the first parse wins.
+    pub value_list: Option<ValueList>,
+    /// `Common.ValueListReferences` URLs captured verbatim. Each entry
+    /// points at a separate Fiori value-help service whose `$metadata`
+    /// contains the real `Common.ValueList` mapping. Empty when the
+    /// property uses inline `ValueList` (see `value_list`) or no value
+    /// help at all. Relative URLs are left unresolved — consumers
+    /// resolve them against the current service's base URL.
+    pub value_list_references: Vec<String>,
+    /// `true` when `Common.ValueListWithFixedValues` is present on this
+    /// property. Signals "the set of valid values is small and stable"
+    /// (Fiori typically renders this as a dropdown). The annotation
+    /// carries no mapping of its own, so it's a hint for the UI only.
+    pub value_list_fixed: bool,
 }
 
 /// `UI.Criticality` value. Absent means "no criticality annotation",
@@ -125,6 +164,59 @@ pub struct Property {
 pub enum Criticality {
     Fixed(u8),
     Path(String),
+}
+
+/// Parsed `Common.ValueList` record — the F4/value-help declaration
+/// for a property. Enough to drive a picker: where to fetch values
+/// from, whether `$search` is available, and how picked rows map
+/// back to the local entity's properties.
+#[derive(Debug, Clone, Serialize)]
+pub struct ValueList {
+    /// Name of the entity set that serves as the value-help source.
+    /// Path is relative to the service root — callers append it to
+    /// the service URL directly.
+    pub collection_path: String,
+    /// Optional human-readable label for the value help (e.g.
+    /// "Warehouse Value Help"). Falls back to `None` if unset.
+    pub label: Option<String>,
+    /// Whether the value-help collection accepts `$search`.
+    /// `None` means the service didn't say; callers can choose to
+    /// offer a search box speculatively.
+    pub search_supported: Option<bool>,
+    /// Parameter mapping between the annotated property's entity and
+    /// the value-help entity. In source order.
+    pub parameters: Vec<ValueListParameter>,
+}
+
+/// One entry inside `Common.ValueList.Parameters`. The kind determines
+/// how the picker uses the mapping on open and on pick; `local_property`
+/// is populated for In/Out/InOut (it's the column on the local entity),
+/// and `constant` is populated only for `Constant`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ValueListParameter {
+    pub kind: ValueListParameterKind,
+    /// Property name on the annotated entity that this parameter
+    /// reads from or writes to. `None` for `DisplayOnly` (no local
+    /// binding) and `Constant` (constant feeds the VL directly).
+    pub local_property: Option<String>,
+    /// Property name on the value-list entity.
+    pub value_list_property: String,
+    /// For `Constant` kind only: the literal value sent as a filter
+    /// against `value_list_property`.
+    pub constant: Option<String>,
+}
+
+/// The five standard `Common.ValueListParameter*` variants. Unknown
+/// subtypes fall through parsing — we don't want to invent a kind we
+/// can't faithfully drive.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ValueListParameterKind {
+    In,
+    Out,
+    InOut,
+    DisplayOnly,
+    Constant,
 }
 
 /// Parsed `UI.HeaderInfo` record. All fields are optional — services
@@ -423,6 +515,9 @@ fn parse_entity_types(schema: &roxmltree::Node, version: ODataVersion) -> Vec<En
                     required_in_filter: parse_sap_bool(&p, "required-in-filter"),
                     // Populated later by the V4 annotation pass where applicable.
                     criticality: None,
+                    value_list: None,
+                    value_list_references: Vec::new(),
+                    value_list_fixed: false,
                 })
                 .collect();
 
@@ -455,6 +550,7 @@ fn parse_entity_types(schema: &roxmltree::Node, version: ODataVersion) -> Vec<En
                 nav_properties,
                 header_info: None,
                 selection_fields: Vec::new(),
+                line_item: Vec::new(),
             }
         })
         .collect()
@@ -713,6 +809,88 @@ fn apply_v4_typed_annotations(
                         }
                     }
                 }
+            } else if lower.ends_with(".valuelist")
+                && !lower.ends_with(".valuelistreferences")
+                && !lower.ends_with(".valuelistmapping")
+                && !lower.ends_with(".valuelistwithfixedvalues")
+            {
+                // Common.ValueList targets a specific property. We take
+                // the first (unqualified) match; qualified variants
+                // (e.g. multiple value helps for the same field) are
+                // left for a later pass once the picker exposes them.
+                if let Some((et_name, prop_name)) = target.split_once('/') {
+                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
+                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
+                            if prop.value_list.is_none() {
+                                if let Some(vl) = parse_value_list_record(&annot) {
+                                    prop.value_list = Some(vl);
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if lower.ends_with(".valuelistreferences") {
+                // Common.ValueListReferences carries a Collection of
+                // String URLs that point at separate value-help services.
+                // Each URL resolves (relative to the current service) to
+                // an F4 service whose `$metadata` contains the real
+                // `Common.ValueList` mapping. Capture all URLs so the
+                // frontend can try multiple references if needed.
+                if let Some((et_name, prop_name)) = target.split_once('/') {
+                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
+                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
+                            for coll in children_by_tag(&annot, "Collection") {
+                                for s in children_by_tag(&coll, "String") {
+                                    if let Some(text) = s.text() {
+                                        let trimmed = text.trim();
+                                        if !trimmed.is_empty()
+                                            && !prop.value_list_references.iter().any(|u| u == trimmed)
+                                        {
+                                            prop.value_list_references.push(trimmed.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if lower.ends_with(".valuelistwithfixedvalues") {
+                // Marker-only annotation — flips a boolean on the
+                // property. The term is almost always written as an
+                // empty `<Annotation .../>`; we don't inspect any
+                // attributes.
+                if let Some((et_name, prop_name)) = target.split_once('/') {
+                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
+                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
+                            prop.value_list_fixed = true;
+                        }
+                    }
+                }
+            } else if lower.ends_with(".lineitem") {
+                // UI.LineItem = Collection(UI.DataField). Mirrors
+                // SelectionFields' target-resolution pattern: either
+                // the entity set (Container/SetName) or the type name.
+                let fields = parse_line_item_collection(&annot);
+                if fields.is_empty() {
+                    continue;
+                }
+                let type_name = if let Some((_, set_name)) = target.split_once('/') {
+                    entity_sets
+                        .iter()
+                        .find(|s| s.name == set_name)
+                        .map(|s| extract_type_name(&s.entity_type).to_string())
+                } else {
+                    Some(target.to_string())
+                };
+                if let Some(name) = type_name {
+                    if let Some(et) = entity_types.iter_mut().find(|t| t.name == name) {
+                        // Only the default (no qualifier) wins, so we
+                        // don't let a "Simplified" variant overwrite.
+                        if et.line_item.is_empty() {
+                            et.line_item = fields;
+                        }
+                    }
+                }
             } else if lower.ends_with(".selectionfields") {
                 // UI.SelectionFields can target either the entity set
                 // ("Container/SetName") or the entity type directly
@@ -790,6 +968,135 @@ fn apply_capability_restriction(
             }
         }
     }
+}
+
+/// Parse the `Record` inside a `Common.ValueList` annotation. Returns
+/// `None` if the record is missing, has no `CollectionPath`, or has an
+/// empty `Parameters` collection — any of those make the value help
+/// unusable for the picker. Skips parameter records whose Type we
+/// don't recognize rather than inventing a mapping we can't drive.
+fn parse_value_list_record(annot: &roxmltree::Node) -> Option<ValueList> {
+    let record = children_by_tag(annot, "Record").into_iter().next()?;
+    let mut collection_path: Option<String> = None;
+    let mut label: Option<String> = None;
+    let mut search_supported: Option<bool> = None;
+    let mut parameters: Vec<ValueListParameter> = Vec::new();
+    for pv in children_by_tag(&record, "PropertyValue") {
+        match pv.attribute("Property") {
+            Some("CollectionPath") => {
+                collection_path = pv.attribute("String").map(String::from);
+            }
+            Some("Label") => {
+                label = pv.attribute("String").map(String::from);
+            }
+            Some("SearchSupported") => {
+                search_supported = pv.attribute("Bool").map(|v| v == "true");
+            }
+            Some("Parameters") => {
+                for coll in children_by_tag(&pv, "Collection") {
+                    for param_rec in children_by_tag(&coll, "Record") {
+                        if let Some(p) = parse_value_list_parameter(&param_rec) {
+                            parameters.push(p);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let collection_path = collection_path?;
+    if parameters.is_empty() {
+        return None;
+    }
+    Some(ValueList { collection_path, label, search_supported, parameters })
+}
+
+/// Parse one `<Record>` inside `Common.ValueList.Parameters`. Returns
+/// `None` for unrecognized record types — skipping beats inventing.
+fn parse_value_list_parameter(record: &roxmltree::Node) -> Option<ValueListParameter> {
+    let type_attr = record.attribute("Type")?;
+    // Accept SAP__-aliased, fully qualified, or bare names. The leaf is
+    // the segment after the last dot.
+    let normalized = type_attr.trim_start_matches("SAP__");
+    let leaf = normalized.rsplit('.').next().unwrap_or(normalized);
+    let kind = match leaf {
+        "ValueListParameterIn" => ValueListParameterKind::In,
+        "ValueListParameterOut" => ValueListParameterKind::Out,
+        "ValueListParameterInOut" => ValueListParameterKind::InOut,
+        "ValueListParameterDisplayOnly" => ValueListParameterKind::DisplayOnly,
+        "ValueListParameterConstant" => ValueListParameterKind::Constant,
+        _ => return None,
+    };
+    let mut local_property: Option<String> = None;
+    let mut value_list_property: Option<String> = None;
+    let mut constant: Option<String> = None;
+    for pv in children_by_tag(record, "PropertyValue") {
+        match pv.attribute("Property") {
+            Some("LocalDataProperty") => {
+                local_property = pv.attribute("PropertyPath").map(String::from);
+            }
+            Some("ValueListProperty") => {
+                value_list_property = pv.attribute("String").map(String::from);
+            }
+            Some("Constant") => {
+                // Spec allows several primitive-typed attrs; SAP most
+                // often emits String=. Fall through to Int/Bool for the
+                // rarer numeric/boolean constants.
+                constant = pv
+                    .attribute("String")
+                    .or_else(|| pv.attribute("Int"))
+                    .or_else(|| pv.attribute("Bool"))
+                    .map(String::from);
+            }
+            _ => {}
+        }
+    }
+    let value_list_property = value_list_property?;
+    Some(ValueListParameter { kind, local_property, value_list_property, constant })
+}
+
+/// Walk a `UI.LineItem` annotation's `<Collection>` of `<Record>`s and
+/// return one `LineItemField` per `UI.DataField` record that has a
+/// `Value Path="..."`. Records whose `Type` is `UI.DataFieldFor*`
+/// (Action, Annotation, IntentBasedNavigation, ...) are skipped — they
+/// don't map to `$select`-able columns.
+fn parse_line_item_collection(annot: &roxmltree::Node) -> Vec<LineItemField> {
+    let mut out = Vec::new();
+    let collection = match children_by_tag(annot, "Collection").into_iter().next() {
+        Some(c) => c,
+        None => return out,
+    };
+    for record in children_by_tag(&collection, "Record") {
+        // Record Type defaults to "UI.DataField" when omitted. Accept
+        // the bare name, the SAP__ alias, and the fully-qualified form.
+        let type_attr = record.attribute("Type").unwrap_or("UI.DataField");
+        let normalized = type_attr.trim_start_matches("SAP__");
+        let leaf = normalized.rsplit('.').next().unwrap_or(normalized);
+        if leaf != "DataField" {
+            continue;
+        }
+        let mut value_path: Option<String> = None;
+        let mut label: Option<String> = None;
+        let mut importance: Option<String> = None;
+        for pv in children_by_tag(&record, "PropertyValue") {
+            match pv.attribute("Property") {
+                Some("Value") => value_path = pv.attribute("Path").map(String::from),
+                Some("Label") => label = pv.attribute("String").map(String::from),
+                Some("Importance") => {
+                    if let Some(em) = pv.attribute("EnumMember") {
+                        importance = Some(
+                            em.rsplit('/').next().unwrap_or(em).to_string(),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(vp) = value_path {
+            out.push(LineItemField { value_path: vp, label, importance });
+        }
+    }
+    out
 }
 
 /// Read a `<PropertyValue>` whose content is a `<Collection>` of
@@ -893,6 +1200,51 @@ fn push_sap_attrs(out: &mut Vec<RawAnnotation>, node: &roxmltree::Node, target: 
 /// Derive a display-friendly vocabulary name from an annotation term.
 /// Examples: `Common.Label` → "Common", `SAP__common.Label` → "Common",
 /// `UI.LineItem` → "UI", `Org.OData.Measures.V1.ISOCurrency` → "Measures".
+/// Scan an F4 service's `$metadata` XML for a `Common.ValueListMapping`
+/// annotation that targets `local_property` (matched on the trailing
+/// path segment — the target's namespace-qualified entity type doesn't
+/// have to match). Returns the first match as a `ValueList` — the same
+/// record shape our inline-`Common.ValueList` parser already handles.
+///
+/// This is the bridge between the parent service (which only carries
+/// `Common.ValueListReferences` URLs) and the F4 service (which carries
+/// the actual `Common.ValueListMapping` record). Callers resolve the
+/// reference URL, fetch the F4 `$metadata`, then hand it to this helper
+/// along with the parent property name.
+pub fn parse_value_list_mapping_xml(xml: &str, local_property: &str) -> Option<ValueList> {
+    let doc = roxmltree::Document::parse(xml).ok()?;
+    let schema_nodes: Vec<_> = doc
+        .descendants()
+        .filter(|n| n.has_tag_name("Schema"))
+        .collect();
+    let suffix = format!("/{local_property}");
+    for schema in schema_nodes {
+        for annotations_block in children_by_tag(&schema, "Annotations") {
+            let target = match annotations_block.attribute("Target") {
+                Some(t) => t,
+                None => continue,
+            };
+            if !target.ends_with(&suffix) {
+                continue;
+            }
+            for annot in children_by_tag(&annotations_block, "Annotation") {
+                let term = match annot.attribute("Term") {
+                    Some(t) => t,
+                    None => continue,
+                };
+                let lower = term.trim_start_matches("SAP__").to_ascii_lowercase();
+                if !lower.ends_with(".valuelistmapping") {
+                    continue;
+                }
+                if let Some(vl) = parse_value_list_record(&annot) {
+                    return Some(vl);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn extract_annotation_namespace(term: &str) -> String {
     let t = term.strip_prefix("SAP__").unwrap_or(term);
     let t = t.strip_prefix("Org.OData.").unwrap_or(t);
@@ -1537,6 +1889,317 @@ mod tests {
         let meta = parse_metadata(xml).unwrap();
         let wh = meta.find_entity_type("WarehouseType").unwrap();
         assert_eq!(wh.selection_fields, vec!["Warehouse", "Language"]);
+    }
+
+    #[test]
+    fn test_v4_common_value_list_full_record() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="Warehouse" Type="Edm.String"/>
+        <Property Name="Plant" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType/Warehouse">
+        <Annotation Term="SAP__common.ValueList">
+          <Record>
+            <PropertyValue Property="Label" String="Warehouse F4"/>
+            <PropertyValue Property="CollectionPath" String="WarehouseValueHelp"/>
+            <PropertyValue Property="SearchSupported" Bool="true"/>
+            <PropertyValue Property="Parameters">
+              <Collection>
+                <Record Type="Common.ValueListParameterInOut">
+                  <PropertyValue Property="LocalDataProperty" PropertyPath="Warehouse"/>
+                  <PropertyValue Property="ValueListProperty" String="Warehouse"/>
+                </Record>
+                <Record Type="Common.ValueListParameterIn">
+                  <PropertyValue Property="LocalDataProperty" PropertyPath="Plant"/>
+                  <PropertyValue Property="ValueListProperty" String="Plant"/>
+                </Record>
+                <Record Type="Common.ValueListParameterDisplayOnly">
+                  <PropertyValue Property="ValueListProperty" String="Description"/>
+                </Record>
+                <Record Type="Common.ValueListParameterConstant">
+                  <PropertyValue Property="Constant" String="EN"/>
+                  <PropertyValue Property="ValueListProperty" String="Language"/>
+                </Record>
+                <Record Type="Common.ValueListParameterExotic">
+                  <PropertyValue Property="ValueListProperty" String="SkipMe"/>
+                </Record>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let ot = meta.find_entity_type("OrderType").unwrap();
+        let wh = ot.properties.iter().find(|p| p.name == "Warehouse").unwrap();
+        let vl = wh.value_list.as_ref().expect("value_list should be parsed");
+        assert_eq!(vl.collection_path, "WarehouseValueHelp");
+        assert_eq!(vl.label.as_deref(), Some("Warehouse F4"));
+        assert_eq!(vl.search_supported, Some(true));
+        // Unknown Type "Exotic" should have been skipped.
+        assert_eq!(vl.parameters.len(), 4);
+        assert!(matches!(vl.parameters[0].kind, ValueListParameterKind::InOut));
+        assert_eq!(vl.parameters[0].local_property.as_deref(), Some("Warehouse"));
+        assert_eq!(vl.parameters[0].value_list_property, "Warehouse");
+        assert!(matches!(vl.parameters[1].kind, ValueListParameterKind::In));
+        assert_eq!(vl.parameters[1].local_property.as_deref(), Some("Plant"));
+        assert!(matches!(vl.parameters[2].kind, ValueListParameterKind::DisplayOnly));
+        assert!(vl.parameters[2].local_property.is_none());
+        assert_eq!(vl.parameters[2].value_list_property, "Description");
+        assert!(matches!(vl.parameters[3].kind, ValueListParameterKind::Constant));
+        assert_eq!(vl.parameters[3].constant.as_deref(), Some("EN"));
+        assert_eq!(vl.parameters[3].value_list_property, "Language");
+    }
+
+    #[test]
+    fn test_v4_common_value_list_missing_collection_path_is_skipped() {
+        // Without CollectionPath the picker can't do anything — drop it.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="Warehouse" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType/Warehouse">
+        <Annotation Term="Common.ValueList">
+          <Record>
+            <PropertyValue Property="Parameters">
+              <Collection>
+                <Record Type="Common.ValueListParameterInOut">
+                  <PropertyValue Property="LocalDataProperty" PropertyPath="Warehouse"/>
+                  <PropertyValue Property="ValueListProperty" String="Warehouse"/>
+                </Record>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let ot = meta.find_entity_type("OrderType").unwrap();
+        let wh = ot.properties.iter().find(|p| p.name == "Warehouse").unwrap();
+        assert!(wh.value_list.is_none());
+    }
+
+    #[test]
+    fn test_parse_value_list_mapping_xml_finds_mapping() {
+        // Shape of an F4 service's $metadata — the mapping targets the
+        // *parent* service's property via the SAP__ParentService alias.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="f4" Alias="SAP__f4">
+      <EntityType Name="WarehouseVHType">
+        <Key><PropertyRef Name="EWMWarehouse"/></Key>
+        <Property Name="EWMWarehouse" Type="Edm.String" Nullable="false"/>
+        <Property Name="EWMWarehouse_Text" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="I_EWM_WarehouseNumberVH" EntityType="f4.WarehouseVHType"/></EntityContainer>
+      <Annotations Target="SAP__ParentService.OrderType/EWMWarehouse">
+        <Annotation Term="SAP__common.ValueListMapping">
+          <Record>
+            <PropertyValue Property="Label" String="Warehouse Number"/>
+            <PropertyValue Property="CollectionPath" String="I_EWM_WarehouseNumberVH"/>
+            <PropertyValue Property="Parameters">
+              <Collection>
+                <Record Type="SAP__common.ValueListParameterInOut">
+                  <PropertyValue Property="LocalDataProperty" PropertyPath="EWMWarehouse"/>
+                  <PropertyValue Property="ValueListProperty" String="EWMWarehouse"/>
+                </Record>
+                <Record Type="SAP__common.ValueListParameterDisplayOnly">
+                  <PropertyValue Property="ValueListProperty" String="EWMWarehouse_Text"/>
+                </Record>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let vl = parse_value_list_mapping_xml(xml, "EWMWarehouse")
+            .expect("mapping should parse");
+        assert_eq!(vl.collection_path, "I_EWM_WarehouseNumberVH");
+        assert_eq!(vl.label.as_deref(), Some("Warehouse Number"));
+        assert_eq!(vl.parameters.len(), 2);
+        assert!(parse_value_list_mapping_xml(xml, "SomeOtherProperty").is_none());
+    }
+
+    #[test]
+    fn test_v4_value_list_references_and_fixed_values_are_captured() {
+        // Shape observed on HA9 (UI_PHYSSTOCKPROD_1): properties carry
+        // Common.ValueListReferences (relative URL) plus the marker-only
+        // Common.ValueListWithFixedValues.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="StockType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="EWMWarehouse" Type="Edm.String"/>
+        <Property Name="StockDocumentCategory" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Stocks" EntityType="n.StockType"/></EntityContainer>
+      <Annotations Target="SAP__self.StockType/EWMWarehouse">
+        <Annotation Term="SAP__common.ValueListReferences">
+          <Collection>
+            <String>../../../../srvd_f4/sap/i_ewm_warehousenumbervh/0001/$metadata</String>
+          </Collection>
+        </Annotation>
+      </Annotations>
+      <Annotations Target="SAP__self.StockType/StockDocumentCategory">
+        <Annotation Term="SAP__common.ValueListReferences">
+          <Collection>
+            <String>../../../../srvd_f4/sap/c_ewm_stockdoccategoryvh/0001/$metadata</String>
+          </Collection>
+        </Annotation>
+        <Annotation Term="SAP__common.ValueListWithFixedValues"/>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let st = meta.find_entity_type("StockType").unwrap();
+        let wh = st.properties.iter().find(|p| p.name == "EWMWarehouse").unwrap();
+        assert!(wh.value_list.is_none());
+        assert_eq!(wh.value_list_references.len(), 1);
+        assert!(wh.value_list_references[0].contains("i_ewm_warehousenumbervh"));
+        assert!(!wh.value_list_fixed);
+        let sdc = st.properties.iter().find(|p| p.name == "StockDocumentCategory").unwrap();
+        assert_eq!(sdc.value_list_references.len(), 1);
+        assert!(sdc.value_list_fixed);
+    }
+
+    #[test]
+    fn test_v4_common_value_list_references_is_not_confused() {
+        // Common.ValueListReferences shares a prefix with ValueList but
+        // is a different mechanism we don't support yet. Must NOT parse
+        // as a ValueList.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="Warehouse" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType/Warehouse">
+        <Annotation Term="Common.ValueListReferences">
+          <Collection>
+            <String>https://example.com/external-vh</String>
+          </Collection>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let ot = meta.find_entity_type("OrderType").unwrap();
+        let wh = ot.properties.iter().find(|p| p.name == "Warehouse").unwrap();
+        assert!(wh.value_list.is_none());
+    }
+
+    #[test]
+    fn test_v4_line_item_on_entity_type_target() {
+        // Typical SAP-generated shape: UI.LineItem on the EntityType,
+        // mixing DataFields with a DataFieldForAction that we should skip.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="OrderNumber" Type="Edm.String"/>
+        <Property Name="Status" Type="Edm.String"/>
+        <Property Name="NetAmount" Type="Edm.Decimal"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType">
+        <Annotation Term="SAP__UI.LineItem">
+          <Collection>
+            <Record Type="UI.DataField">
+              <PropertyValue Property="Value" Path="OrderNumber"/>
+              <PropertyValue Property="Label" String="Order"/>
+              <PropertyValue Property="Importance" EnumMember="UI.ImportanceType/High"/>
+            </Record>
+            <Record Type="UI.DataField">
+              <PropertyValue Property="Value" Path="Status"/>
+            </Record>
+            <Record Type="UI.DataFieldForAction">
+              <PropertyValue Property="Action" String="n.Cancel"/>
+            </Record>
+            <Record Type="UI.DataField">
+              <PropertyValue Property="Value" Path="NetAmount"/>
+              <PropertyValue Property="Importance" EnumMember="UI.ImportanceType/Low"/>
+            </Record>
+          </Collection>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let ot = meta.find_entity_type("OrderType").unwrap();
+        assert_eq!(ot.line_item.len(), 3);
+        assert_eq!(ot.line_item[0].value_path, "OrderNumber");
+        assert_eq!(ot.line_item[0].label.as_deref(), Some("Order"));
+        assert_eq!(ot.line_item[0].importance.as_deref(), Some("High"));
+        assert_eq!(ot.line_item[1].value_path, "Status");
+        assert!(ot.line_item[1].label.is_none());
+        assert!(ot.line_item[1].importance.is_none());
+        assert_eq!(ot.line_item[2].value_path, "NetAmount");
+        assert_eq!(ot.line_item[2].importance.as_deref(), Some("Low"));
+    }
+
+    #[test]
+    fn test_v4_line_item_on_entity_set_target() {
+        // Some hand-written services put UI.LineItem on the EntitySet.
+        // Default (no Type attribute) Record should be treated as UI.DataField.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="OrderNumber" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.Container/Orders">
+        <Annotation Term="UI.LineItem">
+          <Collection>
+            <Record>
+              <PropertyValue Property="Value" Path="OrderNumber"/>
+            </Record>
+          </Collection>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let ot = meta.find_entity_type("OrderType").unwrap();
+        assert_eq!(ot.line_item.len(), 1);
+        assert_eq!(ot.line_item[0].value_path, "OrderNumber");
     }
 
     #[test]

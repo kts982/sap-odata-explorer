@@ -238,7 +238,7 @@ sap-odata -p DEV -s so describe A_SalesOrder
 sap-odata -p DEV -s API_MATERIAL_DOCUMENT_SRV describe A_MaterialDocumentHeader
 ```
 
-With `--json`, the output also carries the parsed SAP/UI5 annotation fields the desktop app's **SAP View** overlay uses — `header_info` (UI.HeaderInfo), `selection_fields` (UI.SelectionFields), and per-property `text_path` / `unit_path` / `iso_currency_path` / `filterable` / `sortable` / `creatable` / `updatable` / `required_in_filter` / `criticality`. Handy for scripting linting or comparisons without re-parsing `$metadata` yourself.
+With `--json`, the output also carries the parsed SAP/UI5 annotation fields the desktop app's **SAP View** overlay uses — `header_info` (UI.HeaderInfo), `selection_fields` (UI.SelectionFields), `line_item` (UI.LineItem default columns — `value_path` / `label` / `importance` per DataField), and per-property `text_path` / `unit_path` / `iso_currency_path` / `filterable` / `sortable` / `creatable` / `updatable` / `required_in_filter` / `criticality` / `value_list` (inline Common.ValueList — `collection_path`, `label`, `search_supported`, and the In/Out/InOut/DisplayOnly/Constant `parameters` mapping) / `value_list_references` (Common.ValueListReferences — relative URLs to separate F4 services containing the actual mapping) / `value_list_fixed` (Common.ValueListWithFixedValues marker — set when the property has a small fixed value set). Handy for scripting linting or comparisons without re-parsing `$metadata` yourself.
 
 ### `functions`
 

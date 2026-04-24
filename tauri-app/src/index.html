@@ -533,6 +533,9 @@
           </div>
           <input id="qSelect" type="text" placeholder="$select" title="Click properties above to add"
             class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-44 outline-hidden" />
+          <button id="btnFioriCols" type="button"
+            class="hidden text-[10px] font-semibold tracking-wide px-1.5 py-1 rounded-sm text-ox-electric border border-ox-electric/50 hover:bg-ox-electric/10 hover:border-ox-electric transition-colors"
+            title="Populate $select with UI.LineItem default columns (Fiori list report)">Fiori cols</button>
           <input id="qFilter" type="text" placeholder="$filter"
             class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-52 outline-hidden" />
           <input id="qExpand" type="text" placeholder="$expand" title="Click nav properties above to add"
@@ -607,7 +610,7 @@
       <footer class="bg-ox-panel border-t border-ox-border px-4 py-1 text-[11px] text-ox-text flex items-center gap-4 shrink-0 font-mono">
         <span id="statusText">Ready</span>
         <span id="annotationBadge" class="hidden cursor-help text-[10px] text-ox-blue border border-ox-blue/40 bg-ox-blue/10 rounded-sm px-1.5 py-0.5" title=""></span>
-        <button id="btnSapView" class="ml-auto inline-flex items-center gap-1 border border-ox-border rounded-sm px-1.5 py-0.5 text-ox-dim hover:text-ox-text hover:border-ox-dim transition-colors" title="Toggle SAP-aware rendering (HeaderInfo, Common.Text, etc.)">
+        <button id="btnSapView" class="ml-auto inline-flex items-center gap-1 border border-ox-amberDim/60 rounded-sm px-1.5 py-0.5 text-ox-amberDim hover:text-ox-amber hover:border-ox-amber transition-colors" title="Toggle SAP-aware rendering (HeaderInfo, Common.Text, etc.)">
           <span id="sapViewChevron">&#x25B4;</span><span>SAP View</span>
         </button>
         <button id="btnTraceToggle" class="inline-flex items-center gap-1 border border-ox-border rounded-sm px-1.5 py-0.5 text-ox-dim hover:text-ox-text hover:border-ox-dim transition-colors">
@@ -681,6 +684,32 @@
           <button id="btnCancel" class="btn-ghost text-xs px-3 py-1 rounded-sm">Cancel</button>
           <button id="btnSave" class="btn-primary text-xs px-4 py-1 rounded-sm">Save</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Value-List Picker Modal ═══ -->
+  <div id="valueListModal" class="hidden fixed inset-0 z-50 modal-overlay flex items-center justify-center">
+    <div class="modal-content bg-ox-panel border border-ox-border rounded-lg shadow-2xl w-[720px] max-h-[80vh] flex flex-col">
+      <div class="px-5 py-3 border-b border-ox-border flex items-center justify-between shrink-0">
+        <div class="flex items-baseline gap-2">
+          <span class="text-ox-electric text-xs font-semibold tracking-wide">&#x21D2; F4</span>
+          <h3 id="vlTitle" class="text-sm font-medium text-ox-text">Value Help</h3>
+          <span id="vlSubtitle" class="text-[10px] text-ox-dim font-mono"></span>
+        </div>
+        <button id="btnVlClose" class="text-ox-dim hover:text-ox-text text-xs px-2 py-0.5 rounded-sm hover:bg-ox-hover">close</button>
+      </div>
+      <div class="px-5 py-2 border-b border-ox-border shrink-0 flex items-center gap-2">
+        <input id="vlFilter" type="text" placeholder="$filter (e.g. startswith(Warehouse,'HB'))"
+          class="flex-1 bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 outline-hidden" />
+        <input id="vlTop" type="number" value="100" min="1" max="1000"
+          class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-16 outline-hidden" />
+        <button id="btnVlFetch" class="btn-primary text-xs px-3 py-1 rounded-sm">Fetch</button>
+      </div>
+      <div id="vlMapping" class="px-5 py-1.5 border-b border-ox-border text-[10px] font-mono text-ox-dim shrink-0"></div>
+      <div id="vlResults" class="flex-1 overflow-auto p-0 text-xs font-mono"></div>
+      <div class="px-5 py-2 border-t border-ox-border text-[10px] text-ox-dim shrink-0">
+        <span id="vlStatus">Fetching…</span>
       </div>
     </div>
   </div>

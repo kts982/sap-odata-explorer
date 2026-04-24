@@ -6,7 +6,9 @@ use sap_odata_core::{
     client::SapClient,
     config,
     diagnostics::HttpTraceEntry,
-    metadata::{AnnotationSummary, Criticality, HeaderInfo},
+    metadata::{
+        self, AnnotationSummary, Criticality, HeaderInfo, LineItemField, ValueList,
+    },
     query::ODataQuery,
 };
 use serde::{Deserialize, Serialize};
@@ -72,6 +74,7 @@ struct EntityTypeInfo {
     nav_properties: Vec<NavPropertyInfo>,
     header_info: Option<HeaderInfo>,
     selection_fields: Vec<String>,
+    line_item: Vec<LineItemField>,
 }
 
 #[derive(Serialize)]
@@ -91,6 +94,9 @@ struct PropertyInfo {
     updatable: Option<bool>,
     required_in_filter: Option<bool>,
     criticality: Option<Criticality>,
+    value_list: Option<ValueList>,
+    value_list_references: Vec<String>,
+    value_list_fixed: bool,
 }
 
 #[derive(Serialize)]
@@ -635,6 +641,7 @@ async fn describe_entity(
         keys: et.keys.clone(),
         header_info: et.header_info.clone(),
         selection_fields: et.selection_fields.clone(),
+        line_item: et.line_item.clone(),
         properties: et
             .properties
             .iter()
@@ -654,6 +661,9 @@ async fn describe_entity(
                 updatable: p.updatable,
                 required_in_filter: p.required_in_filter,
                 criticality: p.criticality.clone(),
+                value_list: p.value_list.clone(),
+                value_list_references: p.value_list_references.clone(),
+                value_list_fixed: p.value_list_fixed,
             })
             .collect(),
         nav_properties: nav_targets
@@ -1081,6 +1091,82 @@ mod tests {
     }
 }
 
+#[derive(Serialize)]
+struct ResolvedValueList {
+    /// Service path to pass to `run_query` when fetching rows from the
+    /// F4 service. Matrix parameters (`;ps=...;va=...`) are preserved
+    /// verbatim — SAP's F4 services require them.
+    resolved_service_path: String,
+    /// Parsed mapping extracted from the F4 service's `$metadata`. Same
+    /// shape as an inline `Common.ValueList`, so the frontend picker can
+    /// drive it with the existing code path.
+    value_list: ValueList,
+}
+
+/// Resolve a `Common.ValueListReferences` URL (relative to the current
+/// service path) to its F4 service's `ValueListMapping`. Used by the
+/// desktop picker when a property's value help is not inline but lives
+/// in a separate F4 service (the S/4HANA pattern).
+#[tauri::command]
+async fn resolve_value_list_reference(
+    state: tauri::State<'_, AppState>,
+    profile_name: String,
+    service_path: String,
+    reference_url: String,
+    local_property: String,
+) -> CmdResult<ResolvedValueList> {
+    let client = client_from_profile(&profile_name, &state).map_err(CommandError::msg)?;
+    let resolved_service_path = resolve_reference_path(&service_path, &reference_url);
+    let xml = client
+        .fetch_metadata_xml(&resolved_service_path)
+        .await
+        .map_err(|e| CommandError::with_client(&client, format!("F4 metadata fetch error: {e}")))?;
+    let vl = metadata::parse_value_list_mapping_xml(&xml, &local_property).ok_or_else(|| {
+        CommandError::with_client(
+            &client,
+            format!(
+                "No Common.ValueListMapping targeting '{local_property}' found in referenced service '{resolved_service_path}'"
+            ),
+        )
+    })?;
+    Ok(CommandOk {
+        data: ResolvedValueList {
+            resolved_service_path,
+            value_list: vl,
+        },
+        trace: client.diagnostics_snapshot(),
+    })
+}
+
+/// Resolve a relative reference URL (from `Common.ValueListReferences`)
+/// against the current service path. Works on the path component only —
+/// no percent-encoding so SAP's matrix parameters (`;ps='...'`) survive
+/// intact. The trailing `/$metadata` is stripped so the result can be
+/// passed to `fetch_metadata_xml` (which re-appends it).
+fn resolve_reference_path(base: &str, relative: &str) -> String {
+    let resolved = if relative.starts_with('/') {
+        // Absolute path — take as-is.
+        relative.to_string()
+    } else {
+        // Treat the base path as a directory; walk `..` up from there.
+        let mut parts: Vec<&str> = base.trim_end_matches('/').split('/').collect();
+        for seg in relative.split('/') {
+            match seg {
+                "." | "" => {}
+                ".." => {
+                    parts.pop();
+                }
+                other => parts.push(other),
+            }
+        }
+        parts.join("/")
+    };
+    resolved
+        .strip_suffix("/$metadata")
+        .unwrap_or(&resolved)
+        .to_string()
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -1092,6 +1178,7 @@ fn main() {
             get_entities,
             describe_entity,
             run_query,
+            resolve_value_list_reference,
             add_profile,
             remove_profile,
             test_connection,

@@ -1055,9 +1055,405 @@ function renderSelectionFieldsBar(info) {
     return;
   }
   bar.classList.remove('hidden');
+  // Amber-flag chips whose backing property is required-in-filter, so the
+  // user sees at a glance which selection fields the server will reject
+  // queries without.
+  const byName = new Map(
+    Array.isArray(info.properties)
+      ? info.properties.map(p => [p.name, p])
+      : []
+  );
   host.innerHTML = fields
-    .map(name => `<button type="button" class="btn-ghost text-[10px] px-1.5 py-0.5 rounded-sm" data-action="selection-field" data-name="${escapeHtml(name)}" title="Append to $filter">${escapeHtml(name)}</button>`)
+    .map(name => {
+      const p = byName.get(name);
+      const req = p && p.required_in_filter === true;
+      const cls = req
+        ? 'text-[10px] px-1.5 py-0.5 rounded-sm text-ox-amber bg-ox-amberGlow border border-ox-amber/40 hover:bg-ox-amber/20'
+        : 'btn-ghost text-[10px] px-1.5 py-0.5 rounded-sm';
+      const title = req
+        ? 'Required in $filter — append and narrow'
+        : 'Append to $filter';
+      return `<button type="button" class="${cls}" data-action="selection-field" data-name="${escapeHtml(name)}" title="${title}">${escapeHtml(name)}</button>`;
+    })
     .join('');
+}
+
+// ══════════════════════════════════════════════════════════════
+// ── VALUE-LIST PICKER ──
+// ══════════════════════════════════════════════════════════════
+// State held per-open: the full Property info, the ValueList that will
+// drive the picker (inline for same-service value help, resolved for
+// reference-backed), and the service path to fetch rows from (the
+// current service's for inline, the F4 service's for references).
+let _vlActiveProperty = null;
+let _vlActiveValueList = null;
+let _vlActiveServicePath = null;
+// Cache resolved references across opens so reopening the same F4 is
+// instant. Key: absolute reference URL (NOT property name — the same
+// F4 can back many properties).
+const _vlResolveCache = new Map();
+
+async function openValueListPicker(propertyName) {
+  const tab = getActiveTab();
+  const info = tab && tab._lastDescribeInfo;
+  if (!info) return;
+  const prop = info.properties.find(p => p.name === propertyName);
+  if (!prop) return;
+  const hasInline = !!prop.value_list;
+  const hasRefs = Array.isArray(prop.value_list_references) && prop.value_list_references.length > 0;
+  const fixedOnly = !hasInline && !hasRefs && prop.value_list_fixed === true;
+  if (fixedOnly) {
+    // Nothing to drive a picker with — surface the hint in-line rather
+    // than open an empty modal. Borrow the status bar briefly.
+    setStatus('This property has fixed values but no ValueList mapping in this service.');
+    return;
+  }
+  if (!hasInline && !hasRefs) return;
+  _vlActiveProperty = prop;
+  const modal = document.getElementById('valueListModal');
+  const title = document.getElementById('vlTitle');
+  const subtitle = document.getElementById('vlSubtitle');
+  const mapping = document.getElementById('vlMapping');
+  const filter = document.getElementById('vlFilter');
+  const results = document.getElementById('vlResults');
+  const status = document.getElementById('vlStatus');
+  modal.classList.remove('hidden');
+  if (hasInline) {
+    _vlActiveValueList = prop.value_list;
+    _vlActiveServicePath = currentServicePath;
+    title.textContent = prop.value_list.label || `Value Help · ${prop.name}`;
+    subtitle.textContent = prop.value_list.collection_path;
+    mapping.textContent = `Mapping: ${valueListSummary(prop.value_list)}`;
+    filter.value = buildInitialVlFilter(prop, info, prop.value_list);
+    results.innerHTML = '<div class="p-4 text-ox-dim text-[11px]">Click Fetch to load values.</div>';
+    status.textContent = 'Ready.';
+    setTimeout(() => filter.focus(), 0);
+    return;
+  }
+  // Reference-backed: resolve on open. Try references in order until
+  // one succeeds; most services have a single reference.
+  title.textContent = `Value Help · ${prop.name}`;
+  subtitle.textContent = 'resolving reference…';
+  mapping.textContent = '';
+  filter.value = '';
+  results.innerHTML = '<div class="p-4 text-ox-dim text-[11px]">Resolving value-help service…</div>';
+  status.textContent = 'Resolving…';
+  let resolved = null;
+  let lastErr = null;
+  for (const refUrl of prop.value_list_references) {
+    const cached = _vlResolveCache.get(refUrl);
+    if (cached) { resolved = cached; break; }
+    try {
+      // timedInvoke unwraps the { data, trace } envelope and applies the
+      // trace to the current tab so the Inspector shows the F4 fetch.
+      resolved = await timedInvoke('resolve_value_list_reference', {
+        profileName: currentProfile,
+        servicePath: currentServicePath,
+        referenceUrl: refUrl,
+        localProperty: prop.name,
+      });
+      _vlResolveCache.set(refUrl, resolved);
+      break;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  if (!resolved) {
+    status.textContent = 'Resolve error';
+    results.innerHTML = `<div class="p-4 text-ox-red text-[11px]">Could not resolve reference.\n${escapeHtml(String(lastErr || 'unknown error'))}</div>`;
+    return;
+  }
+  _vlActiveValueList = resolved.value_list;
+  _vlActiveServicePath = resolved.resolved_service_path;
+  title.textContent = resolved.value_list.label || `Value Help · ${prop.name}`;
+  subtitle.textContent = resolved.value_list.collection_path;
+  mapping.textContent = `Mapping: ${valueListSummary(resolved.value_list)}`;
+  filter.value = buildInitialVlFilter(prop, info, resolved.value_list);
+  results.innerHTML = '<div class="p-4 text-ox-dim text-[11px]">Click Fetch to load values.</div>';
+  status.textContent = `Resolved → ${resolved.resolved_service_path}`;
+  setTimeout(() => filter.focus(), 0);
+}
+
+function closeValueListPicker() {
+  document.getElementById('valueListModal').classList.add('hidden');
+  _vlActiveProperty = null;
+  _vlActiveValueList = null;
+  _vlActiveServicePath = null;
+}
+
+// Pre-seed the VL filter with In/InOut parameter constraints by
+// echoing whatever values the main $filter already has on those
+// local columns. A lightweight text match — we look for
+// `LocalProperty eq <literal>` or `LocalProperty eq '<literal>'`
+// patterns. Anything fancier stays empty and the user can type.
+function buildInitialVlFilter(prop, info, vl) {
+  const mainFilter = (document.getElementById('qFilter').value || '').trim();
+  if (!mainFilter) return '';
+  const clauses = [];
+  for (const param of vl.parameters) {
+    if (param.kind !== 'in' && param.kind !== 'inout') continue;
+    if (!param.local_property) continue;
+    const re = new RegExp(`\\b${param.local_property}\\s+eq\\s+('[^']*'|[-\\w.]+)`);
+    const m = mainFilter.match(re);
+    if (m) {
+      clauses.push(`${param.value_list_property} eq ${m[1]}`);
+    }
+    if (param.kind === 'inout' && param.local_property === prop.name) {
+      // We're opening this picker specifically because the user wants
+      // to set `prop`. Don't pre-filter by its own current value.
+      clauses.pop();
+    }
+  }
+  // Echo Constant parameters unconditionally — they're fixed filters.
+  for (const param of vl.parameters) {
+    if (param.kind === 'constant' && param.constant !== null && param.constant !== undefined) {
+      const needsQuotes = isNaN(Number(param.constant)) && param.constant !== 'true' && param.constant !== 'false';
+      const lit = needsQuotes ? `'${param.constant.replace(/'/g, "''")}'` : param.constant;
+      clauses.push(`${param.value_list_property} eq ${lit}`);
+    }
+  }
+  void info;
+  return clauses.join(' and ');
+}
+
+async function fetchValueListRows() {
+  const prop = _vlActiveProperty;
+  const vl = _vlActiveValueList;
+  const servicePath = _vlActiveServicePath;
+  if (!prop || !vl || !servicePath) return;
+  const filter = document.getElementById('vlFilter').value.trim();
+  const top = parseInt(document.getElementById('vlTop').value, 10) || 100;
+  const status = document.getElementById('vlStatus');
+  const results = document.getElementById('vlResults');
+  status.textContent = 'Fetching…';
+  results.innerHTML = '<div class="p-4 text-ox-dim text-[11px]">Loading…</div>';
+  try {
+    const params = {
+      entity_set: vl.collection_path,
+      filter: filter || null,
+      top,
+    };
+    const data = await timedInvoke('run_query', {
+      profileName: currentProfile,
+      servicePath,
+      params,
+    });
+    renderValueListRows(data, prop, vl);
+  } catch (e) {
+    status.textContent = 'Fetch error';
+    results.innerHTML = `<div class="p-4 text-ox-red text-[11px]">${escapeHtml(String(e))}</div>`;
+  }
+}
+
+function renderValueListRows(data, prop, vl) {
+  const rows = extractRows(data) || [];
+  const status = document.getElementById('vlStatus');
+  const results = document.getElementById('vlResults');
+  status.textContent = `${rows.length} row(s).`;
+  if (rows.length === 0) {
+    results.innerHTML = '<div class="p-4 text-ox-dim text-[11px]">No rows.</div>';
+    return;
+  }
+  // Column order: prioritize ValueListProperty names from the mapping
+  // so the picker feels task-shaped; then fill in any remaining keys.
+  void prop;
+  const priority = vl.parameters.map(p => p.value_list_property);
+  const firstRowKeys = Object.keys(rows[0]).filter(k => !k.startsWith('__'));
+  const cols = [];
+  for (const k of priority) if (firstRowKeys.includes(k) && !cols.includes(k)) cols.push(k);
+  for (const k of firstRowKeys) if (!cols.includes(k)) cols.push(k);
+  let html = '<table class="w-full"><thead class="sticky top-0 bg-ox-surface z-10"><tr class="text-ox-dim text-[10px]">';
+  for (const c of cols) {
+    html += `<th class="text-left px-3 py-1 border-b border-ox-border">${escapeHtml(c)}</th>`;
+  }
+  html += '</tr></thead><tbody>';
+  for (let i = 0; i < rows.length; i++) {
+    html += `<tr class="hover:bg-ox-electric/10 cursor-pointer border-b border-ox-border/30" data-action="vl-pick" data-row="${i}">`;
+    for (const c of cols) {
+      const v = rows[i][c];
+      const shown = v === null || v === undefined ? '' : String(v);
+      html += `<td class="px-3 py-1 text-ox-text">${escapeHtml(shown)}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  results.innerHTML = html;
+  // Stash rows on the container so the pick handler can read without
+  // re-fetching. Use a private key to avoid clashing with user data.
+  results._vlRows = rows;
+}
+
+function pickValueListRow(rowIndex) {
+  const prop = _vlActiveProperty;
+  const vl = _vlActiveValueList;
+  const results = document.getElementById('vlResults');
+  if (!prop || !vl || !results._vlRows) return;
+  const row = results._vlRows[rowIndex];
+  if (!row) return;
+  const tab = getActiveTab();
+  const info = tab && tab._lastDescribeInfo;
+  if (!info) return;
+  const clauses = [];
+  for (const param of vl.parameters) {
+    // InOut and Out bind picked VL values back onto local properties.
+    // In parameters are one-way (local → VL) and don't get written back.
+    if (param.kind !== 'inout' && param.kind !== 'out') continue;
+    if (!param.local_property) continue;
+    const value = row[param.value_list_property];
+    if (value === null || value === undefined) continue;
+    const localProp = info.properties.find(p => p.name === param.local_property);
+    const lit = formatODataLiteral(value, localProp ? localProp.edm_type : 'Edm.String');
+    clauses.push(`${param.local_property} eq ${lit}`);
+  }
+  if (clauses.length === 0) {
+    closeValueListPicker();
+    return;
+  }
+  // Merge into main $filter with `and`. If any of our clauses is
+  // already present verbatim, drop it — this matters on the common
+  // "user opens picker, picks same row twice" case.
+  const filterInput = document.getElementById('qFilter');
+  const existing = (filterInput.value || '').trim();
+  const merged = existing
+    ? [existing, ...clauses.filter(c => !existing.includes(c))].join(' and ')
+    : clauses.join(' and ');
+  filterInput.value = merged;
+  closeValueListPicker();
+  filterInput.focus();
+}
+
+// OData v4 literal formatting by edm type — enough for the picker's
+// `local eq <lit>` clauses. Falls back to single-quoted strings for
+// unknown types since that's what SAP services overwhelmingly expect.
+function formatODataLiteral(value, edmType) {
+  const t = (edmType || '').replace('Edm.', '');
+  const s = String(value);
+  switch (t) {
+    case 'Boolean':
+      return s === 'true' || s === 'false' ? s : `'${s.replace(/'/g, "''")}'`;
+    case 'Byte':
+    case 'SByte':
+    case 'Int16':
+    case 'Int32':
+    case 'Int64':
+    case 'Decimal':
+    case 'Double':
+    case 'Single':
+      return s;
+    case 'Guid':
+      return `guid'${s}'`;
+    case 'DateTime':
+      return `datetime'${s}'`;
+    case 'DateTimeOffset':
+      return s;
+    default:
+      return `'${s.replace(/'/g, "''")}'`;
+  }
+}
+
+// Compact summary of a ValueList's parameter bindings for the marker
+// tooltip, e.g. "Warehouse↔Warehouse, Plant→Plant, Language=EN, (Desc)".
+// Kept short on purpose — the picker modal shows the full mapping.
+function valueListSummary(vl) {
+  if (!vl || !Array.isArray(vl.parameters)) return '';
+  const bits = vl.parameters.map(p => {
+    switch (p.kind) {
+      case 'inout':
+        return `${p.local_property}↔${p.value_list_property}`;
+      case 'in':
+        return `${p.local_property}→${p.value_list_property}`;
+      case 'out':
+        return `${p.value_list_property}→${p.local_property}`;
+      case 'constant':
+        return `${p.value_list_property}=${p.constant ?? ''}`;
+      case 'displayonly':
+        return `(${p.value_list_property})`;
+      default:
+        return p.value_list_property || '?';
+    }
+  });
+  return bits.join(', ');
+}
+
+// SAP View marker for properties that have a value help. Covers three
+// shapes: inline Common.ValueList, Common.ValueListReferences (URLs to
+// separate F4 services), and Common.ValueListWithFixedValues (a marker
+// that says "few fixed values"; no mapping to drive, so the picker
+// can't offer a real picker — we still show the badge as a hint).
+// The button is a self-contained action inside the row — delegated
+// handler's `closest('[data-action]')` picks this over the row's
+// `select` action so clicking the marker does NOT also add the column
+// to `$select`.
+function valueListHint(p) {
+  if (!sapViewEnabled) return '';
+  const hasInline = !!p.value_list;
+  const refs = Array.isArray(p.value_list_references) ? p.value_list_references : [];
+  const hasRefs = refs.length > 0;
+  const fixed = p.value_list_fixed === true;
+  if (!hasInline && !hasRefs && !fixed) return '';
+  // Inline > references > fixed-only for richness — pick class + tooltip
+  // accordingly. Fixed-only gets the mutest variant since it's just a
+  // hint with no picker target.
+  let cls;
+  let tip;
+  let kind;
+  if (hasInline) {
+    const vl = p.value_list;
+    const label = vl.label ? `${vl.label}\n` : '';
+    tip = `${label}Value help → ${vl.collection_path}${vl.search_supported === true ? ' ($search)' : ''}\n${valueListSummary(vl)}`;
+    cls = 'text-ox-electric border border-ox-electric/50 hover:bg-ox-electric/10 hover:border-ox-electric';
+    kind = 'inline';
+  } else if (hasRefs) {
+    tip = `Referenced value help (${refs.length} ref${refs.length > 1 ? 's' : ''}) — resolved on open:\n${refs.join('\n')}`;
+    // Dashed border signals "external reference, resolution required".
+    cls = 'text-ox-electric border border-dashed border-ox-electric/60 hover:bg-ox-electric/10 hover:border-ox-electric';
+    kind = 'refs';
+  } else {
+    // Fixed-values only — no mapping, just a Fiori "dropdown-worthy" hint.
+    tip = 'Common.ValueListWithFixedValues — property has a fixed value set but no ValueList mapping in this service.';
+    cls = 'text-ox-dim border border-ox-dim/50 cursor-help';
+    kind = 'fixed';
+  }
+  return ` <button type="button" class="text-[9px] font-semibold tracking-wide px-1 py-px rounded-sm ${cls} transition-colors align-middle" data-action="value-list" data-prop="${escapeHtml(p.name)}" data-kind="${kind}" title="${escapeHtml(tip)}">&#x21D2; F4</button>`;
+}
+
+// Show the "Fiori cols" button when SAP View is on and UI.LineItem is
+// present. Filter to DataFields whose value_path is an actual property
+// on this entity so V4 $select stays valid — nav-path DataFields are
+// skipped (they belong in $expand).
+function renderFioriColsButton(info) {
+  const btn = document.getElementById('btnFioriCols');
+  if (!btn) return;
+  const fields = sapViewEnabled && info && Array.isArray(info.line_item)
+    ? info.line_item
+    : [];
+  const propNames = new Set(
+    Array.isArray(info && info.properties) ? info.properties.map(p => p.name) : []
+  );
+  const paths = fields
+    .map(f => f && f.value_path)
+    .filter(p => typeof p === 'string' && propNames.has(p));
+  if (paths.length === 0) {
+    btn.classList.add('hidden');
+    btn.removeAttribute('data-paths');
+    return;
+  }
+  btn.classList.remove('hidden');
+  btn.textContent = `Fiori cols (${paths.length})`;
+  btn.dataset.paths = paths.join(',');
+}
+
+// Replace $select with the Fiori LineItem defaults. We overwrite rather
+// than append — the point of this action is "show me what Fiori shows",
+// and merging would defeat that.
+function applyFioriCols() {
+  const btn = document.getElementById('btnFioriCols');
+  const input = document.getElementById('qSelect');
+  if (!btn || !input) return;
+  const paths = (btn.dataset.paths || '').split(',').filter(Boolean);
+  if (paths.length === 0) return;
+  input.value = paths.join(',');
+  input.focus();
 }
 
 // UI.Criticality → small badge. Fixed levels map to the OData spec
@@ -1095,6 +1491,8 @@ function renderDescribe(info) {
 
   // Selection-fields chip bar above the query inputs (SAP View only).
   renderSelectionFieldsBar(info);
+  // UI.LineItem → "Fiori cols" quick-action button next to $select.
+  renderFioriColsButton(info);
 
   // Title: technical name always; in SAP view, append the HeaderInfo
   // singular/plural so the entity reads as "WarehouseOrderType · Warehouse Order / Warehouse Orders".
@@ -1141,8 +1539,9 @@ function renderDescribe(info) {
       : '';
     const flagHints = sapViewEnabled ? propertyFlagHints(p) : '';
     const critHint = sapViewEnabled ? criticalityHint(p) : '';
+    const vlHint = valueListHint(p);
     html += `<tr class="hover:bg-ox-amberGlow cursor-pointer transition-colors" data-action="select" data-field="${escapeHtml(p.name)}">`;
-    html += `<td class="py-0.5 pr-3 text-ox-text">${escapeHtml(p.name)}${textHint}${currencyHint}${unitHint}${titleHint}${critHint}${flagHints}</td>`;
+    html += `<td class="py-0.5 pr-3 text-ox-text">${escapeHtml(p.name)}${textHint}${currencyHint}${unitHint}${titleHint}${critHint}${flagHints}${vlHint}</td>`;
     html += `<td class="py-0.5 pr-3 text-ox-dim">${escapeHtml(p.edm_type.replace('Edm.', ''))}</td>`;
     html += `<td class="py-0.5 pr-3 text-center">${keyMark}</td>`;
     html += `<td class="py-0.5 text-ox-muted">${escapeHtml(p.label || '')}</td>`;
@@ -1629,12 +2028,14 @@ function updateSapViewToggleState() {
   const chev = document.getElementById('sapViewChevron');
   if (!btn || !chev) return;
   chev.innerHTML = sapViewEnabled ? '&#x25BE;' : '&#x25B4;';
+  // Off state = dim amber (primed but inactive). On state = full amber
+  // with a subtle glow so it reads clearly as "engaged".
   if (sapViewEnabled) {
-    btn.classList.add('text-ox-amber', 'border-ox-amber');
-    btn.classList.remove('text-ox-dim', 'border-ox-border');
+    btn.classList.add('text-ox-amber', 'border-ox-amber', 'bg-ox-amberGlow');
+    btn.classList.remove('text-ox-amberDim', 'border-ox-amberDim/60');
   } else {
-    btn.classList.add('text-ox-dim', 'border-ox-border');
-    btn.classList.remove('text-ox-amber', 'border-ox-amber');
+    btn.classList.add('text-ox-amberDim', 'border-ox-amberDim/60');
+    btn.classList.remove('text-ox-amber', 'border-ox-amber', 'bg-ox-amberGlow');
   }
 }
 
@@ -1648,8 +2049,9 @@ function toggleSapView() {
   if (tab && tab._lastDescribeInfo) {
     renderDescribe(tab._lastDescribeInfo);
   } else {
-    // No cached describe — still hide any stale chip bar.
+    // No cached describe — still hide any stale chip bar and quick-action.
     renderSelectionFieldsBar(null);
+    renderFioriColsButton(null);
   }
   // Clear any lingering warnings from the previous mode.
   if (!sapViewEnabled) showSapViewWarnings([]);
@@ -2177,6 +2579,12 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btnTraceToggle').addEventListener('click', toggleTraceInspector);
   document.getElementById('btnTraceClose').addEventListener('click', hideTraceInspector);
   document.getElementById('btnSapView').addEventListener('click', toggleSapView);
+  document.getElementById('btnFioriCols').addEventListener('click', applyFioriCols);
+  document.getElementById('btnVlClose').addEventListener('click', closeValueListPicker);
+  document.getElementById('btnVlFetch').addEventListener('click', fetchValueListRows);
+  document.getElementById('vlFilter').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') fetchValueListRows();
+  });
   updateSapViewToggleState();
   document.getElementById('btnSapViewWarningsDismiss').addEventListener('click', () => showSapViewWarnings([]));
   document.getElementById('btnHistoryToggle').addEventListener('click', () => {
@@ -2267,6 +2675,10 @@ document.addEventListener('DOMContentLoaded', () => {
       copySelectedTraceRequestBody();
     } else if (action === 'copy-trace-response-body') {
       copySelectedTraceResponseBody();
+    } else if (action === 'value-list') {
+      openValueListPicker(el.dataset.prop);
+    } else if (action === 'vl-pick') {
+      pickValueListRow(parseInt(el.dataset.row, 10));
     } else if (action === 'selection-field') {
       // Seed $filter with "<name> eq ''" so the user can complete the
       // literal. Preserve anything already in the box by joining with `and`.
