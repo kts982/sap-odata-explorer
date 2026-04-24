@@ -1617,6 +1617,7 @@ function renderFioriColsButton(info) {
   if (paths.length === 0) {
     btn.classList.add('hidden');
     btn.removeAttribute('data-paths');
+    btn.removeAttribute('data-orderby');
     return;
   }
   btn.classList.remove('hidden');
@@ -1624,11 +1625,26 @@ function renderFioriColsButton(info) {
   // user understands why the select is wider than the visible cols.
   const suffix = requestAtLeast.length ? ` +${requestAtLeast.length}` : '';
   btn.textContent = `Fiori cols (${linePaths.length}${suffix})`;
+  // UI.PresentationVariant.SortOrder → "$orderby" string. Built here so
+  // the click handler can drop it in without re-reading the describe
+  // info. Only direct properties survive (nav-path sorts would need
+  // $expand gymnastics).
+  const sortOrder = active && Array.isArray(info.sort_order) ? info.sort_order : [];
+  const orderbyClauses = sortOrder
+    .filter(s => s && typeof s.property === 'string' && propNames.has(s.property))
+    .map(s => `${s.property} ${s.descending ? 'desc' : 'asc'}`);
+  const orderbyStr = orderbyClauses.join(',');
   const tipBase = 'Populate $select with UI.LineItem default columns (Fiori list report).';
-  btn.title = requestAtLeast.length
-    ? `${tipBase}\nIncludes ${requestAtLeast.length} UI.PresentationVariant.RequestAtLeast field(s).`
-    : tipBase;
+  const tipLines = [tipBase];
+  if (requestAtLeast.length) {
+    tipLines.push(`Includes ${requestAtLeast.length} UI.PresentationVariant.RequestAtLeast field(s).`);
+  }
+  if (orderbyStr) {
+    tipLines.push(`Also sets $orderby: ${orderbyStr}`);
+  }
+  btn.title = tipLines.join('\n');
   btn.dataset.paths = paths.join(',');
+  btn.dataset.orderby = orderbyStr;
 }
 
 // Show the "Fiori filter" button when SAP View is on and the entity
@@ -1780,9 +1796,9 @@ function rangeToFilter(prop, range) {
   return range.sign === 'e' ? `not (${clause})` : clause;
 }
 
-// Replace $select with the Fiori LineItem defaults. We overwrite rather
-// than append — the point of this action is "show me what Fiori shows",
-// and merging would defeat that.
+// Replace $select (and $orderby if the service declares one) with the
+// Fiori LineItem defaults. Overwrites rather than appends — "show me
+// what Fiori shows" means both the column list and the default sort.
 function applyFioriCols() {
   const btn = document.getElementById('btnFioriCols');
   const input = document.getElementById('qSelect');
@@ -1790,6 +1806,12 @@ function applyFioriCols() {
   const paths = (btn.dataset.paths || '').split(',').filter(Boolean);
   if (paths.length === 0) return;
   input.value = paths.join(',');
+  // UI.PresentationVariant.SortOrder → $orderby. Stashed on the button
+  // as `data-orderby` by renderFioriColsButton so the click is a pure
+  // apply step with no DOM lookups.
+  const orderby = btn.dataset.orderby || '';
+  const orderbyInput = document.getElementById('qOrderby');
+  if (orderbyInput) orderbyInput.value = orderby;
   input.focus();
 }
 

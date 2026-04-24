@@ -35,7 +35,7 @@ Overlays on the per-property table that appears when you click an entity set:
 ## Query bar
 
 - **Selection-fields chip bar** — `UI.SelectionFields` becomes a row of clickable chips above `$filter`. Clicking a chip appends `<chip> eq ''` to `$filter` with the cursor parked inside the quotes. Chips for `RequiredProperties` render amber so you see at a glance which ones the server will reject queries without.
-- **"Fiori cols (N)" button** — next to `$select`. Populates `$select` with the column list from `UI.LineItem` (DataField `Value` paths, direct properties only). Augmented with `UI.PresentationVariant.RequestAtLeast` paths; when present the label shows `Fiori cols (N +M)` and the tooltip explains the augment.
+- **"Fiori cols (N)" button** — next to `$select`. Populates `$select` with the column list from `UI.LineItem` (DataField `Value` paths, direct properties only). Augmented with `UI.PresentationVariant.RequestAtLeast` paths; when present the label shows `Fiori cols (N +M)` and the tooltip explains the augment. Also fills `$orderby` from `UI.PresentationVariant.SortOrder` when the service declares one — click gives you Fiori's full default view (columns + sort), not just the columns.
 - **"Fiori filter" button** — next to "Fiori cols". Rebuilds `$filter` from a `UI.SelectionVariant`. Services that declare one "empty" variant first (e.g. a "Show All" with just a `Text`/`ID` and no `Parameters`/`SelectOptions`) would otherwise yield an unactionable button — the renderer walks the declared variants and picks the **first one with actual filter content**, so the click always produces something. The button label shows that variant's `Text`; a `+N` suffix signals how many other variants exist. Translation rules:
   - `Parameters` → `name eq <lit>`
   - `SelectOptions` ranges → per-operator translation (see [validator section](#pre-flight-validator) for the operator table)
@@ -111,9 +111,9 @@ Compact status table. "Status" reflects what `SAP View` actually uses; parser-on
 | `UI.SelectionFields` | Query-bar chip bar (amber when required-in-filter) | ✅ |
 | `UI.LineItem` | "Fiori cols (N)" button + results column order | ✅ |
 | `UI.PresentationVariant.RequestAtLeast` | Augments "Fiori cols" `$select` | ✅ |
-| `UI.PresentationVariant.SortOrder` | Not handled yet | ❌ |
-| `UI.SelectionVariant` | "Fiori filter" button (default variant) | ✅ |
-| `UI.SelectionPresentationVariant` | Not handled yet (wraps SV + PV) | ❌ |
+| `UI.PresentationVariant.SortOrder` | Fills `$orderby` on "Fiori cols" click | ✅ |
+| `UI.SelectionVariant` | "Fiori filter" button (picks first populated variant) | ✅ |
+| `UI.SelectionPresentationVariant` | Inline SV/PV extracted; path references left to standalone SV/PV parse | ✅ |
 | `Common.ValueList` (inline) | F4 picker, solid marker | ✅ |
 | `Common.ValueListReferences` (S/4HANA) | F4 picker, dashed marker, resolved on open | ✅ |
 | `Common.ValueListMapping` | Parsed inside referenced F4 services | ✅ |

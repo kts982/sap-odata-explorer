@@ -87,6 +87,11 @@ pub struct EntityType {
     /// zones and key descriptions. Used to augment the "Fiori cols"
     /// quick-action. Empty when the service doesn't declare any.
     pub request_at_least: Vec<String>,
+    /// `UI.PresentationVariant.SortOrder` entries — the default ordering
+    /// Fiori would apply to the list. Each entry points at a property
+    /// with a direction flag. Order matches the source collection.
+    /// Consumed by the "Fiori cols" action to also fill `$orderby`.
+    pub sort_order: Vec<SortOrder>,
     /// Declared `UI.SelectionVariant` records on this entity — Fiori's
     /// "filter variants" (e.g. "Pending", "Completed"). Includes the
     /// default (no-qualifier) variant and any qualified ones. Used by
@@ -187,6 +192,14 @@ pub enum SelectionOption {
     Nb,
     Cp,
     Np,
+}
+
+/// One entry inside `UI.PresentationVariant.SortOrder`. Maps directly
+/// to an `$orderby` clause: `property [asc|desc]`.
+#[derive(Debug, Clone, Serialize)]
+pub struct SortOrder {
+    pub property: String,
+    pub descending: bool,
 }
 
 /// One `UI.DataField` inside a `UI.LineItem` collection — enough to
@@ -722,6 +735,7 @@ fn parse_entity_types(schema: &roxmltree::Node, version: ODataVersion) -> Vec<En
                 selection_fields: Vec::new(),
                 line_item: Vec::new(),
                 request_at_least: Vec::new(),
+                sort_order: Vec::new(),
                 selection_variants: Vec::new(),
                 searchable: None,
                 countable: None,
@@ -1146,6 +1160,145 @@ fn apply_v4_typed_annotations(
                         }
                     }
                 }
+            } else if lower.ends_with(".selectionpresentationvariant") {
+                // UI.SelectionPresentationVariant wraps a named view:
+                // Text + ID + (SelectionVariant inline Record OR Path)
+                // + (PresentationVariant inline Record OR Path). Path
+                // references point at peer qualified annotations that
+                // our standalone SV/PV dispatches already capture, so
+                // we only inspect inline records here. Inline records
+                // are unusual in SAP-CDS output but supported by the
+                // vocabulary — this keeps services that emit them
+                // (hand-written CDS, tests) working.
+                let qualifier = annot.attribute("Qualifier").map(String::from);
+                let record = match children_by_tag(&annot, "Record").into_iter().next() {
+                    Some(r) => r,
+                    None => continue,
+                };
+                let mut spv_text: Option<String> = None;
+                let mut inline_sv: Option<roxmltree::Node> = None;
+                let mut inline_pv: Option<roxmltree::Node> = None;
+                for pv in children_by_tag(&record, "PropertyValue") {
+                    match pv.attribute("Property") {
+                        Some("Text") => spv_text = pv.attribute("String").map(String::from),
+                        Some("SelectionVariant") => {
+                            if pv.attribute("Path").is_none() {
+                                inline_sv = children_by_tag(&pv, "Record").into_iter().next();
+                            }
+                        }
+                        Some("PresentationVariant") => {
+                            if pv.attribute("Path").is_none() {
+                                inline_pv = children_by_tag(&pv, "Record").into_iter().next();
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let type_name = if let Some((_, set_name)) = target.split_once('/') {
+                    entity_sets
+                        .iter()
+                        .find(|s| s.name == set_name)
+                        .map(|s| extract_type_name(&s.entity_type).to_string())
+                } else {
+                    Some(target.to_string())
+                };
+                if let Some(name) = type_name {
+                    if let Some(et) = entity_types.iter_mut().find(|t| t.name == name) {
+                        // Inline SelectionVariant → materialize and add,
+                        // deduped by qualifier against existing variants.
+                        if let Some(sv_record) = inline_sv {
+                            let already_have = qualifier.is_some()
+                                && et
+                                    .selection_variants
+                                    .iter()
+                                    .any(|v| v.qualifier == qualifier);
+                            if !already_have {
+                                let fake_annot = sv_record.parent().unwrap_or(sv_record);
+                                // Build a variant from the inline record
+                                // directly. We can't reuse
+                                // parse_selection_variant_record since
+                                // it expects the outer <Annotation> as
+                                // input — just walk the Record here.
+                                let mut variant = SelectionVariant {
+                                    qualifier: qualifier.clone(),
+                                    text: spv_text.clone(),
+                                    parameters: Vec::new(),
+                                    select_options: Vec::new(),
+                                };
+                                for pv in children_by_tag(&sv_record, "PropertyValue") {
+                                    match pv.attribute("Property") {
+                                        Some("Text") if variant.text.is_none() => {
+                                            variant.text = pv.attribute("String").map(String::from);
+                                        }
+                                        Some("Parameters") => {
+                                            for coll in children_by_tag(&pv, "Collection") {
+                                                for rec in children_by_tag(&coll, "Record") {
+                                                    if let Some(p) = parse_selection_parameter(&rec) {
+                                                        variant.parameters.push(p);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Some("SelectOptions") => {
+                                            for coll in children_by_tag(&pv, "Collection") {
+                                                for rec in children_by_tag(&coll, "Record") {
+                                                    if let Some(o) = parse_select_option(&rec) {
+                                                        variant.select_options.push(o);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                if qualifier.is_none() {
+                                    et.selection_variants.insert(0, variant);
+                                } else {
+                                    et.selection_variants.push(variant);
+                                }
+                                let _ = fake_annot; // silence unused-hint lints
+                            }
+                        }
+                        // Inline PresentationVariant → reuse existing
+                        // parser on the outer-ish record by synthesizing
+                        // an annotation wrapping it. Simpler path: walk
+                        // the record directly since we control the shape.
+                        if let Some(pv_record) = inline_pv {
+                            for pv in children_by_tag(&pv_record, "PropertyValue") {
+                                match pv.attribute("Property") {
+                                    Some("RequestAtLeast") if et.request_at_least.is_empty() => {
+                                        for coll in children_by_tag(&pv, "Collection") {
+                                            for pp in children_by_tag(&coll, "PropertyPath") {
+                                                if let Some(text) = pp.text() {
+                                                    let trimmed = text.trim();
+                                                    if !trimmed.is_empty()
+                                                        && !et
+                                                            .request_at_least
+                                                            .iter()
+                                                            .any(|x| x == trimmed)
+                                                    {
+                                                        et.request_at_least
+                                                            .push(trimmed.to_string());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Some("SortOrder") if et.sort_order.is_empty() => {
+                                        for coll in children_by_tag(&pv, "Collection") {
+                                            for rec in children_by_tag(&coll, "Record") {
+                                                if let Some(so) = parse_sort_order_record(&rec) {
+                                                    et.sort_order.push(so);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
             } else if lower.ends_with(".selectionvariant") {
                 // UI.SelectionVariant = declared Fiori filter variant.
                 // Multiple qualifiers are allowed (one per named variant),
@@ -1178,11 +1331,12 @@ fn apply_v4_typed_annotations(
                 }
             } else if lower.ends_with(".presentationvariant") {
                 // UI.PresentationVariant = Record with RequestAtLeast /
-                // SortOrder / Visualizations / ... We only pull
-                // RequestAtLeast for now (the Fiori cols $select booster).
-                // Targets the entity type or the entity set; resolve both.
-                let paths = parse_request_at_least(&annot);
-                if paths.is_empty() {
+                // SortOrder / Visualizations / ... We lift the two
+                // actionable pieces — `$select` augment paths and the
+                // default `$orderby` order. Targets the entity type or
+                // the entity set; resolve both.
+                let (paths, sort) = parse_presentation_variant(&annot);
+                if paths.is_empty() && sort.is_empty() {
                     continue;
                 }
                 let type_name = if let Some((_, set_name)) = target.split_once('/') {
@@ -1195,8 +1349,11 @@ fn apply_v4_typed_annotations(
                 };
                 if let Some(name) = type_name {
                     if let Some(et) = entity_types.iter_mut().find(|t| t.name == name) {
-                        if et.request_at_least.is_empty() {
+                        if !paths.is_empty() && et.request_at_least.is_empty() {
                             et.request_at_least = paths;
+                        }
+                        if !sort.is_empty() && et.sort_order.is_empty() {
+                            et.sort_order = sort;
                         }
                     }
                 }
@@ -1605,31 +1762,68 @@ fn parse_selection_range(record: &roxmltree::Node) -> Option<SelectionRange> {
     })
 }
 
-/// Pull `RequestAtLeast` property paths out of a
-/// `UI.PresentationVariant` record. Returns empty when the record is
-/// missing, the property isn't set, or the inner collection is empty.
-fn parse_request_at_least(annot: &roxmltree::Node) -> Vec<String> {
-    let mut out = Vec::new();
+/// Pull the interesting fields out of a `UI.PresentationVariant`
+/// record: `RequestAtLeast` (property paths added to `$select`) and
+/// `SortOrder` (default `$orderby` clauses). Empty tuple when the
+/// record is missing or both collections are unset.
+fn parse_presentation_variant(
+    annot: &roxmltree::Node,
+) -> (Vec<String>, Vec<SortOrder>) {
+    let mut request_at_least: Vec<String> = Vec::new();
+    let mut sort_order: Vec<SortOrder> = Vec::new();
     let record = match children_by_tag(annot, "Record").into_iter().next() {
         Some(r) => r,
-        None => return out,
+        None => return (request_at_least, sort_order),
     };
     for pv in children_by_tag(&record, "PropertyValue") {
-        if pv.attribute("Property") != Some("RequestAtLeast") {
-            continue;
-        }
-        for coll in children_by_tag(&pv, "Collection") {
-            for pp in children_by_tag(&coll, "PropertyPath") {
-                if let Some(text) = pp.text() {
-                    let trimmed = text.trim();
-                    if !trimmed.is_empty() && !out.iter().any(|x: &String| x == trimmed) {
-                        out.push(trimmed.to_string());
+        match pv.attribute("Property") {
+            Some("RequestAtLeast") => {
+                for coll in children_by_tag(&pv, "Collection") {
+                    for pp in children_by_tag(&coll, "PropertyPath") {
+                        if let Some(text) = pp.text() {
+                            let trimmed = text.trim();
+                            if !trimmed.is_empty()
+                                && !request_at_least.iter().any(|x: &String| x == trimmed)
+                            {
+                                request_at_least.push(trimmed.to_string());
+                            }
+                        }
                     }
                 }
             }
+            Some("SortOrder") => {
+                for coll in children_by_tag(&pv, "Collection") {
+                    for sort_rec in children_by_tag(&coll, "Record") {
+                        if let Some(so) = parse_sort_order_record(&sort_rec) {
+                            sort_order.push(so);
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
-    out
+    (request_at_least, sort_order)
+}
+
+/// Parse one `<Record Type="Common.SortOrderType">` (or untyped) from
+/// the `SortOrder` collection. Shape: `Property` (PropertyPath) +
+/// optional `Descending` (Bool, default false).
+fn parse_sort_order_record(record: &roxmltree::Node) -> Option<SortOrder> {
+    let mut property: Option<String> = None;
+    let mut descending = false;
+    for pv in children_by_tag(record, "PropertyValue") {
+        match pv.attribute("Property") {
+            Some("Property") => {
+                property = pv.attribute("PropertyPath").map(String::from);
+            }
+            Some("Descending") => {
+                descending = pv.attribute("Bool").map(|v| v == "true").unwrap_or(false);
+            }
+            _ => {}
+        }
+    }
+    Some(SortOrder { property: property?, descending })
 }
 
 /// Walk a `UI.LineItem` annotation's `<Collection>` of `<Record>`s and
@@ -2931,6 +3125,131 @@ mod tests {
     }
 
     #[test]
+    fn test_v4_selection_presentation_variant_extracts_inline_sv_and_pv() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="Status" Type="Edm.String"/>
+        <Property Name="CreatedAt" Type="Edm.DateTimeOffset"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType">
+        <Annotation Term="SAP__UI.SelectionPresentationVariant" Qualifier="Pending">
+          <Record>
+            <PropertyValue Property="Text" String="Pending Orders"/>
+            <PropertyValue Property="SelectionVariant">
+              <Record>
+                <PropertyValue Property="SelectOptions">
+                  <Collection>
+                    <Record Type="SAP__UI.SelectOptionType">
+                      <PropertyValue Property="PropertyName" PropertyPath="Status"/>
+                      <PropertyValue Property="Ranges">
+                        <Collection>
+                          <Record Type="SAP__UI.SelectionRangeType">
+                            <PropertyValue Property="Sign" EnumMember="SAP__UI.SelectionRangeSignType/I"/>
+                            <PropertyValue Property="Option" EnumMember="SAP__UI.SelectionRangeOptionType/EQ"/>
+                            <PropertyValue Property="Low" String="PENDING"/>
+                          </Record>
+                        </Collection>
+                      </PropertyValue>
+                    </Record>
+                  </Collection>
+                </PropertyValue>
+              </Record>
+            </PropertyValue>
+            <PropertyValue Property="PresentationVariant">
+              <Record>
+                <PropertyValue Property="SortOrder">
+                  <Collection>
+                    <Record>
+                      <PropertyValue Property="Property" PropertyPath="CreatedAt"/>
+                      <PropertyValue Property="Descending" Bool="true"/>
+                    </Record>
+                  </Collection>
+                </PropertyValue>
+              </Record>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let ot = meta.find_entity_type("OrderType").unwrap();
+        // SPV's inline SV should have been added as a qualified variant.
+        assert_eq!(ot.selection_variants.len(), 1);
+        let v = &ot.selection_variants[0];
+        assert_eq!(v.qualifier.as_deref(), Some("Pending"));
+        assert_eq!(v.text.as_deref(), Some("Pending Orders"));
+        assert_eq!(v.select_options.len(), 1);
+        assert_eq!(v.select_options[0].property_name, "Status");
+        // SPV's inline PV should have fed SortOrder.
+        assert_eq!(ot.sort_order.len(), 1);
+        assert_eq!(ot.sort_order[0].property, "CreatedAt");
+        assert!(ot.sort_order[0].descending);
+    }
+
+    #[test]
+    fn test_v4_selection_presentation_variant_path_refs_are_skipped() {
+        // When SPV only references peer annotations via Path, we don't
+        // double-count — the standalone SV dispatch already picks them
+        // up.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="Status" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType">
+        <Annotation Term="SAP__UI.SelectionPresentationVariant" Qualifier="Pending">
+          <Record>
+            <PropertyValue Property="SelectionVariant" Path="@SAP__UI.SelectionVariant#Pending"/>
+            <PropertyValue Property="PresentationVariant" Path="@SAP__UI.PresentationVariant#Pending"/>
+          </Record>
+        </Annotation>
+        <Annotation Term="SAP__UI.SelectionVariant" Qualifier="Pending">
+          <Record>
+            <PropertyValue Property="Text" String="Pending"/>
+            <PropertyValue Property="SelectOptions">
+              <Collection>
+                <Record Type="SAP__UI.SelectOptionType">
+                  <PropertyValue Property="PropertyName" PropertyPath="Status"/>
+                  <PropertyValue Property="Ranges">
+                    <Collection>
+                      <Record Type="SAP__UI.SelectionRangeType">
+                        <PropertyValue Property="Sign" EnumMember="SAP__UI.SelectionRangeSignType/I"/>
+                        <PropertyValue Property="Option" EnumMember="SAP__UI.SelectionRangeOptionType/EQ"/>
+                        <PropertyValue Property="Low" String="PENDING"/>
+                      </Record>
+                    </Collection>
+                  </PropertyValue>
+                </Record>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let ot = meta.find_entity_type("OrderType").unwrap();
+        // Only the one standalone SV should be present — SPV's path
+        // references don't spawn a duplicate.
+        assert_eq!(ot.selection_variants.len(), 1);
+        assert_eq!(ot.selection_variants[0].qualifier.as_deref(), Some("Pending"));
+    }
+
+    #[test]
     fn test_v4_selection_variant_default_and_qualified() {
         let xml = r#"<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
@@ -3028,7 +3347,7 @@ mod tests {
     }
 
     #[test]
-    fn test_v4_presentation_variant_request_at_least() {
+    fn test_v4_presentation_variant_request_at_least_and_sort_order() {
         let xml = r#"<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
   <edmx:DataServices>
@@ -3038,6 +3357,8 @@ mod tests {
         <Property Name="ID" Type="Edm.String" Nullable="false"/>
         <Property Name="WarehouseTimeZone" Type="Edm.String"/>
         <Property Name="EWMWarehouse" Type="Edm.String"/>
+        <Property Name="Product" Type="Edm.String"/>
+        <Property Name="EWMStorageBin" Type="Edm.String"/>
       </EntityType>
       <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
       <Annotations Target="SAP__self.OrderType">
@@ -3047,6 +3368,17 @@ mod tests {
               <Collection>
                 <PropertyPath>WarehouseTimeZone</PropertyPath>
                 <PropertyPath>EWMWarehouse</PropertyPath>
+              </Collection>
+            </PropertyValue>
+            <PropertyValue Property="SortOrder">
+              <Collection>
+                <Record>
+                  <PropertyValue Property="Property" PropertyPath="Product"/>
+                </Record>
+                <Record>
+                  <PropertyValue Property="Property" PropertyPath="EWMStorageBin"/>
+                  <PropertyValue Property="Descending" Bool="true"/>
+                </Record>
               </Collection>
             </PropertyValue>
             <PropertyValue Property="Visualizations">
@@ -3063,6 +3395,11 @@ mod tests {
         let meta = parse_metadata(xml).unwrap();
         let ot = meta.find_entity_type("OrderType").unwrap();
         assert_eq!(ot.request_at_least, vec!["WarehouseTimeZone", "EWMWarehouse"]);
+        assert_eq!(ot.sort_order.len(), 2);
+        assert_eq!(ot.sort_order[0].property, "Product");
+        assert!(!ot.sort_order[0].descending);
+        assert_eq!(ot.sort_order[1].property, "EWMStorageBin");
+        assert!(ot.sort_order[1].descending);
     }
 
     #[test]
