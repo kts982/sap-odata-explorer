@@ -30,6 +30,7 @@ This project is aimed at a narrower problem: understand a real SAP OData service
 - **Results grid** — view tabular results with expandable nested data from `$expand`
 - **HTTP inspector** — per-tab request/response trace in the desktop app (headers, body preview, timing) with copy-as-curl; same data on the CLI via `--verbose`
 - **SAP-aware error hints** — 404/403/5xx responses get actionable hints pointing at `/IWFND/MAINT_SERVICE`, `/IWFND/ERROR_LOG`, `ST22`, or the browser SSO sign-in flow when appropriate
+- **SAP View** — opt-in overlay that surfaces SAP/UI5 annotations on top of the raw data: `UI.HeaderInfo` titles, `Common.Text` / `sap:text` description pairings, `UI.Criticality` status colors, `Capabilities.*` and V2 `sap:filterable/sortable/creatable/updatable` restriction pills, `Measures.Unit` / `Measures.ISOCurrency` companions, and `UI.SelectionFields` as clickable filter chips. Pre-flight validator warns on queries that violate the declared restrictions without blocking the server from being the final judge.
 - **Connection profiles** — save SAP systems and store Basic-auth passwords in the OS keyring
 - **Three auth modes** — basic auth, Windows SSO (SPNEGO), and browser SSO
 - **Service aliases** — use short names for long service paths
@@ -57,6 +58,7 @@ Until signed releases exist, build from source (see [CONTRIBUTING.md](CONTRIBUTI
 4. For Browser SSO profiles, click **Sign In** once and complete the login flow
 5. Click **Search** to browse services and pick one
 6. Click an entity set in the sidebar → click property names to add them to `$select`, navigation properties to `$expand` → **Run**
+7. Toggle **SAP View** in the status bar to overlay SAP/UI5 annotation hints (entity titles, description pairings, criticality colors, filter restrictions, selection-field chips). Toggle **Inspector** to see the full HTTP trace for the last call.
 
 ### CLI
 
@@ -172,7 +174,7 @@ The `sap-odata-core` crate holds all protocol logic. CLI and Tauri are thin wrap
 ## Roadmap
 
 Short term:
-- [ ] Surface SAP/UI5 annotations (criticality colors, `Common.Text` arrangement, `Capabilities.*` in the query bar, Fiori-readiness overview) as opt-in views
+- [ ] Remaining SAP/UI5 annotation overlays: `Common.ValueList` (F4-style value help), `UI.LineItem` (Fiori default-columns auto-`$select`), per-row `UI.Criticality` coloring in the results grid, Fiori-readiness linter
 - [ ] Auth validation on real federated landscapes (Azure AD + SAP IAS, Okta, ADFS)
 - [ ] Code signing and release pipeline (CI builds for Windows / Linux / macOS, signed Windows artifacts)
 

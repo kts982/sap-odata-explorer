@@ -238,6 +238,8 @@ sap-odata -p DEV -s so describe A_SalesOrder
 sap-odata -p DEV -s API_MATERIAL_DOCUMENT_SRV describe A_MaterialDocumentHeader
 ```
 
+With `--json`, the output also carries the parsed SAP/UI5 annotation fields the desktop app's **SAP View** overlay uses — `header_info` (UI.HeaderInfo), `selection_fields` (UI.SelectionFields), and per-property `text_path` / `unit_path` / `iso_currency_path` / `filterable` / `sortable` / `creatable` / `updatable` / `required_in_filter` / `criticality`. Handy for scripting linting or comparisons without re-parsing `$metadata` yourself.
+
 ### `functions`
 
 List function imports / actions declared in `$metadata`.
