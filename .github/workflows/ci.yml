@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   pull_request:
-    branches: [main, master]
+    branches: [main]
 
 jobs:
   test:
@@ -38,8 +38,16 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --check
-        continue-on-error: true
 
       - name: Clippy
         run: cargo clippy -p sap-odata-core -p sap-odata-cli -- -D warnings
         continue-on-error: true
+
+  audit:
+    name: Security audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
