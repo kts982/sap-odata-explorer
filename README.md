@@ -49,10 +49,39 @@ This project is aimed at a narrower problem: understand a real SAP OData service
 
 ## Installation
 
-Until the first GitHub release is published, build from source — see [CONTRIBUTING.md](CONTRIBUTING.md). Pre-built unsigned binaries will be attached to GitHub releases once tagged.
+### Download a prebuilt binary (easiest — Windows)
+
+1. Go to the [Releases page](https://github.com/kts982/sap-odata-explorer/releases) and pick the latest tag.
+2. Download the assets you want:
+   - **`sap-odata.exe`** — the CLI. Put it somewhere on your `PATH` (e.g. `C:\Users\<you>\bin\`) and run `sap-odata setup` to get started.
+   - **`SAP OData Explorer_<version>_x64_en-US.msi`** — the desktop app installer. Double-click to install; launch from the Start menu.
+3. Verify the download (optional) — each release has a `SHA256SUMS.txt`; on PowerShell, run `Get-FileHash sap-odata.exe -Algorithm SHA256` and compare.
 
 > [!WARNING]
-> Windows SmartScreen may show an "unrecognized app" warning when launching unsigned releases downloaded from the internet. Click **More info → Run anyway**. Reputation and/or code signing is planned.
+> Binaries are **unsigned**. Windows SmartScreen will show an "unrecognized app" warning — click **More info → Run anyway**. Code signing is planned.
+
+### Build from source (Linux, macOS, or if you prefer)
+
+**Prerequisites:** Rust 1.85+ ([rustup.rs](https://rustup.rs)) and Node.js 20+ (for the desktop app frontend build).
+
+```bash
+git clone https://github.com/kts982/sap-odata-explorer.git
+cd sap-odata-explorer
+
+# CLI only — fast
+cargo build --release -p sap-odata-cli
+# → target/release/sap-odata(.exe on Windows)
+
+# Desktop app — slower, especially on first build
+cd tauri-app
+npm install
+cargo tauri build
+# → ../target/release/bundle/msi/  (Windows installer)
+# → ../target/release/bundle/deb/  (Linux .deb)
+# → ../target/release/bundle/macos/ (macOS .app)
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, tests, and contribution guidelines.
 
 ## Quick start
 
