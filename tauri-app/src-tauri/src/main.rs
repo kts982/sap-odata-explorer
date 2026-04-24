@@ -71,6 +71,7 @@ struct EntityTypeInfo {
     properties: Vec<PropertyInfo>,
     nav_properties: Vec<NavPropertyInfo>,
     header_info: Option<HeaderInfo>,
+    selection_fields: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -633,6 +634,7 @@ async fn describe_entity(
         name: et.name.clone(),
         keys: et.keys.clone(),
         header_info: et.header_info.clone(),
+        selection_fields: et.selection_fields.clone(),
         properties: et
             .properties
             .iter()

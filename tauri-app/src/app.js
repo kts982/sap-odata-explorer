@@ -972,6 +972,78 @@ function propertyFlagHints(p) {
   return badges.length ? ' ' + badges.join(' ') : '';
 }
 
+// Extract identifier-looking tokens from a free-form OData expression.
+// Good enough for cross-checking against known property names — any
+// identifier that happens to appear in the expression AND matches a
+// restricted property name flags as a likely reference.
+function extractIdentifiers(text) {
+  if (!text) return [];
+  return (text.match(/[A-Za-z_][A-Za-z0-9_]*/g) || []);
+}
+
+// Pre-flight validator for SAP View. Returns a list of human-readable
+// restriction violations — empty list means "OK to run".
+function validateQueryRestrictions(params, info) {
+  if (!info || !Array.isArray(info.properties)) return [];
+  const issues = [];
+  const byName = new Map(info.properties.map(p => [p.name, p]));
+
+  if (params.filter) {
+    const tokens = new Set(extractIdentifiers(params.filter));
+    for (const p of info.properties) {
+      if (p.filterable === false && tokens.has(p.name)) {
+        issues.push(`'${p.name}' is non-filterable (Capabilities.FilterRestrictions / sap:filterable=false) but referenced in $filter.`);
+      }
+    }
+  }
+
+  if (params.orderby) {
+    const tokens = new Set(extractIdentifiers(params.orderby));
+    for (const p of info.properties) {
+      if (p.sortable === false && tokens.has(p.name)) {
+        issues.push(`'${p.name}' is non-sortable but referenced in $orderby.`);
+      }
+    }
+  }
+
+  // required_in_filter: these properties MUST be narrowed in $filter.
+  const required = info.properties.filter(p => p.required_in_filter === true);
+  if (required.length) {
+    const tokens = new Set(extractIdentifiers(params.filter || ''));
+    for (const p of required) {
+      if (!tokens.has(p.name)) {
+        issues.push(`'${p.name}' requires a filter clause (Capabilities.FilterRestrictions.RequiredProperties / sap:required-in-filter).`);
+      }
+    }
+  }
+
+  // byName lookup silences unused warnings; also handy for future checks.
+  void byName;
+  return issues;
+}
+
+// Render the "selection fields" chip bar above the query inputs. Only
+// visible when SAP View is on, the entity type has UI.SelectionFields,
+// and we're looking at that entity's describe panel. Clicking a chip
+// seeds $filter with a skeleton clause the user can complete.
+function renderSelectionFieldsBar(info) {
+  const bar = document.getElementById('selectionFieldsBar');
+  const host = document.getElementById('selectionFieldsChips');
+  if (!bar || !host) return;
+  const fields = sapViewEnabled && info && Array.isArray(info.selection_fields)
+    ? info.selection_fields
+    : [];
+  if (fields.length === 0) {
+    bar.classList.add('hidden');
+    host.innerHTML = '';
+    return;
+  }
+  bar.classList.remove('hidden');
+  host.innerHTML = fields
+    .map(name => `<button type="button" class="btn-ghost text-[10px] px-1.5 py-0.5 rounded-sm" data-action="selection-field" data-name="${escapeHtml(name)}" title="Append to $filter">${escapeHtml(name)}</button>`)
+    .join('');
+}
+
 // UI.Criticality → small badge. Fixed levels map to the OData spec
 // (0 Neutral, 1 Negative, 2 Critical, 3 Positive, 5 Information). Path
 // criticality renders as "⇢ TargetProp" so the user can see where the
@@ -1004,6 +1076,9 @@ function renderDescribe(info) {
   // Cache so the SAP-view toggle can re-render without another fetch.
   const tab = getActiveTab();
   if (tab) tab._lastDescribeInfo = info;
+
+  // Selection-fields chip bar above the query inputs (SAP View only).
+  renderSelectionFieldsBar(info);
 
   // Title: technical name always; in SAP view, append the HeaderInfo
   // singular/plural so the entity reads as "WarehouseOrderType · Warehouse Order / Warehouse Orders".
@@ -1144,6 +1219,25 @@ async function executeQuery(asJson = false) {
     key:     null,
     count:   false,
   };
+
+  // SAP View pre-flight: when enabled, catch queries that target
+  // non-filterable / non-sortable properties or omit required ones before
+  // SAP responds with a 400. Disabled by default so the raw-data flow
+  // stays unopinionated.
+  if (sapViewEnabled) {
+    const tab = getActiveTab();
+    const info = tab && tab._lastDescribeInfo;
+    if (info && info.name && currentEntitySet === document.getElementById('queryEntitySet').textContent) {
+      const issues = validateQueryRestrictions(params, info);
+      if (issues.length) {
+        const message = issues.map(i => `• ${i}`).join('\n');
+        setStatus(`Blocked by Capabilities: ${issues.length} issue(s). Toggle SAP View off to override.`);
+        document.getElementById('resultsArea').innerHTML =
+          `<div class="p-4 text-ox-red text-sm whitespace-pre-wrap font-mono">SAP View blocked this query:\n\n${escapeHtml(message)}</div>`;
+        return;
+      }
+    }
+  }
 
   setStatus(`Querying ${currentEntitySet}...`);
   const queryStart = performance.now();
@@ -1535,9 +1629,13 @@ function toggleSapView() {
   try { localStorage.setItem('ox_sap_view_enabled', sapViewEnabled ? '1' : '0'); } catch { /* ignore */ }
   updateSapViewToggleState();
   // Re-render describe panel in place if the active tab has one up.
+  // renderDescribe also refreshes the selection-fields chip bar.
   const tab = getActiveTab();
   if (tab && tab._lastDescribeInfo) {
     renderDescribe(tab._lastDescribeInfo);
+  } else {
+    // No cached describe — still hide any stale chip bar.
+    renderSelectionFieldsBar(null);
   }
 }
 
@@ -2152,6 +2250,19 @@ document.addEventListener('DOMContentLoaded', () => {
       copySelectedTraceRequestBody();
     } else if (action === 'copy-trace-response-body') {
       copySelectedTraceResponseBody();
+    } else if (action === 'selection-field') {
+      // Seed $filter with "<name> eq ''" so the user can complete the
+      // literal. Preserve anything already in the box by joining with `and`.
+      const name = el.dataset.name;
+      if (!name) return;
+      const input = document.getElementById('qFilter');
+      const current = (input.value || '').trim();
+      const snippet = `${name} eq ''`;
+      input.value = current ? `${current} and ${snippet}` : snippet;
+      input.focus();
+      // Place caret just inside the trailing quotes so typing fills the value.
+      const caret = input.value.lastIndexOf("''") + 1;
+      if (caret > 0) input.setSelectionRange(caret, caret);
     } else if (action === 'back-to-services') {
       document.getElementById('serviceInput').value = '';
       const tab = getActiveTab();

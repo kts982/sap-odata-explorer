@@ -70,6 +70,11 @@ pub struct EntityType {
     /// Parsed `UI.HeaderInfo` annotation if the service exposes one (V4).
     /// Gives the entity's human-readable name and title field.
     pub header_info: Option<HeaderInfo>,
+    /// Property names flagged as default filter fields by
+    /// `UI.SelectionFields` — the columns a Fiori list report would
+    /// expose as selection filters out of the box. Empty if the service
+    /// doesn't specify any. Paths are stored verbatim (no alias resolution).
+    pub selection_fields: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -449,6 +454,7 @@ fn parse_entity_types(schema: &roxmltree::Node, version: ODataVersion) -> Vec<En
                 properties,
                 nav_properties,
                 header_info: None,
+                selection_fields: Vec::new(),
             }
         })
         .collect()
@@ -704,6 +710,21 @@ fn apply_v4_typed_annotations(
                         let type_name = extract_type_name(&type_ref.entity_type).to_string();
                         if let Some(et) = entity_types.iter_mut().find(|t| t.name == type_name) {
                             apply_capability_restriction(&lower, &annot, &mut et.properties);
+                        }
+                    }
+                }
+            } else if lower.ends_with(".selectionfields") {
+                // Also entity-set–scoped. The value is a bare
+                // Collection<PropertyPath> sitting directly under the
+                // <Annotation> element.
+                if let Some((_, set_name)) = target.split_once('/') {
+                    if let Some(type_ref) = entity_sets.iter().find(|s| s.name == set_name) {
+                        let type_name = extract_type_name(&type_ref.entity_type).to_string();
+                        if let Some(et) = entity_types.iter_mut().find(|t| t.name == type_name) {
+                            let paths = parse_property_path_collection(&annot);
+                            if !paths.is_empty() {
+                                et.selection_fields = paths;
+                            }
                         }
                     }
                 }
@@ -1452,6 +1473,35 @@ mod tests {
         // Untouched properties stay at None.
         assert_eq!(id.filterable, None);
         assert_eq!(qty.sortable, None);
+    }
+
+    #[test]
+    fn test_v4_selection_fields_lands_on_entity_type() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="WarehouseType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="Warehouse" Type="Edm.String"/>
+        <Property Name="Language" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Warehouses" EntityType="n.WarehouseType"/></EntityContainer>
+      <Annotations Target="SAP__self.Container/Warehouses">
+        <Annotation Term="SAP__UI.SelectionFields">
+          <Collection>
+            <PropertyPath>Warehouse</PropertyPath>
+            <PropertyPath>Language</PropertyPath>
+          </Collection>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let wh = meta.find_entity_type("WarehouseType").unwrap();
+        assert_eq!(wh.selection_fields, vec!["Warehouse", "Language"]);
     }
 
     #[test]
