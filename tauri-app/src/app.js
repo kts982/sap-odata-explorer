@@ -385,6 +385,19 @@ function hideSpinner() {
   document.getElementById('globalSpinner').classList.add('hidden');
 }
 
+// Capture the tab that initiated an async invoke. SAP requests can take
+// seconds; if the user switches tabs mid-flight, DOM writes intended for
+// the origin tab will land in whichever tab happens to be active when the
+// await resumes. Callers bail out via `if (!scope.active()) return;` and
+// re-trigger the action (via the tab's cached state) when the user comes back.
+function tabScope() {
+  const originTabId = activeTabId;
+  return {
+    originTabId,
+    active: () => activeTabId === originTabId,
+  };
+}
+
 async function timedInvoke(cmd, args) {
   showSpinner();
   const start = performance.now();
@@ -649,6 +662,7 @@ async function searchServices(query) {
   }
 
   setStatus(query ? `Searching '${query}'...` : 'Loading catalog...');
+  const scope = tabScope();
 
   try {
     if (!cachedServices) {
@@ -657,6 +671,7 @@ async function searchServices(query) {
         search: null,
         v4Only: false,
       });
+      if (!scope.active()) return;
       if (tab) tab.cachedServices = cachedServices;
     }
 
@@ -726,7 +741,7 @@ function renderFavoritesOnlySidebar(profile) {
   if (tab) {
     tab._sidebarTitle = 'Services';
     tab._sidebarCount = String(favs.length);
-    tab._sidebarHtml = list.outerHTML;
+    tab._sidebarHtml = list.innerHTML;
   }
 }
 
@@ -790,7 +805,7 @@ function renderServiceList(services, saveState = true) {
   if (tab) {
     tab._sidebarTitle = 'Services';
     tab._sidebarCount = String(services.length);
-    tab._sidebarHtml = list.outerHTML;
+    tab._sidebarHtml = list.innerHTML;
   }
 }
 
@@ -813,6 +828,7 @@ async function pickService(svc) {
 async function resolveAndLoadService(input, versionHint) {
   if (!currentProfile) return;
   setStatus(`Resolving '${input}'...`);
+  const scope = tabScope();
 
   try {
     let path;
@@ -823,6 +839,7 @@ async function resolveAndLoadService(input, versionHint) {
         profileName: currentProfile,
         service: input,
       });
+      if (!scope.active()) return;
     }
 
     currentServicePath = path;
@@ -840,6 +857,7 @@ async function resolveAndLoadService(input, versionHint) {
       profileName: currentProfile,
       servicePath: currentServicePath,
     });
+    if (!scope.active()) return;
 
     const entities = response.entity_sets || [];
     const summary = response.annotation_summary || { total: 0, by_namespace: {} };
@@ -893,7 +911,7 @@ function renderEntityList(entities) {
   if (tab) {
     tab._sidebarTitle = 'Entities';
     tab._sidebarCount = String(entities.length);
-    tab._sidebarHtml = list.outerHTML;
+    tab._sidebarHtml = list.innerHTML;
   }
 }
 
@@ -926,12 +944,14 @@ async function selectEntity(entitySetName, element) {
   document.getElementById('historyPanel').classList.add('hidden');
 
   setStatus(`Describing ${entitySetName}...`);
+  const scope = tabScope();
   try {
     const info = await timedInvoke('describe_entity', {
       profileName: currentProfile,
       servicePath: currentServicePath,
       entitySet: entitySetName,
     });
+    if (!scope.active()) return;
     renderDescribe(info);
     setStatus(`${entitySetName} — ${info.properties.length} props, ${info.nav_properties.length} navs`);
   } catch (e) {
@@ -2409,6 +2429,7 @@ async function executeQuery(asJson = false) {
 
   setStatus(`Querying ${currentEntitySet}...`);
   const queryStart = performance.now();
+  const scope = tabScope();
 
   try {
     const data = await timedInvoke('run_query', {
@@ -2416,6 +2437,7 @@ async function executeQuery(asJson = false) {
       servicePath: currentServicePath,
       params,
     });
+    if (!scope.active()) return;
 
     const elapsed = Math.round(performance.now() - queryStart);
 
@@ -3410,10 +3432,33 @@ async function saveProfileModal() {
     return;
   }
 
-  try {
-    const msg = await invoke('add_profile', {
+  const doSave = async (allowPlaintextFallback) => {
+    return await invoke('add_profile', {
       name, baseUrl: url, client, language, authMode, username: user, password: pass,
+      allowPlaintextFallback,
     });
+  };
+
+  try {
+    let msg;
+    try {
+      msg = await doSave(false);
+    } catch (e) {
+      const errStr = String(e);
+      // Backend signals keyring failure with a specific prefix so we can offer
+      // an explicit confirmation instead of silently downgrading to plaintext.
+      if (errStr.includes('KEYRING_FAILED')) {
+        const proceed = window.confirm(
+          'The OS keyring is unavailable or rejected the password.\n\n' +
+          'Store the password in the config file as plaintext instead?\n' +
+          '(Not recommended — the file is only protected by your OS file permissions.)'
+        );
+        if (!proceed) throw e;
+        msg = await doSave(true);
+      } else {
+        throw e;
+      }
+    }
     okEl.textContent = msg;
     okEl.classList.remove('hidden');
     await loadProfiles();
@@ -3421,7 +3466,7 @@ async function saveProfileModal() {
     document.getElementById('profileSelect').dispatchEvent(new Event('change'));
     setTimeout(hideAddProfileModal, 800);
   } catch (e) {
-    errEl.textContent = String(e);
+    errEl.textContent = String(e).replace(/^KEYRING_FAILED:\s*/, '');
     errEl.classList.remove('hidden');
   }
 }

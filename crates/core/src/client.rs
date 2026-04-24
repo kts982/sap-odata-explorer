@@ -87,8 +87,11 @@ impl SapClient {
                 // also send session cookies if present, but SAP may need
                 // the Negotiate header for different service paths.
                 let host = extract_host(&self.connection.base_url);
-                let token = crate::sspi::generate_negotiate_token(&host)
-                    .map_err(|e| ODataError::AuthFailed(e))?;
+                let token = crate::sspi::generate_negotiate_token(
+                    &host,
+                    self.connection.sso_delegate,
+                )
+                .map_err(|e| ODataError::AuthFailed(e))?;
                 Ok(builder.header("Authorization", format!("Negotiate {token}")))
             }
             AuthConfig::Browser => Ok(builder),
@@ -361,7 +364,10 @@ impl SapClient {
             // For SPNEGO SSO: add Negotiate token to each redirect hop
             // For Browser SSO: cookies from the jar are sent automatically
             if matches!(&self.connection.auth, AuthConfig::Sso) && !redirect_host.is_empty() {
-                if let Ok(token) = crate::sspi::generate_negotiate_token(&redirect_host) {
+                if let Ok(token) = crate::sspi::generate_negotiate_token(
+                    &redirect_host,
+                    self.connection.sso_delegate,
+                ) {
                     debug!("SSO: Negotiate -> {redirect_host}");
                     redirect_req =
                         redirect_req.header("Authorization", format!("Negotiate {token}"));

@@ -259,6 +259,12 @@ enum ProfileAction {
         #[arg(long)]
         sso: bool,
 
+        /// Allow Kerberos delegation when --sso is set (server can impersonate
+        /// the user to downstream backends). Off by default; only enable for
+        /// reverse-proxy → Gateway → backend R/3 setups that need multi-hop auth.
+        #[arg(long)]
+        sso_delegate: bool,
+
         /// Store password in config file instead of OS keyring (not recommended)
         #[arg(long)]
         plaintext: bool,
@@ -584,12 +590,14 @@ fn resolve_connection(cli: &Cli) -> Result<SapConnection> {
             .as_ref()
             .map(|c| c.auth.clone())
             .unwrap_or(AuthConfig::Sso);
+        let sso_delegate = profile_conn.as_ref().is_some_and(|c| c.sso_delegate);
         return Ok(SapConnection {
             base_url,
             client,
             language,
             auth,
             insecure_tls,
+            sso_delegate,
         });
     }
 
@@ -627,6 +635,7 @@ fn resolve_connection(cli: &Cli) -> Result<SapConnection> {
         language,
         auth: AuthConfig::Basic { username, password },
         insecure_tls,
+        sso_delegate: false,
     })
 }
 
@@ -866,6 +875,7 @@ async fn cmd_setup_wizard() -> Result<()> {
         sso,
         browser_sso,
         insecure_tls: false,
+        sso_delegate: false,
         aliases: existing_aliases,
     };
 
@@ -930,6 +940,7 @@ async fn cmd_setup_wizard() -> Result<()> {
                     AuthConfig::Basic { username, password }
                 },
                 insecure_tls: false,
+                sso_delegate: false,
             };
             match SapClient::new(conn) {
                 Ok(client) => match client
@@ -976,10 +987,20 @@ async fn handle_profile_command(action: &ProfileAction) -> Result<()> {
             user,
             password,
             sso,
+            sso_delegate,
             plaintext,
             portable,
         } => cmd_profile_add(
-            name, url, client, language, user, password, *sso, *plaintext, *portable,
+            name,
+            url,
+            client,
+            language,
+            user,
+            password,
+            *sso,
+            *sso_delegate,
+            *plaintext,
+            *portable,
         ),
         ProfileAction::Remove { name } => cmd_profile_remove(name),
         ProfileAction::Test { name } => cmd_profile_test(name).await,
@@ -1048,6 +1069,7 @@ fn cmd_profile_add(
     user: &str,
     password: &str,
     sso: bool,
+    sso_delegate: bool,
     plaintext: bool,
     portable: bool,
 ) -> Result<()> {
@@ -1090,6 +1112,7 @@ fn cmd_profile_add(
         sso,
         browser_sso: false,
         insecure_tls: false,
+        sso_delegate: sso && sso_delegate,
         aliases: existing_aliases,
     };
 
@@ -1112,29 +1135,19 @@ fn cmd_profile_add(
         return Ok(());
     }
 
-    // Store password in keyring unless plaintext requested
+    // Store password in keyring unless plaintext requested.
+    // Fail closed: do NOT silently fall back to plaintext on keyring failure —
+    // that's exactly the kind of surprise an enterprise security review rejects.
+    // The user has to explicitly opt in with --plaintext.
     if !plaintext {
-        match config::set_password_in_keyring(name, user, password) {
-            Ok(()) => println!("  Password stored in OS keyring."),
-            Err(e) => {
-                println!("  Warning: could not store password in OS keyring: {e}");
-                println!("  Falling back to plaintext in config file.");
-                // Re-create profile with plaintext password
-                let profile_with_pw = ConnectionProfile {
-                    password: Some(password.to_string()),
-                    ..profile
-                };
-                cfg.connections.insert(name.to_string(), profile_with_pw);
-                let save_path = if portable {
-                    config::init_portable_config(&cfg)?
-                } else {
-                    let dir = config::get_or_create_config_dir()?;
-                    config::save_config(&cfg, &dir.path)?
-                };
-                println!("  Profile '{}' saved to {}", name, save_path.display());
-                return Ok(());
-            }
+        if let Err(e) = config::set_password_in_keyring(name, user, password) {
+            anyhow::bail!(
+                "could not store password in OS keyring: {e}\n\
+                 Re-run with --plaintext to store the password in the config file instead \
+                 (not recommended), or fix the keyring backend and retry."
+            );
         }
+        println!("  Password stored in OS keyring.");
     }
 
     cfg.connections.insert(name.to_string(), profile);

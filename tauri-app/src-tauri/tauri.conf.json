@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "SAP OData Explorer",
         "width": 1280,
         "height": 800,

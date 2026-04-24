@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capabilities for the main application window. Auth SSO popup windows (dynamic labels like 'auth_<profile>') are deliberately excluded — they render external IdP pages and must not have access to any IPC. Because Tauri 2 only lets a window call custom invoke_handler commands when it matches at least one capability, this scoping also prevents auth popups from invoking our #[tauri::command] functions.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}

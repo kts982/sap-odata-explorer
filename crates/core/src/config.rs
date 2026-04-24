@@ -32,6 +32,11 @@ pub struct ConnectionProfile {
     /// Disable TLS certificate verification (for self-signed certs). Default: false.
     #[serde(default)]
     pub insecure_tls: bool,
+    /// Opt-in to Kerberos delegation when `sso = true`. The SAP server can then
+    /// authenticate as the user to further backends (constrained delegation).
+    /// Only enable for landscapes that actually need multi-hop auth.
+    #[serde(default)]
+    pub sso_delegate: bool,
     /// Service path aliases: short name → full OData service path.
     #[serde(default)]
     pub aliases: BTreeMap<String, String>,
@@ -247,6 +252,7 @@ pub fn resolve_connection(
             language: profile.language.clone(),
             auth: AuthConfig::Browser,
             insecure_tls: profile.insecure_tls,
+            sso_delegate: false,
         });
     }
 
@@ -257,6 +263,7 @@ pub fn resolve_connection(
             language: profile.language.clone(),
             auth: AuthConfig::Sso,
             insecure_tls: profile.insecure_tls,
+            sso_delegate: profile.sso_delegate,
         });
     }
 
@@ -282,6 +289,7 @@ pub fn resolve_connection(
             password,
         },
         insecure_tls: profile.insecure_tls,
+        sso_delegate: false,
     })
 }
 

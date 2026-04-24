@@ -467,6 +467,7 @@ async fn browser_sign_in_for_connection(
         language,
         auth: AuthConfig::Browser,
         insecure_tls,
+        sso_delegate: false,
     })
     .map_err(|e| CommandError::msg(format!("Client error: {e}")))?;
 
@@ -817,6 +818,13 @@ fn add_profile(
     auth_mode: String,
     username: String,
     password: String,
+    // When true, allow falling back to plaintext-in-config if the OS keyring
+    // rejects the password. The UI only sets this after the user explicitly
+    // confirms a "store in config file instead" dialog; default false so that
+    // a keyring failure surfaces an actionable error rather than silently
+    // downgrading credential protection.
+    #[allow(non_snake_case)]
+    allow_plaintext_fallback: Option<bool>,
 ) -> Result<String, String> {
     let (mut cfg, _) = config::load_config().map_err(|e| format!("Config error: {e}"))?;
 
@@ -860,14 +868,15 @@ fn add_profile(
         sso,
         browser_sso,
         insecure_tls: false,
+        sso_delegate: false,
         aliases: existing_aliases,
     };
 
     if auth_mode == "basic" && !password.is_empty() {
-        // Store password in keyring
-        match config::set_password_in_keyring(&name, &username, &password) {
-            Ok(()) => {}
-            Err(_) => {
+        // Try the OS keyring first. On failure, fail closed unless the UI
+        // explicitly signalled that the user confirmed plaintext fallback.
+        if let Err(e) = config::set_password_in_keyring(&name, &username, &password) {
+            if allow_plaintext_fallback.unwrap_or(false) {
                 let mut profile_with_pw = profile.clone();
                 profile_with_pw.password = Some(password);
                 cfg.connections.insert(name.clone(), profile_with_pw);
@@ -880,6 +889,9 @@ fn add_profile(
                     None => base,
                 });
             }
+            return Err(format!(
+                "KEYRING_FAILED: could not store password in OS keyring: {e}"
+            ));
         }
     }
 
@@ -962,6 +974,7 @@ async fn test_connection(
         language,
         auth,
         insecure_tls: false,
+        sso_delegate: false,
     };
 
     let sap_client =

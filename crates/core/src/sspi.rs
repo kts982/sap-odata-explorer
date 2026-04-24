@@ -16,11 +16,22 @@ mod imp {
 
     /// Generate a SPNEGO/Negotiate token for the given SAP host.
     /// Returns a base64-encoded token for the `Authorization: Negotiate <token>` header.
-    pub fn generate_negotiate_token(target_host: &str) -> Result<String, String> {
-        unsafe { generate_token_unsafe(target_host) }
+    ///
+    /// `delegate` controls whether `ISC_REQ_DELEGATE` is requested. This flag lets
+    /// the SAP server authenticate to further backends as the user (Kerberos
+    /// constrained delegation) — required for reverse-proxy → Gateway → backend
+    /// R/3 landscapes, dangerous if the server is untrusted. Off by default.
+    pub fn generate_negotiate_token(
+        target_host: &str,
+        delegate: bool,
+    ) -> Result<String, String> {
+        unsafe { generate_token_unsafe(target_host, delegate) }
     }
 
-    unsafe fn generate_token_unsafe(target_host: &str) -> Result<String, String> {
+    unsafe fn generate_token_unsafe(
+        target_host: &str,
+        delegate: bool,
+    ) -> Result<String, String> {
         let spn = format!("HTTP/{}", target_host);
         let spn_wide: Vec<u16> = spn.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -70,7 +81,10 @@ mod imp {
         let mut context_attrs: u32 = 0;
         let mut context_expiry: i64 = 0;
 
-        let isc_flags = ISC_REQ_DELEGATE | ISC_REQ_MUTUAL_AUTH | ISC_REQ_ALLOCATE_MEMORY;
+        let mut isc_flags = ISC_REQ_MUTUAL_AUTH | ISC_REQ_ALLOCATE_MEMORY;
+        if delegate {
+            isc_flags |= ISC_REQ_DELEGATE;
+        }
 
         let hresult = unsafe {
             InitializeSecurityContextW(
@@ -130,7 +144,10 @@ mod imp {
 
 #[cfg(not(windows))]
 mod imp {
-    pub fn generate_negotiate_token(_target_host: &str) -> Result<String, String> {
+    pub fn generate_negotiate_token(
+        _target_host: &str,
+        _delegate: bool,
+    ) -> Result<String, String> {
         Err("SSO/SPNEGO is only available on Windows".to_string())
     }
 }

@@ -27,6 +27,12 @@ pub struct SapConnection {
     /// Disable TLS certificate verification (for self-signed certs)
     #[serde(default)]
     pub insecure_tls: bool,
+    /// When `auth` is `Sso`, allow the SAP server to impersonate the user to
+    /// downstream services (Kerberos constrained delegation). Off by default —
+    /// only enable for landscapes that need multi-hop auth (reverse-proxy
+    /// fronted Gateway → backend R/3).
+    #[serde(default)]
+    pub sso_delegate: bool,
 }
 
 fn default_language() -> String {
