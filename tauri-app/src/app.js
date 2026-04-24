@@ -1017,6 +1017,36 @@ function validateQueryRestrictions(params, info) {
     }
   }
 
+  // Entity-set-level capabilities — the server will 500 on these if
+  // the declared flag is explicitly false. Only the `false` case is
+  // informative; `None`/unset defaults to "supported".
+  if ((params.top !== null && params.top !== undefined && params.top !== '') && info.top_supported === false) {
+    issues.push('$top was set, but Capabilities.TopSupported=false on this set — the server will reject pagination.');
+  }
+  if ((params.skip !== null && params.skip !== undefined && params.skip !== '') && info.skip_supported === false) {
+    issues.push('$skip was set, but Capabilities.SkipSupported=false on this set — the server will reject pagination.');
+  }
+  if (params.count === true && info.countable === false) {
+    issues.push('$count requested, but Capabilities.CountRestrictions.Countable=false on this set.');
+  }
+
+  // $expand: flag nav paths the service marked non-expandable. We only
+  // match on the first segment (the nav prop directly on the annotated
+  // entity) — multi-hop bans would require walking the type graph.
+  if (params.expand && Array.isArray(info.non_expandable_properties) && info.non_expandable_properties.length) {
+    const expandRoots = new Set(
+      params.expand.split(',').map(s => s.trim().split('/')[0]).filter(Boolean)
+    );
+    for (const np of info.non_expandable_properties) {
+      if (expandRoots.has(np)) {
+        issues.push(`'${np}' is listed in Capabilities.ExpandRestrictions.NonExpandableProperties but referenced in $expand.`);
+      }
+    }
+  }
+  if (params.expand && info.expandable === false) {
+    issues.push('$expand requested, but Capabilities.ExpandRestrictions.Expandable=false — the set rejects expansion entirely.');
+  }
+
   // byName lookup silences unused warnings; also handy for future checks.
   void byName;
   return issues;

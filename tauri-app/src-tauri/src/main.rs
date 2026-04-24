@@ -78,6 +78,12 @@ struct EntityTypeInfo {
     line_item: Vec<LineItemField>,
     request_at_least: Vec<String>,
     selection_variants: Vec<SelectionVariant>,
+    searchable: Option<bool>,
+    countable: Option<bool>,
+    top_supported: Option<bool>,
+    skip_supported: Option<bool>,
+    expandable: Option<bool>,
+    non_expandable_properties: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -648,6 +654,12 @@ async fn describe_entity(
         line_item: et.line_item.clone(),
         request_at_least: et.request_at_least.clone(),
         selection_variants: et.selection_variants.clone(),
+        searchable: et.searchable,
+        countable: et.countable,
+        top_supported: et.top_supported,
+        skip_supported: et.skip_supported,
+        expandable: et.expandable,
+        non_expandable_properties: et.non_expandable_properties.clone(),
         properties: et
             .properties
             .iter()

@@ -94,6 +94,26 @@ pub struct EntityType {
     /// filter defaults into `$filter`. Empty when the service declares
     /// no variants.
     pub selection_variants: Vec<SelectionVariant>,
+    /// `Capabilities.SearchRestrictions.Searchable` — whether the set
+    /// accepts `$search`. `None` means the service didn't declare it
+    /// (callers assume `true` per OData default).
+    pub searchable: Option<bool>,
+    /// `Capabilities.CountRestrictions.Countable` — whether `$count`
+    /// and `$inlinecount` are honored. `None` = unspecified.
+    pub countable: Option<bool>,
+    /// `Capabilities.TopSupported` — `$top` honored. `None` = unspecified.
+    pub top_supported: Option<bool>,
+    /// `Capabilities.SkipSupported` — `$skip` honored. `None` = unspecified.
+    pub skip_supported: Option<bool>,
+    /// Navigation property names listed under
+    /// `Capabilities.ExpandRestrictions.NonExpandableProperties` — the
+    /// server rejects `$expand` referencing any of these. Empty when
+    /// the service declares no restrictions or marks the whole set
+    /// non-expandable (see `expandable` for the global flag).
+    pub non_expandable_properties: Vec<String>,
+    /// `Capabilities.ExpandRestrictions.Expandable` — `$expand` is
+    /// supported at all on this set. `None` = unspecified (assume true).
+    pub expandable: Option<bool>,
 }
 
 /// One `UI.SelectionVariant` record — the declarative shape of a
@@ -662,6 +682,12 @@ fn parse_entity_types(schema: &roxmltree::Node, version: ODataVersion) -> Vec<En
                 line_item: Vec::new(),
                 request_at_least: Vec::new(),
                 selection_variants: Vec::new(),
+                searchable: None,
+                countable: None,
+                top_supported: None,
+                skip_supported: None,
+                non_expandable_properties: Vec::new(),
+                expandable: None,
             }
         })
         .collect()
@@ -951,6 +977,44 @@ fn apply_v4_typed_annotations(
                         }
                     }
                 }
+            } else if lower.ends_with(".searchrestrictions")
+                || lower.ends_with(".countrestrictions")
+                || lower.ends_with(".expandrestrictions")
+            {
+                // Entity-set–scoped. These set flat Option<bool>s and/or
+                // a nav-path list on the EntityType so the frontend
+                // pre-flight validator can catch queries that will 500.
+                if let Some((_, set_name)) = target.split_once('/') {
+                    if let Some(type_ref) =
+                        entity_sets.iter().find(|s| s.name == set_name)
+                    {
+                        let type_name = extract_type_name(&type_ref.entity_type).to_string();
+                        if let Some(et) = entity_types.iter_mut().find(|t| t.name == type_name) {
+                            apply_entity_set_capability(&lower, &annot, et);
+                        }
+                    }
+                }
+            } else if lower.ends_with(".topsupported")
+                || lower.ends_with(".skipsupported")
+            {
+                // Standalone `<Annotation ... Bool="false"/>` on an entity
+                // set. Default is `true`, so only `false` is informative
+                // (but we store whatever was declared for transparency).
+                if let Some((_, set_name)) = target.split_once('/') {
+                    if let Some(type_ref) =
+                        entity_sets.iter().find(|s| s.name == set_name)
+                    {
+                        let type_name = extract_type_name(&type_ref.entity_type).to_string();
+                        if let Some(et) = entity_types.iter_mut().find(|t| t.name == type_name) {
+                            let val = annot.attribute("Bool").map(|v| v == "true");
+                            if lower.ends_with(".topsupported") {
+                                et.top_supported = val;
+                            } else {
+                                et.skip_supported = val;
+                            }
+                        }
+                    }
+                }
             } else if lower.ends_with(".valuelist")
                 && !lower.ends_with(".valuelistreferences")
                 && !lower.ends_with(".valuelistmapping")
@@ -1162,6 +1226,60 @@ fn apply_capability_restriction(
                     _ => {}
                 }
             }
+        }
+    }
+}
+
+/// Apply an entity-set–scoped capability annotation that lives on
+/// the EntityType itself (not on individual properties).
+/// Handles `Capabilities.SearchRestrictions`, `CountRestrictions`,
+/// and `ExpandRestrictions`. The outer record's `Property` values are
+/// the interesting payloads: `Searchable` / `Countable` / `Expandable`
+/// booleans, and `NonExpandableProperties` as a NavigationPropertyPath
+/// collection. Unknown fields are ignored so new Capability sub-terms
+/// don't break the parser.
+fn apply_entity_set_capability(
+    lower_term: &str,
+    annot: &roxmltree::Node,
+    et: &mut EntityType,
+) {
+    let record = match children_by_tag(annot, "Record").into_iter().next() {
+        Some(r) => r,
+        None => return,
+    };
+    for pv in children_by_tag(&record, "PropertyValue") {
+        let prop_name = match pv.attribute("Property") {
+            Some(n) => n,
+            None => continue,
+        };
+        match (lower_term, prop_name) {
+            (t, "Searchable") if t.ends_with(".searchrestrictions") => {
+                et.searchable = pv.attribute("Bool").map(|v| v == "true");
+            }
+            (t, "Countable") if t.ends_with(".countrestrictions") => {
+                et.countable = pv.attribute("Bool").map(|v| v == "true");
+            }
+            (t, "Expandable") if t.ends_with(".expandrestrictions") => {
+                et.expandable = pv.attribute("Bool").map(|v| v == "true");
+            }
+            (t, "NonExpandableProperties") if t.ends_with(".expandrestrictions") => {
+                // NavigationPropertyPath collection — same shape as
+                // PropertyPath. Reuse the existing helper rather than
+                // duplicating the walk.
+                for coll in children_by_tag(&pv, "Collection") {
+                    for npp in children_by_tag(&coll, "NavigationPropertyPath") {
+                        if let Some(text) = npp.text() {
+                            let trimmed = text.trim();
+                            if !trimmed.is_empty()
+                                && !et.non_expandable_properties.iter().any(|x| x == trimmed)
+                            {
+                                et.non_expandable_properties.push(trimmed.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -2592,6 +2710,64 @@ mod tests {
         let wh = ot.properties.iter().find(|p| p.name == "Warehouse").unwrap();
         // Warehouse had no override → picks up the type default.
         assert_eq!(wh.text_arrangement, Some(TextArrangement::TextFirst));
+    }
+
+    #[test]
+    fn test_v4_extended_capabilities_on_entity_set() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <NavigationProperty Name="_Items" Type="Collection(n.OrderItemType)"/>
+        <NavigationProperty Name="_Serial" Type="Collection(n.SerialType)"/>
+      </EntityType>
+      <EntityType Name="OrderItemType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+      </EntityType>
+      <EntityType Name="SerialType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.Container/Orders">
+        <Annotation Term="SAP__capabilities.SearchRestrictions">
+          <Record>
+            <PropertyValue Property="Searchable" Bool="false"/>
+          </Record>
+        </Annotation>
+        <Annotation Term="SAP__capabilities.CountRestrictions">
+          <Record>
+            <PropertyValue Property="Countable" Bool="false"/>
+          </Record>
+        </Annotation>
+        <Annotation Term="SAP__capabilities.ExpandRestrictions">
+          <Record>
+            <PropertyValue Property="Expandable" Bool="true"/>
+            <PropertyValue Property="NonExpandableProperties">
+              <Collection>
+                <NavigationPropertyPath>_Serial</NavigationPropertyPath>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+        <Annotation Term="SAP__capabilities.TopSupported" Bool="false"/>
+        <Annotation Term="SAP__capabilities.SkipSupported" Bool="false"/>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let ot = meta.find_entity_type("OrderType").unwrap();
+        assert_eq!(ot.searchable, Some(false));
+        assert_eq!(ot.countable, Some(false));
+        assert_eq!(ot.expandable, Some(true));
+        assert_eq!(ot.top_supported, Some(false));
+        assert_eq!(ot.skip_supported, Some(false));
+        assert_eq!(ot.non_expandable_properties, vec!["_Serial"]);
     }
 
     #[test]
