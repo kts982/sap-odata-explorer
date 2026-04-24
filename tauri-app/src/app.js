@@ -622,11 +622,21 @@ function resetResultsArea() {
 async function loadService() {
   const input = document.getElementById('serviceInput').value.trim();
   if (!currentProfile) { setStatus('Select a profile first'); return; }
-  if (input.startsWith('/')) {
+  // Only treat as a literal path when it starts with `/sap/`. SAP catalog
+  // technical names in a customer namespace (e.g. `/NAMESPACE/SERVICE_NAME`)
+  // also start with `/` but are NOT service paths — they need catalog
+  // resolution like any bare name.
+  if (isServicePath(input)) {
     await resolveAndLoadService(input);
   } else {
     await searchServices(input);
   }
+}
+
+// True when the given string looks like an SAP OData service path
+// (`/sap/opu/odata/...`, `/sap/opu/odata4/...`), not a catalog entry name.
+function isServicePath(s) {
+  return typeof s === 'string' && s.startsWith('/sap/');
 }
 
 async function searchServices(query) {
@@ -806,7 +816,7 @@ async function resolveAndLoadService(input, versionHint) {
 
   try {
     let path;
-    if (input.startsWith('/')) {
+    if (isServicePath(input)) {
       path = input;
     } else {
       path = await timedInvoke('resolve_service', {

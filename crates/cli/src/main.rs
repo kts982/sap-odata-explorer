@@ -597,8 +597,10 @@ async fn resolve_service_path(cli: &Cli, sap_client: &SapClient) -> Result<Optio
         None => return Ok(None),
     };
 
-    // If it starts with /, treat as a full path
-    if raw.starts_with('/') {
+    // If it looks like an SAP OData service path (`/sap/...`), use it verbatim.
+    // Anything else rooted at `/` — notably SAP namespace-prefixed catalog
+    // names like `/NAMESPACE/SERVICE_NAME` — still needs catalog resolution.
+    if raw.starts_with("/sap/") {
         return Ok(Some(raw));
     }
 

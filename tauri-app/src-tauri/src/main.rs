@@ -277,7 +277,11 @@ fn client_from_profile(profile_name: &str, state: &AppState) -> Result<SapClient
 }
 
 fn resolve_service_for_profile(profile_name: &str, service: &str) -> Result<String, String> {
-    if service.starts_with('/') {
+    // Only treat as a literal service path when it's rooted at `/sap/`. SAP
+    // catalog technical names in a customer namespace (e.g.
+    // `/NAMESPACE/SERVICE_NAME`) also start with `/` and would otherwise
+    // bypass catalog resolution.
+    if service.starts_with("/sap/") {
         return Ok(service.to_string());
     }
     // Check aliases
