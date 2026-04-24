@@ -1,5 +1,25 @@
 use crate::metadata::ODataVersion;
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Serialize;
+
+/// Percent-encoding set matching JavaScript's `encodeURIComponent`: encode every
+/// byte except `A-Z a-z 0-9 - _ . ~ ! * ' ( )`. Values containing `&`, `#`, `+`,
+/// `=`, `?`, or space would otherwise produce wrong requests or split the query
+/// string — e.g. a filter value `'Berlin & Munich'` would be truncated at the `&`.
+const COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~')
+    .remove(b'!')
+    .remove(b'*')
+    .remove(b'\'')
+    .remove(b'(')
+    .remove(b')');
+
+fn enc(s: &str) -> String {
+    utf8_percent_encode(s, COMPONENT).to_string()
+}
 
 /// OData query builder that constructs URL query parameters.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -115,16 +135,16 @@ impl ODataQuery {
         let mut params: Vec<String> = Vec::new();
 
         if !self.select.is_empty() {
-            params.push(format!("$select={}", self.select.join(",")));
+            params.push(format!("$select={}", enc(&self.select.join(","))));
         }
         if let Some(ref filter) = self.filter {
-            params.push(format!("$filter={filter}"));
+            params.push(format!("$filter={}", enc(filter)));
         }
         if !self.expand.is_empty() {
-            params.push(format!("$expand={}", self.expand.join(",")));
+            params.push(format!("$expand={}", enc(&self.expand.join(","))));
         }
         if !self.orderby.is_empty() {
-            params.push(format!("$orderby={}", self.orderby.join(",")));
+            params.push(format!("$orderby={}", enc(&self.orderby.join(","))));
         }
         if let Some(top) = self.top {
             params.push(format!("$top={top}"));
@@ -143,18 +163,18 @@ impl ODataQuery {
             // services accept a bare `search=term` custom param.
             match self.version {
                 Some(ODataVersion::V4) => {
-                    params.push(format!("$search=\"{term}\""));
+                    params.push(format!("$search={}", enc(&format!("\"{term}\""))));
                 }
                 _ => {
-                    params.push(format!("search={term}"));
+                    params.push(format!("search={}", enc(term)));
                 }
             }
         }
         if let Some(ref fmt) = self.format {
-            params.push(format!("$format={fmt}"));
+            params.push(format!("$format={}", enc(fmt)));
         }
         for (k, v) in &self.custom {
-            params.push(format!("{k}={v}"));
+            params.push(format!("{}={}", enc(k), enc(v)));
         }
 
         if params.is_empty() {
@@ -206,10 +226,10 @@ mod tests {
 
         let result = q.build();
         assert!(result.starts_with("CustomerSet?"));
-        assert!(result.contains("$select=CustomerID,CustomerName"));
-        assert!(result.contains("$filter=City eq 'Berlin'"));
+        assert!(result.contains("$select=CustomerID%2CCustomerName"));
+        assert!(result.contains("$filter=City%20eq%20'Berlin'"));
         assert!(result.contains("$expand=ToOrders"));
-        assert!(result.contains("$orderby=CustomerName asc"));
+        assert!(result.contains("$orderby=CustomerName%20asc"));
         assert!(result.contains("$top=10"));
         assert!(result.contains("$skip=0"));
         assert!(result.contains("$inlinecount=allpages"));
@@ -227,7 +247,8 @@ mod tests {
         let q = ODataQuery::new("OrderSet")
             .version(ODataVersion::V4)
             .search("HB");
-        assert!(q.build().contains("$search=\"HB\""));
+        // Double quotes are part of V4 syntax but not URI-safe — encode them.
+        assert!(q.build().contains("$search=%22HB%22"));
     }
 
     #[test]
@@ -237,5 +258,47 @@ mod tests {
             .search("HB");
         assert!(q.build().contains("search=HB"));
         assert!(!q.build().contains("$search"));
+    }
+
+    #[test]
+    fn test_filter_encodes_ampersand() {
+        // Without encoding, the `&` in the value would split the query string
+        // and the server would see `$filter=City eq 'Berlin ` plus a stray
+        // `Munich'` param — wrong results or a parse error.
+        let q = ODataQuery::new("CitySet").filter("Name eq 'Berlin & Munich'");
+        let result = q.build();
+        assert!(result.contains("$filter=Name%20eq%20'Berlin%20%26%20Munich'"));
+        assert_eq!(result.matches('&').count(), 0);
+    }
+
+    #[test]
+    fn test_filter_encodes_space_and_plus() {
+        let q = ODataQuery::new("EventSet").filter("Note eq 'a + b = c'");
+        let result = q.build();
+        // Space → %20, + → %2B, = → %3D. Single quotes stay (unreserved in our set).
+        assert!(result.contains("$filter=Note%20eq%20'a%20%2B%20b%20%3D%20c'"));
+    }
+
+    #[test]
+    fn test_filter_preserves_apostrophe_literal() {
+        // OData escapes apostrophes by doubling them: O'Brien → 'O''Brien'.
+        // Apostrophe is in our preserve set, so the doubled-quote form survives.
+        let q = ODataQuery::new("PersonSet").filter("Name eq 'O''Brien'");
+        let result = q.build();
+        assert!(result.contains("$filter=Name%20eq%20'O''Brien'"));
+    }
+
+    #[test]
+    fn test_search_v4_encodes_space() {
+        let q = ODataQuery::new("ProductSet")
+            .version(ODataVersion::V4)
+            .search("red car");
+        assert!(q.build().contains("$search=%22red%20car%22"));
+    }
+
+    #[test]
+    fn test_custom_param_encodes_value() {
+        let q = ODataQuery::new("X").custom("note", "a=b&c");
+        assert_eq!(q.build(), "X?note=a%3Db%26c");
     }
 }

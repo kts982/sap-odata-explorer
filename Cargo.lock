@@ -3330,6 +3330,7 @@ dependencies = [
  "directories",
  "flate2",
  "keyring",
+ "percent-encoding",
  "reqwest 0.12.28",
  "roxmltree",
  "serde",
