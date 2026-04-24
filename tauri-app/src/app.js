@@ -2198,8 +2198,22 @@ function renderFioriReadinessPanel(info) {
         : 'text-ox-red';
       html += `<div class="px-3 py-1 border-t border-ox-border/40 flex items-start gap-2 text-[11px]">`;
       html += `<span class="${color} mt-0.5">&#9679;</span>`;
-      html += `<div class="flex-1"><span class="text-ox-dim font-mono">${escapeHtml(f.code)}</span> — <span class="text-ox-text">${escapeHtml(f.message)}</span></div>`;
-      html += `</div>`;
+      html += `<div class="flex-1">`;
+      html += `<span class="text-ox-dim font-mono">${escapeHtml(f.code)}</span> — <span class="text-ox-text">${escapeHtml(f.message)}</span>`;
+      // ABAP CDS "fix hint" — surfaces the annotation to add at the
+      // source so the linter teaches, not just grades. Only present
+      // on actionable (warn/miss) findings; passes skip this line.
+      if (f.suggested_cds || f.why_in_fiori) {
+        html += `<div class="mt-1 text-[10px] text-ox-muted leading-snug">`;
+        if (f.suggested_cds) {
+          html += `<span class="text-ox-blue font-mono">ABAP CDS:</span> <code class="text-ox-blue">${escapeHtml(f.suggested_cds)}</code>`;
+        }
+        if (f.why_in_fiori) {
+          html += `<div class="text-ox-dim">${escapeHtml(f.why_in_fiori)}</div>`;
+        }
+        html += `</div>`;
+      }
+      html += `</div></div>`;
     }
   }
   html += '</div>';

@@ -1744,11 +1744,23 @@ async fn cmd_lint(
                 LintSeverity::Warn => ("!", Color::Yellow),
                 LintSeverity::Miss => ("✗", Color::Red),
             };
+            // Inline the ABAP CDS hint under the message so the user
+            // sees both without a separate column. Keeps the table
+            // from blowing out horizontally on actionable findings.
+            let mut msg = f.message.clone();
+            if let Some(cds) = f.suggested_cds {
+                msg.push_str("\nABAP CDS: ");
+                msg.push_str(cds);
+            }
+            if let Some(why) = f.why_in_fiori {
+                msg.push_str("\n→ ");
+                msg.push_str(why);
+            }
             table.add_row(vec![
                 Cell::new(symbol).fg(color),
                 Cell::new(format!("{:?}", f.category).to_lowercase()),
                 Cell::new(f.code),
-                Cell::new(&f.message),
+                Cell::new(msg),
             ]);
         }
         println!("{table}");

@@ -161,7 +161,9 @@ A "Fiori readiness" panel drops into the describe view below the property/nav ta
 - **Fields** — decimal/amount/quantity properties without `Measures.Unit` or `Measures.ISOCurrency`; code-looking columns (`*ID`, `*Code`) without a `Common.Text` pairing.
 - **Capabilities** — flags services that declare no `Capabilities.*` whatsoever (clients can't pre-flight).
 
-Each finding has a severity dot (green pass / amber warn / red miss) and points at the annotation by code so you know exactly what to add. Same checks are available on the CLI via `sap-odata lint`.
+Each finding has a severity dot (green pass / amber warn / red miss), a short message, and — for actionable warnings / misses — an **ABAP CDS fix hint** plus a one-line "what Fiori does with it" explanation. So `"No UI.SelectionFields"` comes paired with `ABAP CDS: @UI.selectionField` and `"Populates the Fiori filter bar..."`, which means the linter *teaches* rather than just grades.
+
+Same checks + fix hints are available on the CLI via `sap-odata lint`.
 
 ## Annotation inspector
 
