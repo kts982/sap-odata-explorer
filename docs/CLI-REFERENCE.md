@@ -112,10 +112,13 @@ Non-interactive alternative to `setup`. Good for scripting.
 | `--user` | `""` | Username (empty for SSO) |
 | `--password` | `""` | Password (stored in OS keyring by default) |
 | `--sso` | — | Use Windows SSO (SPNEGO/Kerberos) — no user/password |
+| `--sso-delegate` | — | Allow Kerberos delegation when `--sso` is set (server can impersonate the user to downstream backends). Off by default; only enable for reverse-proxy → Gateway → backend R/3 setups that need multi-hop auth. |
 | `--plaintext` | — | Store password in the config file instead of the keyring (not recommended) |
 | `--portable` | — | Write the config next to the executable (portable install) |
 
 > Browser SSO isn't available on `profile add` directly — use `setup` or create the profile from the desktop app, which handles the interactive sign-in and cookie capture.
+>
+> `--sso-delegate` is CLI-only today. Desktop users who need it can edit `connections.toml` and set `sso_delegate = true` on the profile; surfacing it in the desktop profile editor is a follow-up.
 
 Examples:
 

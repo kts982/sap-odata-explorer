@@ -666,13 +666,14 @@ async function searchServices(query) {
 
   try {
     if (!cachedServices) {
-      cachedServices = await timedInvoke('get_services', {
+      const services = await timedInvoke('get_services', {
         profileName: currentProfile,
         search: null,
         v4Only: false,
       });
       if (!scope.active()) return;
-      if (tab) tab.cachedServices = cachedServices;
+      cachedServices = services;
+      if (tab) tab.cachedServices = services;
     }
 
     lastSearchQuery = query || '';
@@ -682,6 +683,7 @@ async function searchServices(query) {
     renderServiceList(filtered);
     setStatus(`${filtered.length} service(s)${query ? ` matching '${query}'` : ''}`);
   } catch (e) {
+    if (!scope.active()) return;
     setStatus('Error: ' + e);
     const message = isBrowserAuthProfile(currentProfile) ? browserAuthMessage(e) : String(e);
     document.getElementById('resultsArea').innerHTML =
@@ -873,6 +875,7 @@ async function resolveAndLoadService(input, versionHint) {
     resetResultsArea();
     if (tab) tab._resultsHtml = undefined;
   } catch (e) {
+    if (!scope.active()) return;
     setStatus('Error: ' + e);
     const message = isBrowserAuthProfile(currentProfile) ? browserAuthMessage(e) : String(e);
     document.getElementById('resultsArea').innerHTML =
@@ -955,6 +958,7 @@ async function selectEntity(entitySetName, element) {
     renderDescribe(info);
     setStatus(`${entitySetName} — ${info.properties.length} props, ${info.nav_properties.length} navs`);
   } catch (e) {
+    if (!scope.active()) return;
     setStatus('Error: ' + e);
   }
 }
@@ -2456,6 +2460,7 @@ async function executeQuery(asJson = false) {
       addToHistory(tab, params, rowCount, elapsed);
     }
   } catch (e) {
+    if (!scope.active()) return;
     setStatus('Query error: ' + e);
     hideStatsBar();
     const message = isBrowserAuthProfile(currentProfile) ? browserAuthMessage(e) : String(e);
