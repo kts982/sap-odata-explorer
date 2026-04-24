@@ -3,8 +3,18 @@
 > A focused SAP OData explorer for real systems, with catalog discovery, metadata browsing, and query tooling.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/kts982/sap-odata-explorer/actions/workflows/ci.yml/badge.svg)](https://github.com/kts982/sap-odata-explorer/actions/workflows/ci.yml)
 [![Rust 1.85+](https://img.shields.io/badge/Rust-1.85+-orange.svg)](https://rustup.rs)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#)
+
+<!--
+Hero screenshot — drop a redacted capture at docs/images/hero.png and uncomment the line below.
+Redaction checklist: no system IDs (HA9 etc.), hostnames, user names, or real customer data.
+Suggested capture: desktop app against a public SAP demo service (e.g. API_BUSINESS_PARTNER),
+with SAP View enabled, sidebar populated, query builder visible, results grid populated.
+
+![sap-odata-explorer — desktop app with SAP View overlay enabled](docs/images/hero.png)
+-->
 
 A CLI tool and desktop app for exploring and testing SAP OData services against real customer systems. It supports **OData V2 and V4**, SAP Gateway catalog discovery, and three common authentication modes: basic auth, Windows SSO (Kerberos / SPNEGO), and browser-based SSO (Azure AD / SAP IAS / SAML flows).
 
@@ -32,7 +42,8 @@ This project is aimed at a narrower problem: understand a real SAP OData service
 - **Results grid** — view tabular results with expandable nested data from `$expand`
 - **HTTP inspector** — per-tab request/response trace in the desktop app (headers, body preview, timing) with copy-as-curl; same data on the CLI via `--verbose`
 - **SAP-aware error hints** — 404/403/5xx responses get actionable hints pointing at `/IWFND/MAINT_SERVICE`, `/IWFND/ERROR_LOG`, `ST22`, or the browser SSO sign-in flow when appropriate
-- **SAP View** — opt-in overlay that reads the service's SAP/UI5 annotations and turns the explorer into a Fiori-aware view: entity title subtitles, `Common.Text` description folding (`Warehouse Berlin (WH01)`), results-grid columns reordered to match `UI.LineItem`, restriction pills + pre-flight validator for `Capabilities.*`, clickable `UI.SelectionFields` chips, one-click "Fiori cols" / "Fiori filter" buttons driven by `UI.LineItem` + `UI.PresentationVariant` + `UI.SelectionVariant`, and `Common.ValueList` value-help pickers (F4) including the S/4HANA `ValueListReferences` pattern where the mapping lives in a separate F4 service. Toggle from the status bar. Full annotation coverage + rendering rules in [docs/SAP-VIEW.md](./docs/SAP-VIEW.md).
+- **SAP View** — opt-in overlay that reads a service's SAP/UI5 annotations and renders the explorer as a Fiori-aware view: Fiori-ordered columns, filter chips, value-help (F4) pickers, restriction validation. Toggle from the status bar. See [docs/SAP-VIEW.md](./docs/SAP-VIEW.md) for the full annotation list.
+- **Fiori-readiness linter** — evaluates a service's annotations against a Fiori list-report / object-page checklist: profile-aware (list-report / object-page / value-help / analytical / transactional), catches dangling `Path` references, and emits **ABAP CDS fix hints** pointing at the source annotation. Severity levels filter the output. Available in the CLI (`sap-odata lint`) and the desktop describe panel.
 - **Connection profiles** — save SAP systems and store Basic-auth passwords in the OS keyring
 - **Three auth modes** — basic auth, Windows SSO (SPNEGO), and browser SSO
 - **Service aliases** — use short names for long service paths
@@ -45,7 +56,7 @@ This project is aimed at a narrower problem: understand a real SAP OData service
 
 ## Installation
 
-Until signed releases exist, build from source (see [CONTRIBUTING.md](CONTRIBUTING.md)) or download unsigned releases from GitHub once published.
+Until the first GitHub release is published, build from source — see [CONTRIBUTING.md](CONTRIBUTING.md). Pre-built unsigned binaries will be attached to GitHub releases once tagged.
 
 > [!WARNING]
 > Windows SmartScreen may show an "unrecognized app" warning when launching unsigned releases downloaded from the internet. Click **More info → Run anyway**. Reputation and/or code signing is planned.
@@ -156,12 +167,15 @@ Use this tool only with SAP systems and endpoints you are authorized to access. 
 
 ## How it compares
 
-| Tool | Where It Fits |
+The short version: other tools treat an SAP OData service as generic REST. This one reads the SAP/UI5 annotations that come with the service, renders results the way a Fiori app would, and flags Fiori-readiness gaps with ABAP CDS fix hints.
+
+| Tool | Where it fits |
 |---|---|
-| **SAP Gateway Client** | Better suited to backend QA replay and simulation inside SAP. `sap-odata-explorer` is more suitable for cross-platform browsing, catalog discovery, and day-to-day exploration. |
-| **SAP Business Accelerator Hub** | Better suited to official SAP API browsing and SDK downloads. `sap-odata-explorer` is more useful for live customer systems and custom services. |
-| **Postman / Insomnia / Bruno / Hoppscotch** | Better suited to broad API workflows, collections, collaboration, and protocols beyond HTTP. `sap-odata-explorer` is more focused on SAP-specific workflows like CSRF handling, `sap-client`, metadata browsing, and Gateway catalog discovery. |
-| **OData MCP bridges** | Complementary. They expose OData to AI agents; this project is aimed at human exploration and testing. |
+| **SAP Gateway Client** | Better suited to backend QA replay inside SAP. `sap-odata-explorer` runs cross-platform, discovers V2+V4 catalogs, overlays a Fiori-aware view from the service's own UI5 annotations (column order, filter chips, F4 pickers, `Capabilities.*` restrictions), and **lints** for Fiori-readiness with ABAP CDS fix hints — GW Client shows the raw OData response. |
+| **SAP Business Accelerator Hub** | Better suited to official SAP API browsing and SDK downloads. `sap-odata-explorer` works against live customer systems and custom services, with annotation-driven rendering and a Fiori-readiness linter — things reference docs can't provide. |
+| **Postman / Insomnia / Bruno / Hoppscotch** | Better suited to broad API workflows, collections, and collaboration. `sap-odata-explorer` is focused on SAP specifics — CSRF handling, `sap-client`, Gateway catalog discovery — reads UI5 annotations to render results the way a Fiori app would, and lints annotations for dangling references and missing Fiori expectations. Generic HTTP clients don't attempt any of this. |
+
+*The CLI is scriptable by design (stable subcommands, exit codes, `--verbose` trace output) and composes cleanly with shell pipelines, CI steps, or external wrappers — so while the tool is aimed at human-driven exploration, nothing stops you from invoking it from higher-level automation when that's what you need.*
 
 **Best fit:** *"I need to quickly understand and query this SAP OData service."*
 
@@ -179,21 +193,15 @@ sap-odata-explorer/
 
 The `sap-odata-core` crate holds all protocol logic. CLI and Tauri are thin wrappers. This makes it easy to add a third frontend later (MCP server, web app, etc.).
 
-## Roadmap
+## Directions
 
-Short term:
-- [ ] V2 F4 convention scan (`sap:value-list` → guess an `*_VH` entity set → drive the picker)
-- [ ] Auth validation on real federated landscapes (Azure AD + SAP IAS, Okta, ADFS)
+Not a commitment — priorities may shift. Open issues track current focus.
+
+Legend: `[x]` done · `[-]` partial / in progress · `[ ]` planned
+
+- [-] Auth validation on federated landscapes (Azure AD tested on some configurations; SAP IAS, Okta, ADFS still to go)
+- [ ] V2 F4 convention scan (`sap:value-list` → infer `*_VH` entity set → drive the picker)
 - [ ] Code signing and release pipeline (CI builds for Windows / Linux / macOS, signed Windows artifacts)
-
-Later:
-- [ ] Write operations (POST / PATCH / DELETE) — gated on a real create/update/delete workflow
-- [ ] Saved requests / collections, import/export to Postman / Bruno / curl / OpenAPI
-- [ ] VS Code extension (browse metadata and run queries inline against your editor's open service) — likely the next frontend after Phase A
-- [ ] MCP server (expose core to AI agents) — gated on a concrete consumer
-- [ ] Schema diff between systems (DEV vs QAS vs PRD)
-- [ ] Export metadata to JSON Schema / TypeScript types
-- [ ] Auto-update
 
 ## Contributing
 
