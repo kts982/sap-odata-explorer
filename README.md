@@ -107,6 +107,8 @@ If you prefer scripted setup, `sap-odata profile add ...` is still available for
 | `build <set> [query]` | Dry-run: print the OData URL, no HTTP call |
 | `run <set> [query]` | Execute query, show results as table |
 | `metadata` | Dump raw `$metadata` XML |
+| `lint [<entity>]` | Fiori-readiness checklist — check a service's annotations against list-report / object-page expectations, with ABAP CDS fix hints. `--min-severity pass\|warn\|miss` to filter. |
+| `annotations` | List every SAP/UI5 annotation parsed from `$metadata`, grouped by vocabulary. `--namespace` / `--filter` to narrow. |
 
 See [CLI-REFERENCE.md](docs/CLI-REFERENCE.md) for all options (or run `sap-odata <command> --help`).
 
