@@ -538,6 +538,9 @@
         <div id="selectionFieldsBar" class="hidden flex items-center gap-1.5 mb-1.5 flex-wrap text-[10px] font-mono">
           <span class="text-ox-dim uppercase tracking-widest">Selection fields</span>
           <span id="selectionFieldsChips" class="flex items-center gap-1 flex-wrap"></span>
+          <button id="btnOpenFilterBar" type="button"
+            class="ml-1 text-[10px] font-semibold tracking-wide px-1.5 py-0.5 rounded-sm text-ox-electric border border-ox-electric/50 hover:bg-ox-electric/10 hover:border-ox-electric transition-colors"
+            title="Open a mini filter form with one input per selection field">&#9636; filter bar</button>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
           <div class="flex items-center gap-1.5 mr-1">
@@ -733,6 +736,28 @@
       <div id="vlResults" class="flex-1 overflow-auto p-0 text-xs font-mono"></div>
       <div class="px-5 py-2 border-t border-ox-border text-[10px] text-ox-dim shrink-0">
         <span id="vlStatus">Fetching…</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Selection Filter Bar Modal ═══ -->
+  <div id="filterBarModal" class="hidden fixed inset-0 z-50 modal-overlay flex items-center justify-center">
+    <div class="modal-content bg-ox-panel border border-ox-border rounded-lg shadow-2xl w-[640px] max-h-[85vh] flex flex-col">
+      <div class="px-5 py-3 border-b border-ox-border flex items-center justify-between shrink-0">
+        <div class="flex items-baseline gap-2">
+          <span class="text-ox-electric text-xs font-semibold tracking-wide">&#9636;</span>
+          <h3 class="text-sm font-medium text-ox-text">Selection filter</h3>
+          <span id="fbSubtitle" class="text-[10px] text-ox-dim font-mono"></span>
+        </div>
+        <button id="btnFbClose" class="text-ox-dim hover:text-ox-text text-xs px-2 py-0.5 rounded-sm hover:bg-ox-hover">close</button>
+      </div>
+      <div id="fbRows" class="flex-1 overflow-auto px-5 py-3 space-y-2"></div>
+      <div class="px-5 py-3 border-t border-ox-border flex items-center justify-between shrink-0">
+        <button id="btnFbReset" class="btn-ghost text-xs px-3 py-1 rounded-sm">Reset</button>
+        <div class="flex gap-2">
+          <button id="btnFbCancel" class="btn-ghost text-xs px-3 py-1 rounded-sm">Cancel</button>
+          <button id="btnFbApply" class="btn-primary text-xs px-4 py-1 rounded-sm">Apply to $filter</button>
+        </div>
       </div>
     </div>
   </div>

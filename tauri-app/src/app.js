@@ -1139,12 +1139,178 @@ function renderSelectionFieldsBar(info) {
       const cls = req
         ? 'text-[10px] px-1.5 py-0.5 rounded-sm text-ox-amber bg-ox-amberGlow border border-ox-amber/40 hover:bg-ox-amber/20'
         : 'btn-ghost text-[10px] px-1.5 py-0.5 rounded-sm';
-      const title = req
+      const tipBase = req
         ? 'Required in $filter — append and narrow'
         : 'Append to $filter';
+      const title = `${tipBase}\nShift-click to append to $select instead`;
       return `<button type="button" class="${cls}" data-action="selection-field" data-name="${escapeHtml(name)}" title="${title}">${escapeHtml(name)}</button>`;
     })
     .join('');
+}
+
+// ══════════════════════════════════════════════════════════════
+// ── SELECTION FILTER BAR ──
+// ══════════════════════════════════════════════════════════════
+// Mock Fiori filter bar: one row per UI.SelectionFields property with
+// an operator dropdown + value input. Apply builds a $filter clause
+// and drops it into the query bar's qFilter. Useful when the user
+// wants to fill several selection fields without memorizing OData
+// operator syntax (startswith/contains/between).
+
+function openFilterBar() {
+  const tab = getActiveTab();
+  const info = tab && tab._lastDescribeInfo;
+  if (!info || !Array.isArray(info.selection_fields) || info.selection_fields.length === 0) {
+    setStatus('This entity declares no UI.SelectionFields.');
+    return;
+  }
+  const modal = document.getElementById('filterBarModal');
+  const rowsHost = document.getElementById('fbRows');
+  const subtitle = document.getElementById('fbSubtitle');
+  subtitle.textContent = info.name;
+  rowsHost.innerHTML = buildFilterBarRows(info);
+  modal.classList.remove('hidden');
+  // Focus the first value input.
+  setTimeout(() => {
+    const first = rowsHost.querySelector('input[data-fb="value"]');
+    if (first) first.focus();
+  }, 0);
+}
+
+function closeFilterBar() {
+  document.getElementById('filterBarModal').classList.add('hidden');
+}
+
+// Render one row per SelectionField. Each row is a flex with label,
+// operator dropdown, value input, and (for `between`) a second value
+// input. Operators cover strings, numbers, and dates; we don't filter
+// by type because SAP's CDS sometimes annotates columns in ways that
+// make the "right" set hard to guess.
+function buildFilterBarRows(info) {
+  const propByName = new Map(info.properties.map(p => [p.name, p]));
+  const operators = [
+    ['eq', '='], ['ne', '≠'],
+    ['gt', '>'], ['ge', '≥'], ['lt', '<'], ['le', '≤'],
+    ['contains', 'contains'],
+    ['startswith', 'starts with'], ['endswith', 'ends with'],
+    ['between', 'between'],
+  ];
+  const opOptions = operators
+    .map(([v, label]) => `<option value="${v}">${label}</option>`)
+    .join('');
+  return info.selection_fields.map(name => {
+    const p = propByName.get(name);
+    const type = p ? p.edm_type.replace('Edm.', '') : '';
+    const req = p && p.required_in_filter === true;
+    const reqBadge = req
+      ? `<span class="text-[9px] text-ox-amber bg-ox-amberGlow border border-ox-amber/40 rounded-sm px-1 ml-1" title="required-in-filter">req</span>`
+      : '';
+    return `
+      <div class="grid grid-cols-[160px_90px_1fr_auto] gap-2 items-center" data-fb-row data-field="${escapeHtml(name)}">
+        <div class="text-[11px] text-ox-text truncate" title="${escapeHtml(name)} (${escapeHtml(type)})">${escapeHtml(name)}${reqBadge} <span class="text-ox-dim">${escapeHtml(type)}</span></div>
+        <select data-fb="op" class="bg-ox-surface text-ox-text text-[11px] font-mono border border-ox-border rounded-sm px-1.5 py-1 outline-hidden">${opOptions}</select>
+        <div data-fb="inputs" class="flex items-center gap-1">
+          <input data-fb="value" type="text" placeholder="value"
+            class="flex-1 bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 outline-hidden" />
+        </div>
+        <button type="button" data-action="fb-clear-row" class="btn-ghost text-[10px] px-1.5 py-0.5 rounded-sm" title="Clear this row">×</button>
+      </div>`;
+  }).join('');
+}
+
+function resetFilterBar() {
+  const host = document.getElementById('fbRows');
+  host.querySelectorAll('input[data-fb="value"], input[data-fb="value-high"]').forEach(i => i.value = '');
+  host.querySelectorAll('select[data-fb="op"]').forEach(s => s.value = 'eq');
+  // Remove any "high" inputs that may have been added by between-operator.
+  host.querySelectorAll('[data-fb="value-high"]').forEach(el => el.remove());
+}
+
+// Switch the row's inputs area to show a second value when operator
+// is `between`. Revert to single input for anything else.
+function onFilterBarOpChange(selectEl) {
+  const row = selectEl.closest('[data-fb-row]');
+  if (!row) return;
+  const inputs = row.querySelector('[data-fb="inputs"]');
+  const op = selectEl.value;
+  const hasHigh = inputs.querySelector('[data-fb="value-high"]');
+  if (op === 'between' && !hasHigh) {
+    const sep = document.createElement('span');
+    sep.className = 'text-ox-dim text-[10px]';
+    sep.textContent = 'and';
+    sep.setAttribute('data-fb', 'value-high-sep');
+    const high = document.createElement('input');
+    high.type = 'text';
+    high.placeholder = 'upper';
+    high.className = 'flex-1 bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 outline-hidden';
+    high.setAttribute('data-fb', 'value-high');
+    inputs.appendChild(sep);
+    inputs.appendChild(high);
+  } else if (op !== 'between' && hasHigh) {
+    inputs.querySelectorAll('[data-fb="value-high"], [data-fb="value-high-sep"]').forEach(el => el.remove());
+  }
+}
+
+// Walk the filter-bar rows and build an OData $filter expression.
+// Empty rows are skipped. Literals are quoted via formatODataLiteral
+// using the property's edm_type. Clauses are joined with `and`.
+function buildFilterBarExpression() {
+  const tab = getActiveTab();
+  const info = tab && tab._lastDescribeInfo;
+  if (!info) return '';
+  const propByName = new Map(info.properties.map(p => [p.name, p]));
+  const clauses = [];
+  const rows = document.querySelectorAll('#fbRows [data-fb-row]');
+  rows.forEach(row => {
+    const name = row.dataset.field;
+    const prop = propByName.get(name);
+    if (!prop) return;
+    const op = row.querySelector('[data-fb="op"]').value;
+    const val = row.querySelector('[data-fb="value"]').value.trim();
+    if (val === '') return;
+    const lit = formatODataLiteral(val, prop.edm_type);
+    let clause;
+    switch (op) {
+      case 'eq': case 'ne': case 'gt': case 'ge': case 'lt': case 'le':
+        clause = `${name} ${op} ${lit}`;
+        break;
+      case 'contains':
+        clause = `contains(${name},${lit})`;
+        break;
+      case 'startswith':
+        clause = `startswith(${name},${lit})`;
+        break;
+      case 'endswith':
+        clause = `endswith(${name},${lit})`;
+        break;
+      case 'between': {
+        const high = row.querySelector('[data-fb="value-high"]');
+        const highVal = high ? high.value.trim() : '';
+        if (!highVal) {
+          clause = `${name} ge ${lit}`; // degraded form — no upper bound given
+        } else {
+          const highLit = formatODataLiteral(highVal, prop.edm_type);
+          clause = `(${name} ge ${lit} and ${name} le ${highLit})`;
+        }
+        break;
+      }
+      default:
+        return;
+    }
+    clauses.push(clause);
+  });
+  return clauses.join(' and ');
+}
+
+function applyFilterBar() {
+  const expr = buildFilterBarExpression();
+  if (!expr) {
+    setStatus('No filter rows with values — nothing applied.');
+    return;
+  }
+  document.getElementById('qFilter').value = expr;
+  closeFilterBar();
+  document.getElementById('qFilter').focus();
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -3356,6 +3522,20 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('annotationBadge').classList.add('cursor-pointer');
   document.getElementById('btnAiClose').addEventListener('click', closeAnnotationInspector);
   document.getElementById('aiSearch').addEventListener('input', renderAnnotationInspector);
+  document.getElementById('btnOpenFilterBar').addEventListener('click', openFilterBar);
+  document.getElementById('btnFbClose').addEventListener('click', closeFilterBar);
+  document.getElementById('btnFbCancel').addEventListener('click', closeFilterBar);
+  document.getElementById('btnFbReset').addEventListener('click', resetFilterBar);
+  document.getElementById('btnFbApply').addEventListener('click', applyFilterBar);
+  // Operator-change + clear-row need delegation since rows are rebuilt
+  // on every open.
+  document.getElementById('fbRows').addEventListener('change', (e) => {
+    const sel = e.target.closest('select[data-fb="op"]');
+    if (sel) onFilterBarOpChange(sel);
+  });
+  document.getElementById('fbRows').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') applyFilterBar();
+  });
   document.getElementById('btnFioriCols').addEventListener('click', applyFioriCols);
   document.getElementById('btnFioriFilter').addEventListener('click', applyFioriFilter);
   document.getElementById('btnVlClose').addEventListener('click', closeValueListPicker);
@@ -3470,6 +3650,15 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (action === 'vl-select-variant') {
       const idx = parseInt(el.dataset.variantIndex, 10);
       if (!isNaN(idx)) selectVariant(idx);
+    } else if (action === 'fb-clear-row') {
+      const row = el.closest('[data-fb-row]');
+      if (!row) return;
+      row.querySelectorAll('input[data-fb="value"], input[data-fb="value-high"]').forEach(i => i.value = '');
+      const sel = row.querySelector('select[data-fb="op"]');
+      if (sel) {
+        sel.value = 'eq';
+        onFilterBarOpChange(sel);
+      }
     } else if (action === 'ai-toggle-ns') {
       const ns = el.dataset.ns;
       if (!ns) return;
@@ -3482,16 +3671,28 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (action === 'vl-pick') {
       pickValueListRow(parseInt(el.dataset.row, 10));
     } else if (action === 'selection-field') {
-      // Seed $filter with "<name> eq ''" so the user can complete the
-      // literal. Preserve anything already in the box by joining with `and`.
       const name = el.dataset.name;
       if (!name) return;
+      if (e.shiftKey) {
+        // Shift-click: append to $select instead of $filter. Dedupe
+        // against whatever is already there so repeated clicks don't
+        // bloat the list.
+        const input = document.getElementById('qSelect');
+        const current = (input.value || '').trim();
+        const tokens = current ? current.split(',').map(s => s.trim()).filter(Boolean) : [];
+        if (!tokens.includes(name)) tokens.push(name);
+        input.value = tokens.join(',');
+        input.focus();
+        return;
+      }
+      // Plain click: seed $filter with "<name> eq ''" so the user can
+      // complete the literal. Preserve anything already there via `and`.
       const input = document.getElementById('qFilter');
       const current = (input.value || '').trim();
       const snippet = `${name} eq ''`;
       input.value = current ? `${current} and ${snippet}` : snippet;
       input.focus();
-      // Place caret just inside the trailing quotes so typing fills the value.
+      // Caret inside the trailing quotes so typing fills the value.
       const caret = input.value.lastIndexOf("''") + 1;
       if (caret > 0) input.setSelectionRange(caret, caret);
     } else if (action === 'back-to-services') {
