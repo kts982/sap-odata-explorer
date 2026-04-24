@@ -1039,13 +1039,19 @@ function renderDescribe(info) {
     const textHint = sapViewEnabled && p.text_path
       ? ` <span class="text-ox-blue text-[10px]" title="Common.Text → ${escapeHtml(p.text_path)}">&#x21A6; ${escapeHtml(p.text_path)}</span>`
       : '';
+    const currencyHint = sapViewEnabled && p.iso_currency_path
+      ? ` <span class="text-ox-green text-[10px]" title="Measures.ISOCurrency → ${escapeHtml(p.iso_currency_path)}">&curren; ${escapeHtml(p.iso_currency_path)}</span>`
+      : '';
+    const unitHint = sapViewEnabled && p.unit_path && !p.iso_currency_path
+      ? ` <span class="text-ox-green text-[10px]" title="Measures.Unit / sap:unit → ${escapeHtml(p.unit_path)}">&#8593; ${escapeHtml(p.unit_path)}</span>`
+      : '';
     const titleHint = sapViewEnabled && info.header_info && info.header_info.title_path === p.name
       ? ' <span class="text-ox-amber text-[10px]" title="Used as UI.HeaderInfo.Title">title</span>'
       : '';
     const flagHints = sapViewEnabled ? propertyFlagHints(p) : '';
     const critHint = sapViewEnabled ? criticalityHint(p) : '';
     html += `<tr class="hover:bg-ox-amberGlow cursor-pointer transition-colors" data-action="select" data-field="${escapeHtml(p.name)}">`;
-    html += `<td class="py-0.5 pr-3 text-ox-text">${escapeHtml(p.name)}${textHint}${titleHint}${critHint}${flagHints}</td>`;
+    html += `<td class="py-0.5 pr-3 text-ox-text">${escapeHtml(p.name)}${textHint}${currencyHint}${unitHint}${titleHint}${critHint}${flagHints}</td>`;
     html += `<td class="py-0.5 pr-3 text-ox-dim">${escapeHtml(p.edm_type.replace('Edm.', ''))}</td>`;
     html += `<td class="py-0.5 pr-3 text-center">${keyMark}</td>`;
     html += `<td class="py-0.5 text-ox-muted">${escapeHtml(p.label || '')}</td>`;

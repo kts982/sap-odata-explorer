@@ -83,13 +83,24 @@ pub struct Property {
     /// human-readable description. Source: `Common.Text` (V4) or
     /// `sap:text` (V2). Example: `MaterialID.text_path = Some("MaterialDescription")`.
     pub text_path: Option<String>,
+    /// Path of a sibling property that holds the unit of measure for this
+    /// amount/quantity. Source: `Measures.Unit` (V4) or `sap:unit` (V2).
+    /// Example: `NetWeight.unit_path = Some("WeightUnit")`.
+    pub unit_path: Option<String>,
+    /// Path of a sibling property that holds the ISO currency code for
+    /// this monetary amount. Source: `Measures.ISOCurrency` (V4).
+    /// Example: `NetAmount.iso_currency_path = Some("TransactionCurrency")`.
+    pub iso_currency_path: Option<String>,
     /// Property-level flags. Each is `Some(bool)` only when the source
     /// metadata explicitly sets the flag; `None` means "use the OData
     /// default" (generally true for filterable/sortable/creatable/updatable).
     /// Sources: V2 `sap:filterable` / `sap:sortable` / `sap:creatable` /
-    /// `sap:updatable` / `sap:required-in-filter`. V4 equivalents
-    /// (Capabilities.FilterRestrictions etc.) will extend these in a
-    /// later pass.
+    /// `sap:updatable` / `sap:required-in-filter`, plus V4
+    /// `Capabilities.FilterRestrictions` / `SortRestrictions` /
+    /// `InsertRestrictions` / `UpdateRestrictions` applied at the entity-set
+    /// level. V4 restriction lists override the default-true interpretation:
+    /// listed properties flip to `Some(false)` (or `Some(true)` for
+    /// `RequiredProperties`).
     pub filterable: Option<bool>,
     pub sortable: Option<bool>,
     pub creatable: Option<bool>,
@@ -310,7 +321,7 @@ pub fn parse_metadata(xml: &str) -> Result<ServiceMetadata, crate::error::ODataE
                 annotation_labels.extend(parse_v4_annotation_labels(schema_node));
                 let alias = schema_node.attribute("Alias").unwrap_or("");
                 annotations.extend(parse_v4_annotations(schema_node, alias));
-                apply_v4_typed_annotations(&mut entity_types, schema_node, alias);
+                apply_v4_typed_annotations(&mut entity_types, &entity_sets, schema_node, alias);
             }
             ODataVersion::V2 => {
                 annotations.extend(parse_v2_sap_annotations(schema_node));
@@ -392,6 +403,14 @@ fn parse_entity_types(schema: &roxmltree::Node, version: ODataVersion) -> Vec<En
                     text_path: p
                         .attribute(("http://www.sap.com/Protocols/SAPData", "text"))
                         .map(String::from),
+                    // V2 `sap:unit` — can carry either a unit-of-measure or a
+                    // currency reference; V2 doesn't distinguish. Land it in
+                    // unit_path; V4 services differentiate via separate
+                    // Measures.Unit vs Measures.ISOCurrency annotations.
+                    unit_path: p
+                        .attribute(("http://www.sap.com/Protocols/SAPData", "unit"))
+                        .map(String::from),
+                    iso_currency_path: None,
                     filterable: parse_sap_bool(&p, "filterable"),
                     sortable: parse_sap_bool(&p, "sortable"),
                     creatable: parse_sap_bool(&p, "creatable"),
@@ -602,12 +621,17 @@ fn parse_v2_sap_annotations(schema: &roxmltree::Node) -> Vec<RawAnnotation> {
 }
 
 /// Second pass over `<Annotations Target>` blocks that populates typed
-/// accessors on the parsed entity types. Currently handles `UI.HeaderInfo`,
-/// `Common.Text`, and `UI.Criticality`. Each additional vocabulary term
-/// gets its own branch here, keeping complex Record/Collection parsing
-/// in one place instead of spilling into callers.
+/// accessors on the parsed entity types. Handles `UI.HeaderInfo`,
+/// `Common.Text`, `UI.Criticality`, `Measures.Unit`, `Measures.ISOCurrency`
+/// (all targeted at entity types / properties), and the entity-set–targeted
+/// `Capabilities.FilterRestrictions` / `SortRestrictions` /
+/// `InsertRestrictions` / `UpdateRestrictions` property lists.
+/// Each additional vocabulary term gets its own branch here, keeping
+/// complex Record/Collection parsing in one place instead of spilling
+/// into callers.
 fn apply_v4_typed_annotations(
     entity_types: &mut [EntityType],
+    entity_sets: &[EntitySet],
     schema: &roxmltree::Node,
     alias: &str,
 ) {
@@ -648,9 +672,113 @@ fn apply_v4_typed_annotations(
                         }
                     }
                 }
+            } else if lower.ends_with(".unit") && !lower.ends_with(".isunit") {
+                if let Some((et_name, prop_name)) = target.split_once('/') {
+                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
+                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
+                            if prop.unit_path.is_none() {
+                                prop.unit_path = annot.attribute("Path").map(String::from);
+                            }
+                        }
+                    }
+                }
+            } else if lower.ends_with(".isocurrency") {
+                if let Some((et_name, prop_name)) = target.split_once('/') {
+                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
+                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
+                            prop.iso_currency_path = annot.attribute("Path").map(String::from);
+                        }
+                    }
+                }
+            } else if lower.ends_with(".filterrestrictions")
+                || lower.ends_with(".sortrestrictions")
+                || lower.ends_with(".insertrestrictions")
+                || lower.ends_with(".updaterestrictions")
+            {
+                // Entity-set–scoped capability restriction.
+                // Target looks like "Container/EntitySetName".
+                if let Some((_, set_name)) = target.split_once('/') {
+                    if let Some(type_ref) =
+                        entity_sets.iter().find(|s| s.name == set_name)
+                    {
+                        let type_name = extract_type_name(&type_ref.entity_type).to_string();
+                        if let Some(et) = entity_types.iter_mut().find(|t| t.name == type_name) {
+                            apply_capability_restriction(&lower, &annot, &mut et.properties);
+                        }
+                    }
+                }
             }
         }
     }
+}
+
+/// Apply a single `Capabilities.*Restrictions` record to an entity type's
+/// property list. Pulls out the collection-of-PropertyPath payloads for
+/// the five lists we care about and flips the relevant `Option<bool>`
+/// on each listed property. Unknown fields are ignored.
+fn apply_capability_restriction(
+    lower_term: &str,
+    annot: &roxmltree::Node,
+    properties: &mut [Property],
+) {
+    let record = match children_by_tag(annot, "Record").into_iter().next() {
+        Some(r) => r,
+        None => return,
+    };
+    for pv in children_by_tag(&record, "PropertyValue") {
+        let prop_name = match pv.attribute("Property") {
+            Some(n) => n,
+            None => continue,
+        };
+        let paths = parse_property_path_collection(&pv);
+        let (field_name, value) = match (lower_term, prop_name) {
+            (t, "NonFilterableProperties") if t.ends_with(".filterrestrictions") => {
+                ("filterable", Some(false))
+            }
+            (t, "RequiredProperties") if t.ends_with(".filterrestrictions") => {
+                ("required_in_filter", Some(true))
+            }
+            (t, "NonSortableProperties") if t.ends_with(".sortrestrictions") => {
+                ("sortable", Some(false))
+            }
+            (t, "NonInsertableProperties") if t.ends_with(".insertrestrictions") => {
+                ("creatable", Some(false))
+            }
+            (t, "NonUpdatableProperties") if t.ends_with(".updaterestrictions") => {
+                ("updatable", Some(false))
+            }
+            _ => continue,
+        };
+        for path in paths {
+            if let Some(prop) = properties.iter_mut().find(|p| p.name == path) {
+                match field_name {
+                    "filterable" => prop.filterable = value,
+                    "sortable" => prop.sortable = value,
+                    "creatable" => prop.creatable = value,
+                    "updatable" => prop.updatable = value,
+                    "required_in_filter" => prop.required_in_filter = value,
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+/// Read a `<PropertyValue>` whose content is a `<Collection>` of
+/// `<PropertyPath>` text nodes. Returns the path strings in source order.
+fn parse_property_path_collection(pv: &roxmltree::Node) -> Vec<String> {
+    let mut out = Vec::new();
+    for coll in children_by_tag(pv, "Collection") {
+        for pp in children_by_tag(&coll, "PropertyPath") {
+            if let Some(text) = pp.text() {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    out.push(trimmed.to_string());
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Extract a `UI.Criticality` value from a `<Annotation>` node. Accepts
@@ -1224,6 +1352,106 @@ mod tests {
         let mat = meta.find_entity_type("Mat").unwrap();
         let id_prop = mat.properties.iter().find(|p| p.name == "ID").unwrap();
         assert_eq!(id_prop.text_path.as_deref(), Some("Description"));
+    }
+
+    #[test]
+    fn test_v4_measures_unit_and_isocurrency() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="NetAmount" Type="Edm.Decimal"/>
+        <Property Name="TransactionCurrency" Type="Edm.String"/>
+        <Property Name="NetWeight" Type="Edm.Decimal"/>
+        <Property Name="WeightUnit" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="C"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType/NetAmount">
+        <Annotation Term="SAP__measures.ISOCurrency" Path="TransactionCurrency"/>
+      </Annotations>
+      <Annotations Target="SAP__self.OrderType/NetWeight">
+        <Annotation Term="SAP__measures.Unit" Path="WeightUnit"/>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let ot = meta.find_entity_type("OrderType").unwrap();
+        let amount = ot.properties.iter().find(|p| p.name == "NetAmount").unwrap();
+        assert_eq!(amount.iso_currency_path.as_deref(), Some("TransactionCurrency"));
+        let weight = ot.properties.iter().find(|p| p.name == "NetWeight").unwrap();
+        assert_eq!(weight.unit_path.as_deref(), Some("WeightUnit"));
+    }
+
+    #[test]
+    fn test_v4_capabilities_restrictions_flip_property_flags() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="StockType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="Quantity" Type="Edm.Decimal"/>
+        <Property Name="Warehouse" Type="Edm.String"/>
+        <Property Name="StorageType" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Stocks" EntityType="n.StockType"/></EntityContainer>
+      <Annotations Target="SAP__self.Container/Stocks">
+        <Annotation Term="SAP__capabilities.FilterRestrictions">
+          <Record>
+            <PropertyValue Property="NonFilterableProperties">
+              <Collection>
+                <PropertyPath>Quantity</PropertyPath>
+              </Collection>
+            </PropertyValue>
+            <PropertyValue Property="RequiredProperties">
+              <Collection>
+                <PropertyPath>Warehouse</PropertyPath>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+        <Annotation Term="SAP__capabilities.SortRestrictions">
+          <Record>
+            <PropertyValue Property="NonSortableProperties">
+              <Collection>
+                <PropertyPath>StorageType</PropertyPath>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+        <Annotation Term="Capabilities.UpdateRestrictions">
+          <Record>
+            <PropertyValue Property="NonUpdatableProperties">
+              <Collection>
+                <PropertyPath>ID</PropertyPath>
+                <PropertyPath>Warehouse</PropertyPath>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let st = meta.find_entity_type("StockType").unwrap();
+        let qty = st.properties.iter().find(|p| p.name == "Quantity").unwrap();
+        assert_eq!(qty.filterable, Some(false));
+        let wh = st.properties.iter().find(|p| p.name == "Warehouse").unwrap();
+        assert_eq!(wh.required_in_filter, Some(true));
+        assert_eq!(wh.updatable, Some(false));
+        let st_type = st.properties.iter().find(|p| p.name == "StorageType").unwrap();
+        assert_eq!(st_type.sortable, Some(false));
+        let id = st.properties.iter().find(|p| p.name == "ID").unwrap();
+        assert_eq!(id.updatable, Some(false));
+        // Untouched properties stay at None.
+        assert_eq!(id.filterable, None);
+        assert_eq!(qty.sortable, None);
     }
 
     #[test]
