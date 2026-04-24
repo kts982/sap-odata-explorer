@@ -7,14 +7,7 @@
 [![Rust 1.85+](https://img.shields.io/badge/Rust-1.85+-orange.svg)](https://rustup.rs)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#)
 
-<!--
-Hero screenshot — drop a redacted capture at docs/images/hero.png and uncomment the line below.
-Redaction checklist: no system IDs (HA9 etc.), hostnames, user names, or real customer data.
-Suggested capture: desktop app against a public SAP demo service (e.g. API_BUSINESS_PARTNER),
-with SAP View enabled, sidebar populated, query builder visible, results grid populated.
-
-![sap-odata-explorer — desktop app with SAP View overlay enabled](docs/images/hero.png)
--->
+![sap-odata-explorer — desktop app with SAP View overlay, F4 reference tooltip, and FilterRestrictions warning](docs/images/hero.png)
 
 A CLI tool and desktop app for exploring and testing SAP OData services against real customer systems. It supports **OData V2 and V4**, SAP Gateway catalog discovery, and three common authentication modes: basic auth, Windows SSO (Kerberos / SPNEGO), and browser-based SSO (Azure AD / SAP IAS / SAML flows).
 
