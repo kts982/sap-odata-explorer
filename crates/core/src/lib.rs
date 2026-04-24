@@ -4,6 +4,7 @@ pub mod client;
 pub mod config;
 pub mod diagnostics;
 pub mod error;
+pub mod lint;
 pub mod metadata;
 pub mod query;
 pub mod session;

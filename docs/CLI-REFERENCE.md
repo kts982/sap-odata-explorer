@@ -310,6 +310,30 @@ sap-odata -p DEV -s API_BUSINESS_PARTNER metadata > api_bp_metadata.xml
 sap-odata -p DEV -s API_MATERIAL_DOCUMENT_SRV metadata | xmllint --format -
 ```
 
+### `lint`
+
+Run the Fiori-readiness checklist on one entity or the whole service. Same checks the desktop app's describe panel shows under "Fiori readiness" — `UI.HeaderInfo` present, `UI.LineItem` declared, `UI.SelectionFields` declared, decimal-looking properties paired with `Measures.Unit` / `Measures.ISOCurrency`, code-looking columns paired with `Common.Text`, `Common.SemanticKey` when the technical key is UUID-ish, and so on.
+
+| Flag | Purpose |
+|---|---|
+| `<entity>` (positional, optional) | Entity type or entity set name. Omit to lint every type in the service. |
+| `--min-severity <pass\|warn\|miss>` | Suppress findings below this severity. Default shows everything. |
+| `--json` | Dump the structured findings instead of a table. |
+
+```bash
+# Scan the whole service for anything a Fiori list-report app would miss
+sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 lint --min-severity warn
+
+# One entity, table output
+sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 lint WarehousePhysicalStockProductsType
+
+# Pipe into CI — fail the build if anything is "miss"
+sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 lint --min-severity miss --json \
+  | jq -e 'length == 0'
+```
+
+Findings carry a `severity` (`pass` / `warn` / `miss`), a `category` (`identity` / `listreport` / `filtering` / `fields` / `capabilities`), a stable `code`, and a human-readable `message`.
+
 ### `annotations`
 
 List every SAP/UI5 annotation parsed from `$metadata`, grouped by vocabulary namespace. The same data the desktop app's annotation inspector shows — handy on the command line for "does this service declare X?" grepping and for diffing annotation sets across environments.

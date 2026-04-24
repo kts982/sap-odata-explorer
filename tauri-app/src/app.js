@@ -1987,6 +1987,59 @@ function criticalityHint(p) {
   return '';
 }
 
+// Fiori-readiness checklist, rendered below the describe tables when
+// SAP View is on. Shows the parser's findings with a traffic-light
+// dot per row and groups them by category. Summary counts up-front
+// so the user can tell "is this service shaped like Fiori expects?"
+// at a glance.
+function renderFioriReadinessPanel(info) {
+  const findings = Array.isArray(info.fiori_readiness) ? info.fiori_readiness : [];
+  if (findings.length === 0) return '';
+  const counts = { pass: 0, warn: 0, miss: 0 };
+  for (const f of findings) {
+    if (counts[f.severity] !== undefined) counts[f.severity]++;
+  }
+  const summary = [
+    counts.pass ? `<span class="text-ox-green">&#9679; ${counts.pass} pass</span>` : '',
+    counts.warn ? `<span class="text-ox-amber">&#9679; ${counts.warn} warn</span>` : '',
+    counts.miss ? `<span class="text-ox-red">&#9679; ${counts.miss} miss</span>` : '',
+  ].filter(Boolean).join(' <span class="text-ox-border">·</span> ');
+  // Group by category, preserve original order within each group.
+  const order = ['identity', 'listreport', 'filtering', 'fields', 'capabilities'];
+  const byCategory = new Map(order.map(k => [k, []]));
+  for (const f of findings) {
+    if (!byCategory.has(f.category)) byCategory.set(f.category, []);
+    byCategory.get(f.category).push(f);
+  }
+  const pretty = {
+    identity: 'Identity',
+    listreport: 'List report',
+    filtering: 'Filtering',
+    fields: 'Fields',
+    capabilities: 'Capabilities',
+  };
+  let html = '<div class="mt-4 border border-ox-border rounded-sm overflow-hidden">';
+  html += `<div class="px-3 py-1.5 bg-ox-panel text-[10px] uppercase tracking-widest text-ox-dim flex items-center gap-3">`;
+  html += `<span class="font-medium">Fiori readiness</span>`;
+  html += `<span class="text-[10px] normal-case tracking-normal">${summary}</span>`;
+  html += `</div>`;
+  for (const [cat, items] of byCategory) {
+    if (!items || items.length === 0) continue;
+    html += `<div class="px-3 py-1 bg-ox-surface/40 text-[9px] uppercase tracking-widest text-ox-muted border-t border-ox-border/40">${escapeHtml(pretty[cat] || cat)}</div>`;
+    for (const f of items) {
+      const color = f.severity === 'pass' ? 'text-ox-green'
+        : f.severity === 'warn' ? 'text-ox-amber'
+        : 'text-ox-red';
+      html += `<div class="px-3 py-1 border-t border-ox-border/40 flex items-start gap-2 text-[11px]">`;
+      html += `<span class="${color} mt-0.5">&#9679;</span>`;
+      html += `<div class="flex-1"><span class="text-ox-dim font-mono">${escapeHtml(f.code)}</span> — <span class="text-ox-text">${escapeHtml(f.message)}</span></div>`;
+      html += `</div>`;
+    }
+  }
+  html += '</div>';
+  return html;
+}
+
 function renderDescribe(info) {
   const panel = document.getElementById('describePanel');
   panel.classList.remove('hidden');
@@ -2084,6 +2137,9 @@ function renderDescribe(info) {
   }
 
   html += '</div>';
+  if (sapViewEnabled) {
+    html += renderFioriReadinessPanel(info);
+  }
   document.getElementById('describeContent').innerHTML = html;
 }
 

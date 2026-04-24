@@ -6,6 +6,7 @@ use sap_odata_core::{
     client::SapClient,
     config,
     diagnostics::HttpTraceEntry,
+    lint::{self, LintFinding},
     metadata::{
         self, AnnotationSummary, Criticality, FieldControl, HeaderInfo, LineItemField,
         RawAnnotation, SelectionVariant, SortOrder, TextArrangement, ValueList,
@@ -86,6 +87,7 @@ struct EntityTypeInfo {
     expandable: Option<bool>,
     non_expandable_properties: Vec<String>,
     semantic_keys: Vec<String>,
+    fiori_readiness: Vec<LintFinding>,
 }
 
 #[derive(Serialize)]
@@ -693,6 +695,7 @@ async fn describe_entity(
         expandable: et.expandable,
         non_expandable_properties: et.non_expandable_properties.clone(),
         semantic_keys: et.semantic_keys.clone(),
+        fiori_readiness: lint::evaluate_entity_type(et),
         properties: et
             .properties
             .iter()

@@ -6,6 +6,7 @@ use sap_odata_core::{
     client::SapClient,
     config::{self, ConnectionProfile},
     diagnostics::HttpTraceEntry,
+    lint::{self, LintSeverity},
     metadata::ODataVersion,
     query::ODataQuery,
 };
@@ -190,6 +191,23 @@ enum Commands {
 
     /// Fetch and display the raw $metadata XML
     Metadata,
+
+    /// Fiori-readiness checklist for an entity. Evaluates the
+    /// service's annotations against what a Fiori list-report /
+    /// object-page app would normally expect (HeaderInfo, LineItem,
+    /// SelectionFields, Text/Unit pairings, Capabilities...). Scope
+    /// it to one entity or omit the positional arg to scan the whole
+    /// service.
+    Lint {
+        /// Entity type / entity set name. Either works — we resolve to
+        /// the type. Omit to lint every entity in the service.
+        entity: Option<String>,
+
+        /// Only show findings at or above this severity level
+        /// (pass / warn / miss). Defaults to showing everything.
+        #[arg(long)]
+        min_severity: Option<String>,
+    },
 
     /// List every SAP/UI5 annotation parsed from `$metadata`, grouped
     /// by vocabulary namespace. Useful for answering "does this
@@ -439,6 +457,10 @@ async fn main() -> Result<()> {
             Commands::Annotations { namespace, filter } => {
                 let svc = require_service()?;
                 cmd_annotations(&sap_client, &svc, cli.json, namespace.clone(), filter.clone()).await
+            }
+            Commands::Lint { entity, min_severity } => {
+                let svc = require_service()?;
+                cmd_lint(&sap_client, &svc, cli.json, entity.clone(), min_severity.clone()).await
             }
         }
     }
@@ -1638,6 +1660,113 @@ async fn cmd_annotations(
     println!("{table}");
     println!("\n{} annotation(s) shown.", filtered.len());
     Ok(())
+}
+
+async fn cmd_lint(
+    client: &SapClient,
+    service: &str,
+    as_json: bool,
+    entity: Option<String>,
+    min_severity: Option<String>,
+) -> Result<()> {
+    let meta = client
+        .fetch_metadata(service)
+        .await
+        .context("failed to fetch metadata")?;
+
+    let min_sev = match min_severity.as_deref() {
+        Some("pass") | None => None,
+        Some("warn") => Some(LintSeverity::Warn),
+        Some("miss") => Some(LintSeverity::Miss),
+        Some(other) => {
+            anyhow::bail!(
+                "unknown severity '{other}' — expected pass, warn, or miss"
+            );
+        }
+    };
+
+    // Resolve the scope: one entity (accept either type name or set
+    // name), or every entity type in the schema.
+    let targets: Vec<&str> = match entity.as_deref() {
+        Some(name) => {
+            if meta.find_entity_type(name).is_some() {
+                vec![name]
+            } else if let Some(et) = meta.entity_type_for_set(name) {
+                vec![et.name.as_str()]
+            } else {
+                anyhow::bail!("entity type or set '{name}' not found");
+            }
+        }
+        None => meta.entity_types.iter().map(|et| et.name.as_str()).collect(),
+    };
+
+    #[derive(serde::Serialize)]
+    struct Report<'a> {
+        entity: &'a str,
+        findings: Vec<lint::LintFinding>,
+    }
+    let mut reports: Vec<Report> = Vec::new();
+    for name in &targets {
+        let et = meta
+            .find_entity_type(name)
+            .ok_or_else(|| anyhow::anyhow!("entity '{name}' vanished"))?;
+        let mut findings = lint::evaluate_entity_type(et);
+        if let Some(s) = min_sev {
+            findings.retain(|f| severity_at_least(f.severity, s));
+        }
+        if !findings.is_empty() {
+            reports.push(Report { entity: *name, findings });
+        }
+    }
+
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&reports)?);
+        return Ok(());
+    }
+
+    if reports.is_empty() {
+        println!("No findings at or above the requested severity.");
+        return Ok(());
+    }
+
+    for r in &reports {
+        println!("\n── {} ──", r.entity);
+        let mut table = Table::new();
+        table.load_preset(UTF8_FULL).set_header(vec![
+            Cell::new("").fg(Color::Cyan),
+            Cell::new("Category").fg(Color::Cyan),
+            Cell::new("Check").fg(Color::Cyan),
+            Cell::new("Message").fg(Color::Cyan),
+        ]);
+        for f in &r.findings {
+            let (symbol, color) = match f.severity {
+                LintSeverity::Pass => ("✓", Color::Green),
+                LintSeverity::Warn => ("!", Color::Yellow),
+                LintSeverity::Miss => ("✗", Color::Red),
+            };
+            table.add_row(vec![
+                Cell::new(symbol).fg(color),
+                Cell::new(format!("{:?}", f.category).to_lowercase()),
+                Cell::new(f.code),
+                Cell::new(&f.message),
+            ]);
+        }
+        println!("{table}");
+    }
+    Ok(())
+}
+
+/// Severity ranking helper: Pass < Warn < Miss. Returns true if
+/// `actual` is at or above `threshold`.
+fn severity_at_least(actual: LintSeverity, threshold: LintSeverity) -> bool {
+    fn rank(s: LintSeverity) -> u8 {
+        match s {
+            LintSeverity::Pass => 0,
+            LintSeverity::Warn => 1,
+            LintSeverity::Miss => 2,
+        }
+    }
+    rank(actual) >= rank(threshold)
 }
 
 // ── Helpers ──

@@ -145,6 +145,18 @@ Things intentionally left out of SAP View for now, with the reasoning:
 - **Raw annotation inspector panel** — a power-user view dumping `ServiceMetadata.annotations` grouped by namespace. Low UI cost (parser already captures them); on the backlog.
 - **Fiori-readiness linter** — checklist flagging missing-but-expected annotations (no `HeaderInfo`, no `SelectionFields`, no `LineItem`). ABAP-dev-facing feature; on the backlog.
 
+## Fiori-readiness checklist
+
+A "Fiori readiness" panel drops into the describe view below the property/nav tables (SAP View only). It runs the parser's evaluation against what a Fiori list-report / object-page service would normally declare:
+
+- **Identity** — `UI.HeaderInfo`, `Common.SemanticKey` (warns if the technical key looks UUID-ish and no business key is declared).
+- **List report** — `UI.LineItem`, `UI.PresentationVariant` (RequestAtLeast + SortOrder).
+- **Filtering** — `UI.SelectionFields`, `UI.SelectionVariant`.
+- **Fields** — decimal/amount/quantity properties without `Measures.Unit` or `Measures.ISOCurrency`; code-looking columns (`*ID`, `*Code`) without a `Common.Text` pairing.
+- **Capabilities** — flags services that declare no `Capabilities.*` whatsoever (clients can't pre-flight).
+
+Each finding has a severity dot (green pass / amber warn / red miss) and points at the annotation by code so you know exactly what to add. Same checks are available on the CLI via `sap-odata lint`.
+
 ## Annotation inspector
 
 The annotation badge in the footer (`N annotations`) is clickable — it opens a modal that lists every annotation the parser captured, beyond whatever the typed views surface. Use it for "does this service declare X?" spelunking or to confirm a CDS annotation round-tripped into `$metadata`.
