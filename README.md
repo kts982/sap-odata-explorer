@@ -77,6 +77,8 @@ sap-odata -p DEV -s API_WAREHOUSE_2 run Warehouse --top 5
 
 | Command | Purpose |
 |---|---|
+| `setup` | Interactive wizard to add a new SAP system |
+| `signout <profile>` | Clear persisted Browser SSO session |
 | `profile list/add/remove/test/where` | Manage saved SAP systems |
 | `alias add/list/remove` | Per-profile short names for services |
 | `services` | List available OData services from the catalog |
@@ -95,12 +97,41 @@ See [CLI-REFERENCE.md](docs/CLI-REFERENCE.md) for all options (or run `sap-odata
 - **Windows SSO** — SPNEGO/Kerberos via Windows SSPI, no credentials needed (domain-joined machines)
 - **Browser SSO** — for SAP systems behind SAML chains like Azure AD + SAP IAS. Opens a webview to complete the sign-in flow and captures the session cookies.
 
+### Setup wizard
+
+The CLI has an interactive wizard for adding profiles:
+
+```bash
+sap-odata setup
+```
+
+This walks through profile name, URL, client, language, auth method, and (for Basic) username/password. At the end it can test the connection.
+
+For Browser SSO, the wizard saves the profile but sign-in happens once from the desktop app (or future VS Code extension). After that, the CLI can use the persisted session.
+
+### Persisted browser SSO sessions
+
+After signing in via the desktop app, the session cookies are stored in the OS keyring (compressed + encrypted). The CLI picks them up automatically on subsequent invocations:
+
+```bash
+# First sign-in: desktop app → click "Sign In" next to profile
+# Then from CLI:
+sap-odata -p PRD services       # uses persisted cookies, no re-auth
+sap-odata -p PRD -s API_X run ... # same
+
+# Clear the persisted session:
+sap-odata signout PRD           # CLI
+# or click "Sign Out" in the desktop app
+```
+
+Sessions expire server-side (typically hours). If the cookie is no longer valid, SAP returns an error and the CLI asks you to sign in again.
+
 ## Security notes
 
 - **TLS verification** is enabled by default. For self-signed SAP certs, set `insecure_tls = true` in the profile's `connections.toml`.
-- **Passwords** stored in OS keyring, never in plaintext by default.
+- **Passwords** stored in OS keyring (Windows Credential Manager / macOS Keychain / Linux Secret Service), never in plaintext by default.
+- **Browser SSO session cookies** (opt-in) are compressed + stored in the same OS keyring under user-only scope. No different in threat model from a browser persisting the same cookies — but easy to clear anytime via `sap-odata signout` or the Sign Out button.
 - **CSP** enforced in the Tauri app — no external CDNs, all assets bundled locally.
-- **Browser SSO sessions** are in-memory only (re-authenticate after app restart).
 
 ## How it compares
 

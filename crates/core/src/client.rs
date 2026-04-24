@@ -102,6 +102,30 @@ impl SapClient {
         Ok(())
     }
 
+    /// Try to load a persisted Browser SSO session from the OS keyring
+    /// and inject its cookies into this client. Returns true if a session
+    /// was loaded, false if none is stored.
+    pub fn try_load_persisted_session(&self, profile_name: &str) -> Result<bool, ODataError> {
+        if !matches!(&self.connection.auth, AuthConfig::Browser) {
+            return Ok(false);
+        }
+        match crate::session::load(profile_name) {
+            Ok(Some(session)) => {
+                self.import_cookie_strings(&session.request_url, &session.cookies)?;
+                debug!(
+                    "Loaded persisted Browser SSO session for '{}' ({} cookies)",
+                    profile_name,
+                    session.cookies.len()
+                );
+                Ok(true)
+            }
+            Ok(None) => Ok(false),
+            Err(e) => Err(ODataError::AuthFailed(format!(
+                "failed to load persisted session: {e}"
+            ))),
+        }
+    }
+
     /// Fetch a CSRF token from the server (required for modifying requests).
     #[instrument(skip(self))]
     pub async fn fetch_csrf_token(&self, service_path: &str) -> Result<String, ODataError> {

@@ -252,14 +252,17 @@ function isBrowserAuthProfile(profileName = currentProfile) {
 }
 
 function updateProfileAuthUi(profileName = currentProfile) {
-  const signInBtn = document.getElementById('btnProfileSignIn');
-  const removeBtn = document.getElementById('btnRemoveProfile');
+  const signInBtn  = document.getElementById('btnProfileSignIn');
+  const signOutBtn = document.getElementById('btnProfileSignOut');
+  const removeBtn  = document.getElementById('btnRemoveProfile');
 
-  // Sign In button: only for browser SSO profiles
+  // Sign In / Sign Out: only for browser SSO profiles
   if (!profileName || !isBrowserAuthProfile(profileName)) {
     signInBtn.classList.add('hidden');
+    signOutBtn.classList.add('hidden');
   } else {
     signInBtn.classList.remove('hidden');
+    signOutBtn.classList.remove('hidden');
   }
 
   // Remove button: shown whenever any profile is selected
@@ -267,6 +270,20 @@ function updateProfileAuthUi(profileName = currentProfile) {
     removeBtn.classList.add('hidden');
   } else {
     removeBtn.classList.remove('hidden');
+  }
+}
+
+async function signOutCurrentProfile() {
+  if (!currentProfile) { setStatus('Select a profile first'); return; }
+  if (!isBrowserAuthProfile(currentProfile)) {
+    setStatus('Sign Out only applies to browser SSO profiles');
+    return;
+  }
+  try {
+    const msg = await invoke('sign_out_profile', { profileName: currentProfile });
+    setStatus(msg);
+  } catch (e) {
+    setStatus('Sign out failed: ' + e);
   }
 }
 
@@ -1460,6 +1477,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Static button wiring ──
   document.getElementById('btnAddProfile').addEventListener('click', showAddProfileModal);
   document.getElementById('btnProfileSignIn').addEventListener('click', signInCurrentProfile);
+  document.getElementById('btnProfileSignOut').addEventListener('click', signOutCurrentProfile);
   document.getElementById('btnRemoveProfile').addEventListener('click', removeCurrentProfile);
   document.getElementById('btnSearch').addEventListener('click', loadService);
   document.getElementById('btnCloseDescribe').addEventListener('click', hideDescribe);

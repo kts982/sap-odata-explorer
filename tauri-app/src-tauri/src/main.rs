@@ -205,6 +205,7 @@ async fn browser_sign_in_for_connection(
     client: String,
     language: String,
     insecure_tls: bool,
+    profile_name: Option<String>,
 ) -> Result<String, String> {
     let request_url = build_browser_probe_url(&base_url, &client, &language);
     let request_url_parsed = Url::parse(&request_url).map_err(|e| format!("Invalid sign-in URL: {e}"))?;
@@ -309,9 +310,19 @@ async fn browser_sign_in_for_connection(
         key.clone(),
         BrowserSession {
             request_url: request_url.clone(),
-            cookies: cookie_strings,
+            cookies: cookie_strings.clone(),
         },
     );
+
+    // Persist to OS keyring if we know the profile name (so the CLI can reuse it).
+    if let Some(ref pname) = profile_name {
+        match sap_odata_core::session::save(pname, &request_url, &cookie_strings) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("Warning: could not persist browser session for '{pname}': {e}");
+            }
+        }
+    }
 
     let _ = auth_window.close();
 
@@ -640,6 +651,8 @@ fn remove_profile(
     }
     let key = browser_session_key(&profile.base_url, &profile.client, &profile.language);
     state.browser_sessions.lock().unwrap().remove(&key);
+    // Also clear persisted browser session from keyring
+    let _ = sap_odata_core::session::clear(&name);
     config::save_config(&cfg, &config_dir.path)
         .map_err(|e| format!("Save error: {e}"))?;
     Ok(format!("Profile '{}' removed", name))
@@ -664,6 +677,7 @@ async fn test_connection(
             client,
             language,
             false,
+            None, // pre-save test — no profile name yet
         )
         .await;
     }
@@ -714,8 +728,26 @@ async fn browser_sign_in_profile(
         profile.client.clone(),
         profile.language.clone(),
         profile.insecure_tls,
+        Some(profile_name),
     )
     .await
+}
+
+#[tauri::command]
+fn sign_out_profile(
+    state: tauri::State<'_, AppState>,
+    profile_name: String,
+) -> Result<String, String> {
+    // Clear in-memory session
+    let (cfg, _) = config::load_config().map_err(|e| format!("Config error: {e}"))?;
+    if let Some(profile) = cfg.connections.get(&profile_name) {
+        let key = browser_session_key(&profile.base_url, &profile.client, &profile.language);
+        state.browser_sessions.lock().unwrap().remove(&key);
+    }
+    // Clear persisted session from keyring
+    sap_odata_core::session::clear(&profile_name)
+        .map_err(|e| format!("Failed to clear session: {e}"))?;
+    Ok(format!("Signed out of '{}'", profile_name))
 }
 
 fn main() {
@@ -733,6 +765,7 @@ fn main() {
             remove_profile,
             test_connection,
             browser_sign_in_profile,
+            sign_out_profile,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

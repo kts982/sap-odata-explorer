@@ -5,4 +5,5 @@ pub mod config;
 pub mod error;
 pub mod metadata;
 pub mod query;
+pub mod session;
 pub mod sspi;

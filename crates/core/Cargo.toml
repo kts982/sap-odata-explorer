@@ -17,6 +17,7 @@ toml.workspace = true
 keyring.workspace = true
 directories.workspace = true
 base64.workspace = true
+flate2.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true

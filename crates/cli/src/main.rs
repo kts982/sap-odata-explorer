@@ -59,6 +59,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Interactive wizard for adding a new SAP system
+    Setup,
+
+    /// Clear persisted Browser SSO session for a profile
+    Signout {
+        /// Profile name
+        name: String,
+    },
+
     /// Manage connection profiles
     Profile {
         #[command(subcommand)]
@@ -282,10 +291,35 @@ async fn main() -> Result<()> {
     if let Commands::Alias { action } = &cli.command {
         return handle_alias_command(action, cli.profile.as_deref());
     }
+    if matches!(&cli.command, Commands::Setup) {
+        return cmd_setup_wizard().await;
+    }
+    if let Commands::Signout { name } = &cli.command {
+        return cmd_signout(name);
+    }
 
     // Resolve connection: profile → env vars → CLI flags
     let connection = resolve_connection(&cli)?;
+    let uses_browser_sso = matches!(&connection.auth, AuthConfig::Browser);
     let sap_client = SapClient::new(connection).context("failed to create SAP client")?;
+
+    // For Browser SSO profiles, try to load persisted cookies from keyring.
+    // If none are present, fail early with a clear message.
+    if uses_browser_sso {
+        if let Some(ref profile_name) = cli.profile {
+            let loaded = sap_client
+                .try_load_persisted_session(profile_name)
+                .context("failed to load persisted session")?;
+            if !loaded {
+                anyhow::bail!(
+                    "Browser SSO profile '{}' has no active session.\n\
+                     Open the desktop app, select this profile and click 'Sign In',\n\
+                     then re-run your command.",
+                    profile_name
+                );
+            }
+        }
+    }
 
     // Resolve service path: alias → catalog lookup → raw path
     let resolved_service = resolve_service_path(&cli, &sap_client).await?;
@@ -297,7 +331,7 @@ async fn main() -> Result<()> {
     };
 
     match &cli.command {
-        Commands::Profile { .. } | Commands::Alias { .. } => unreachable!(),
+        Commands::Profile { .. } | Commands::Alias { .. } | Commands::Setup | Commands::Signout { .. } => unreachable!(),
         Commands::Services { filter, v2, v4, top } => {
             cmd_services(&sap_client, filter.as_deref(), *v2, *v4, *top, cli.json).await
         }
@@ -551,6 +585,189 @@ fn cmd_alias_remove(profile_name: &str, alias_name: &str) -> Result<()> {
 }
 
 // ── Profile commands ──
+
+// ══════════════════════════════════════════════════════════════
+// ── SETUP WIZARD ──
+// ══════════════════════════════════════════════════════════════
+
+async fn cmd_setup_wizard() -> Result<()> {
+    use dialoguer::{theme::ColorfulTheme, Confirm, Input, Password, Select};
+
+    let theme = ColorfulTheme::default();
+
+    println!();
+    println!("SAP OData Explorer — profile setup wizard");
+    println!("─────────────────────────────────────────");
+    println!();
+
+    // Profile name
+    let name: String = Input::with_theme(&theme)
+        .with_prompt("Profile name (e.g. DEV, QAS, PRD)")
+        .validate_with(|input: &String| -> std::result::Result<(), &str> {
+            if input.trim().is_empty() {
+                Err("Name cannot be empty")
+            } else if input.contains(|c: char| c.is_whitespace() || c == '/' || c == '\\') {
+                Err("Name cannot contain whitespace or slashes")
+            } else {
+                Ok(())
+            }
+        })
+        .interact_text()?;
+    let name = name.trim().to_string();
+
+    // Base URL
+    let url: String = Input::with_theme(&theme)
+        .with_prompt("SAP base URL (e.g. https://sap.example.com or https://host:44300)")
+        .validate_with(|input: &String| -> std::result::Result<(), &str> {
+            if !input.starts_with("http://") && !input.starts_with("https://") {
+                Err("URL must start with http:// or https://")
+            } else {
+                Ok(())
+            }
+        })
+        .interact_text()?;
+    let url = url.trim().trim_end_matches('/').to_string();
+
+    // Client
+    let client: String = Input::with_theme(&theme)
+        .with_prompt("SAP client")
+        .default("100".to_string())
+        .interact_text()?;
+
+    // Language
+    let language: String = Input::with_theme(&theme)
+        .with_prompt("Language key")
+        .default("EN".to_string())
+        .interact_text()?;
+
+    // Auth method
+    let auth_modes = &[
+        "Basic (username + password)",
+        "Windows SSO (Kerberos / SPNEGO)",
+        "Browser SSO (Azure AD / SAP IAS / SAML)",
+    ];
+    let auth_idx = Select::with_theme(&theme)
+        .with_prompt("Authentication method")
+        .items(auth_modes)
+        .default(0)
+        .interact()?;
+
+    let (username, password, sso, browser_sso) = match auth_idx {
+        0 => {
+            let user: String = Input::with_theme(&theme)
+                .with_prompt("Username")
+                .interact_text()?;
+            let pass = Password::with_theme(&theme)
+                .with_prompt("Password")
+                .interact()?;
+            (user.trim().to_string(), pass, false, false)
+        }
+        1 => (String::new(), String::new(), true, false),
+        2 => {
+            println!();
+            println!("  Browser SSO needs a one-time sign-in from the desktop app or VS Code extension.");
+            println!("  After signing in there once, this CLI profile will work too —");
+            println!("  cookies are stored securely in the OS keyring.");
+            println!();
+            (String::new(), String::new(), false, true)
+        }
+        _ => unreachable!(),
+    };
+
+    // Build profile — preserve existing aliases if updating
+    let existing_aliases = config::load_config()
+        .ok()
+        .and_then(|(cfg, _)| cfg.connections.get(&name).map(|p| p.aliases.clone()))
+        .unwrap_or_default();
+
+    let profile = ConnectionProfile {
+        base_url: url.clone(),
+        client: client.clone(),
+        language: language.clone(),
+        username: username.clone(),
+        password: None, // goes to keyring
+        sso,
+        browser_sso,
+        insecure_tls: false,
+        aliases: existing_aliases,
+    };
+
+    // Store password in keyring if Basic auth
+    if auth_idx == 0 {
+        match config::set_password_in_keyring(&name, &username, &password) {
+            Ok(()) => println!("  Password stored in OS keyring."),
+            Err(e) => {
+                println!("  Warning: could not store password in OS keyring: {e}");
+                println!("  (Re-run the wizard or set SAP_PASSWORD env var to use this profile.)");
+            }
+        }
+    }
+
+    // Save config
+    let (mut cfg, config_dir) = config::load_config().context("failed to load config")?;
+    cfg.connections.insert(name.clone(), profile);
+    let save_path = if config_dir.path.as_os_str().is_empty() {
+        let dir = config::get_or_create_config_dir()?;
+        config::save_config(&cfg, &dir.path)?
+    } else {
+        config::save_config(&cfg, &config_dir.path)?
+    };
+
+    println!();
+    println!("  Profile '{}' saved to {}", name, save_path.display());
+
+    // Offer to test the connection (except for Browser SSO which needs a webview)
+    if !browser_sso {
+        let do_test = Confirm::with_theme(&theme)
+            .with_prompt("Test connection now?")
+            .default(true)
+            .interact()?;
+        if do_test {
+            println!("  Testing connection...");
+            let conn = SapConnection {
+                base_url: url,
+                client,
+                language,
+                auth: if sso {
+                    AuthConfig::Sso
+                } else {
+                    AuthConfig::Basic { username, password }
+                },
+                insecure_tls: false,
+            };
+            match SapClient::new(conn) {
+                Ok(client) => match client
+                    .ensure_session("/sap/opu/odata/IWFND/CATALOGSERVICE;v=2")
+                    .await
+                {
+                    Ok(()) => println!("  Connection OK."),
+                    Err(e) => println!("  Connection test failed: {e}"),
+                },
+                Err(e) => println!("  Could not create client: {e}"),
+            }
+        }
+    } else {
+        println!();
+        println!("  Next step: open the desktop app, select this profile, and click Sign In.");
+        println!("  After signing in there, CLI commands like");
+        println!("    sap-odata -p {name} services");
+        println!("  will work from this terminal too.");
+    }
+
+    println!();
+    Ok(())
+}
+
+// ══════════════════════════════════════════════════════════════
+// ── SIGNOUT ──
+// ══════════════════════════════════════════════════════════════
+
+fn cmd_signout(name: &str) -> Result<()> {
+    sap_odata_core::session::clear(name)
+        .with_context(|| format!("failed to clear session for '{name}'"))?;
+    println!("  Cleared persisted Browser SSO session for profile '{name}'.");
+    Ok(())
+}
 
 async fn handle_profile_command(action: &ProfileAction) -> Result<()> {
     match action {

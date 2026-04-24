@@ -25,6 +25,8 @@ toml = "0.8"
 keyring = { version = "3", features = ["windows-native"] }
 directories = "6"
 base64 = "0.22"
+flate2 = "1"
+dialoguer = "0.11"
 
 [workspace.dependencies.windows]
 version = "0.61"
