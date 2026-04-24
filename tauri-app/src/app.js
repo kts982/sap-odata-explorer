@@ -933,6 +933,60 @@ async function selectEntity(entitySetName, element) {
 // ── DESCRIBE PANEL ──
 // ══════════════════════════════════════════════════════════════
 
+// SAP view helper: render small pills for property-level restrictions.
+// We only surface *deviations from the default* — filterable/sortable/
+// creatable/updatable are normally true, so showing "no filter", "no sort",
+// "read-only" is what's informative. required_in_filter=true is also
+// visible because it constrains how the user writes $filter.
+function propertyFlagHints(p) {
+  const badges = [];
+  if (p.filterable === false) {
+    badges.push(`<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="sap:filterable=false — server rejects $filter on this column">no filter</span>`);
+  }
+  if (p.sortable === false) {
+    badges.push(`<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="sap:sortable=false — server rejects $orderby on this column">no sort</span>`);
+  }
+  if (p.creatable === false && p.updatable === false) {
+    badges.push(`<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="sap:creatable=false and sap:updatable=false — server assigns this value, clients cannot write it">read-only</span>`);
+  } else {
+    if (p.creatable === false) {
+      badges.push(`<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="sap:creatable=false">no create</span>`);
+    }
+    if (p.updatable === false) {
+      badges.push(`<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="sap:updatable=false">no update</span>`);
+    }
+  }
+  if (p.required_in_filter === true) {
+    badges.push(`<span class="text-[9px] text-ox-amber bg-ox-amberGlow border border-ox-amber/40 rounded-sm px-1 py-px" title="sap:required-in-filter=true — the server requires $filter to constrain this column">req.filter</span>`);
+  }
+  return badges.length ? ' ' + badges.join(' ') : '';
+}
+
+// UI.Criticality → small badge. Fixed levels map to the OData spec
+// (0 Neutral, 1 Negative, 2 Critical, 3 Positive, 5 Information). Path
+// criticality renders as "⇢ TargetProp" so the user can see where the
+// value comes from at runtime.
+function criticalityHint(p) {
+  const c = p.criticality;
+  if (!c) return '';
+  if (c.kind === 'fixed') {
+    const level = c.value;
+    const color = level === 3 ? 'text-ox-green' :
+                  level === 2 ? 'text-ox-amber' :
+                  level === 1 ? 'text-ox-red' :
+                  level === 5 ? 'text-ox-blue' : 'text-ox-dim';
+    const label = level === 3 ? 'positive' :
+                  level === 2 ? 'critical' :
+                  level === 1 ? 'negative' :
+                  level === 5 ? 'info' : 'neutral';
+    return ` <span class="${color} text-[10px]" title="UI.Criticality = ${label}">&#9679;</span>`;
+  }
+  if (c.kind === 'path') {
+    return ` <span class="text-ox-blue text-[10px]" title="UI.Criticality Path = ${escapeHtml(c.value)}">&#8680; ${escapeHtml(c.value)}</span>`;
+  }
+  return '';
+}
+
 function renderDescribe(info) {
   const panel = document.getElementById('describePanel');
   panel.classList.remove('hidden');
@@ -978,8 +1032,10 @@ function renderDescribe(info) {
     const titleHint = sapViewEnabled && info.header_info && info.header_info.title_path === p.name
       ? ' <span class="text-ox-amber text-[10px]" title="Used as UI.HeaderInfo.Title">title</span>'
       : '';
+    const flagHints = sapViewEnabled ? propertyFlagHints(p) : '';
+    const critHint = sapViewEnabled ? criticalityHint(p) : '';
     html += `<tr class="hover:bg-ox-amberGlow cursor-pointer transition-colors" data-action="select" data-field="${escapeHtml(p.name)}">`;
-    html += `<td class="py-0.5 pr-3 text-ox-text">${escapeHtml(p.name)}${textHint}${titleHint}</td>`;
+    html += `<td class="py-0.5 pr-3 text-ox-text">${escapeHtml(p.name)}${textHint}${titleHint}${critHint}${flagHints}</td>`;
     html += `<td class="py-0.5 pr-3 text-ox-dim">${escapeHtml(p.edm_type.replace('Edm.', ''))}</td>`;
     html += `<td class="py-0.5 pr-3 text-center">${keyMark}</td>`;
     html += `<td class="py-0.5 text-ox-muted">${escapeHtml(p.label || '')}</td>`;

@@ -83,6 +83,32 @@ pub struct Property {
     /// human-readable description. Source: `Common.Text` (V4) or
     /// `sap:text` (V2). Example: `MaterialID.text_path = Some("MaterialDescription")`.
     pub text_path: Option<String>,
+    /// Property-level flags. Each is `Some(bool)` only when the source
+    /// metadata explicitly sets the flag; `None` means "use the OData
+    /// default" (generally true for filterable/sortable/creatable/updatable).
+    /// Sources: V2 `sap:filterable` / `sap:sortable` / `sap:creatable` /
+    /// `sap:updatable` / `sap:required-in-filter`. V4 equivalents
+    /// (Capabilities.FilterRestrictions etc.) will extend these in a
+    /// later pass.
+    pub filterable: Option<bool>,
+    pub sortable: Option<bool>,
+    pub creatable: Option<bool>,
+    pub updatable: Option<bool>,
+    pub required_in_filter: Option<bool>,
+    /// Parsed `UI.Criticality` annotation — either a fixed level
+    /// (0 = Neutral, 1 = Negative, 2 = Critical, 3 = Positive,
+    /// 5 = Information per OData spec) or a path to a sibling property
+    /// whose runtime value supplies the level.
+    pub criticality: Option<Criticality>,
+}
+
+/// `UI.Criticality` value. Absent means "no criticality annotation",
+/// not "neutral".
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "lowercase")]
+pub enum Criticality {
+    Fixed(u8),
+    Path(String),
 }
 
 /// Parsed `UI.HeaderInfo` record. All fields are optional — services
@@ -366,6 +392,13 @@ fn parse_entity_types(schema: &roxmltree::Node, version: ODataVersion) -> Vec<En
                     text_path: p
                         .attribute(("http://www.sap.com/Protocols/SAPData", "text"))
                         .map(String::from),
+                    filterable: parse_sap_bool(&p, "filterable"),
+                    sortable: parse_sap_bool(&p, "sortable"),
+                    creatable: parse_sap_bool(&p, "creatable"),
+                    updatable: parse_sap_bool(&p, "updatable"),
+                    required_in_filter: parse_sap_bool(&p, "required-in-filter"),
+                    // Populated later by the V4 annotation pass where applicable.
+                    criticality: None,
                 })
                 .collect();
 
@@ -569,10 +602,10 @@ fn parse_v2_sap_annotations(schema: &roxmltree::Node) -> Vec<RawAnnotation> {
 }
 
 /// Second pass over `<Annotations Target>` blocks that populates typed
-/// accessors on the parsed entity types. Currently handles `UI.HeaderInfo`
-/// and `Common.Text` — the first-tier feature set. Each additional
-/// vocabulary term gets its own branch here, keeping complex Record/
-/// Collection parsing in one place instead of spilling into callers.
+/// accessors on the parsed entity types. Currently handles `UI.HeaderInfo`,
+/// `Common.Text`, and `UI.Criticality`. Each additional vocabulary term
+/// gets its own branch here, keeping complex Record/Collection parsing
+/// in one place instead of spilling into callers.
 fn apply_v4_typed_annotations(
     entity_types: &mut [EntityType],
     schema: &roxmltree::Node,
@@ -605,9 +638,55 @@ fn apply_v4_typed_annotations(
                         }
                     }
                 }
+            } else if lower.ends_with(".criticality") {
+                if let Some((et_name, prop_name)) = target.split_once('/') {
+                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
+                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
+                            if let Some(c) = parse_criticality(&annot) {
+                                prop.criticality = Some(c);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
+}
+
+/// Extract a `UI.Criticality` value from a `<Annotation>` node. Accepts
+/// the three common inline forms: `Path="..."`, `Int="n"`, or
+/// `EnumMember="UI.CriticalityType/Positive"`. Anything else (nested
+/// records, expressions) is ignored for now.
+fn parse_criticality(annot: &roxmltree::Node) -> Option<Criticality> {
+    if let Some(path) = annot.attribute("Path") {
+        return Some(Criticality::Path(path.to_string()));
+    }
+    if let Some(int_str) = annot.attribute("Int") {
+        if let Ok(n) = int_str.parse::<u8>() {
+            return Some(Criticality::Fixed(n));
+        }
+    }
+    if let Some(em) = annot.attribute("EnumMember") {
+        // "UI.CriticalityType/Positive" (or SAP-aliased). Take the last segment.
+        let name = em.rsplit('/').next().unwrap_or(em);
+        let level = match name {
+            "Neutral" | "VeryNegative" => 0, // SAP "VeryNegative" is a legacy alias; treat as 0 to avoid misclassification.
+            "Negative" => 1,
+            "Critical" => 2,
+            "Positive" | "VeryPositive" => 3,
+            "Information" => 5,
+            _ => return None,
+        };
+        return Some(Criticality::Fixed(level));
+    }
+    None
+}
+
+/// Read a V2 `sap:<name>` boolean attribute off a node. Returns `None` if
+/// the attribute isn't present so the caller can distinguish "unspecified"
+/// from "explicitly false".
+fn parse_sap_bool(node: &roxmltree::Node, name: &str) -> Option<bool> {
+    node.attribute((SAP_DATA_NS, name)).map(|v| v == "true")
 }
 
 /// Parse the `Record` inside a `UI.HeaderInfo` annotation. Returns `None`
@@ -1058,6 +1137,70 @@ mod tests {
             .find(|p| p.name == "OrderNumber")
             .unwrap();
         assert!(order.text_path.is_none());
+    }
+
+    #[test]
+    fn test_v2_property_flags() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="1.0" xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx">
+  <edmx:DataServices m:DataServiceVersion="2.0" xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata">
+    <Schema Namespace="ZT" xmlns="http://schemas.microsoft.com/ado/2008/09/edm" xmlns:sap="http://www.sap.com/Protocols/SAPData">
+      <EntityType Name="Mat">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" sap:filterable="false" sap:sortable="false" sap:creatable="false" sap:updatable="false" sap:required-in-filter="true"/>
+        <Property Name="Plain" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="C"><EntitySet Name="Mats" EntityType="ZT.Mat"/></EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let mat = meta.find_entity_type("Mat").unwrap();
+        let id = mat.properties.iter().find(|p| p.name == "ID").unwrap();
+        assert_eq!(id.filterable, Some(false));
+        assert_eq!(id.sortable, Some(false));
+        assert_eq!(id.creatable, Some(false));
+        assert_eq!(id.updatable, Some(false));
+        assert_eq!(id.required_in_filter, Some(true));
+
+        let plain = mat.properties.iter().find(|p| p.name == "Plain").unwrap();
+        // Unspecified sap:* must stay None so callers can distinguish default
+        // from "explicitly false".
+        assert_eq!(plain.filterable, None);
+        assert_eq!(plain.sortable, None);
+    }
+
+    #[test]
+    fn test_v4_criticality_enum_and_path() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="T">
+        <Key><PropertyRef Name="K"/></Key>
+        <Property Name="K" Type="Edm.String" Nullable="false"/>
+        <Property Name="Status" Type="Edm.String"/>
+        <Property Name="Overall" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="C"><EntitySet Name="Ts" EntityType="n.T"/></EntityContainer>
+      <Annotations Target="SAP__self.T/Status">
+        <Annotation Term="SAP__UI.Criticality" EnumMember="SAP__UI.CriticalityType/Positive"/>
+      </Annotations>
+      <Annotations Target="SAP__self.T/Overall">
+        <Annotation Term="UI.Criticality" Path="StatusCriticality"/>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let t = meta.find_entity_type("T").unwrap();
+        let status = t.properties.iter().find(|p| p.name == "Status").unwrap();
+        assert!(matches!(status.criticality, Some(Criticality::Fixed(3))));
+        let overall = t.properties.iter().find(|p| p.name == "Overall").unwrap();
+        match &overall.criticality {
+            Some(Criticality::Path(p)) => assert_eq!(p, "StatusCriticality"),
+            other => panic!("expected Path criticality, got {other:?}"),
+        }
     }
 
     #[test]

@@ -6,7 +6,7 @@ use sap_odata_core::{
     client::SapClient,
     config,
     diagnostics::HttpTraceEntry,
-    metadata::{AnnotationSummary, HeaderInfo},
+    metadata::{AnnotationSummary, Criticality, HeaderInfo},
     query::ODataQuery,
 };
 use serde::{Deserialize, Serialize};
@@ -82,6 +82,12 @@ struct PropertyInfo {
     label: Option<String>,
     is_key: bool,
     text_path: Option<String>,
+    filterable: Option<bool>,
+    sortable: Option<bool>,
+    creatable: Option<bool>,
+    updatable: Option<bool>,
+    required_in_filter: Option<bool>,
+    criticality: Option<Criticality>,
 }
 
 #[derive(Serialize)]
@@ -632,6 +638,12 @@ async fn describe_entity(
                 label: p.label.clone(),
                 is_key: et.keys.contains(&p.name),
                 text_path: p.text_path.clone(),
+                filterable: p.filterable,
+                sortable: p.sortable,
+                creatable: p.creatable,
+                updatable: p.updatable,
+                required_in_filter: p.required_in_filter,
+                criticality: p.criticality.clone(),
             })
             .collect(),
         nav_properties: nav_targets
