@@ -1383,6 +1383,71 @@ function pickValueListRow(rowIndex) {
   filterInput.focus();
 }
 
+// Apply a V2 `sap:display-format` hint to a raw cell value for
+// results-grid rendering. Leaves `$filter`/click-to-filter values
+// untouched — the caller keeps the raw string in data attributes.
+// Common hints SAP services emit:
+//   "Date"        — drop the time portion; handles both V4 ISO 8601
+//                   (YYYY-MM-DDTHH:MM:SS) and V2's `/Date(ms)/`.
+//   "Time"        — keep just HH:MM:SS.
+//   "UpperCase"   — uppercase the whole string.
+//   "NonNegative" — coerce negatives to 0 (spec defines the field as
+//                   non-negative; negative should never appear, but
+//                   surface it as 0 rather than a wrong-looking sign).
+// Anything else falls through unchanged.
+function formatDisplayValue(raw, displayFormat, edmType) {
+  if (!displayFormat || raw === '' || raw === null || raw === undefined) return raw;
+  const fmt = String(displayFormat).toLowerCase();
+  const s = String(raw);
+  switch (fmt) {
+    case 'date':
+      return formatSapDate(s);
+    case 'time':
+      return formatSapTime(s);
+    case 'uppercase':
+      return s.toUpperCase();
+    case 'nonnegative': {
+      const n = Number(s);
+      if (!isNaN(n) && n < 0) return '0';
+      return s;
+    }
+    default:
+      void edmType;
+      return s;
+  }
+}
+
+// Normalize a date-ish SAP value to `YYYY-MM-DD`. Handles:
+//   - V4 ISO timestamps: `2026-04-21T10:15:00Z` → `2026-04-21`
+//   - V2 `/Date(1234567890000)/` (with optional timezone suffix) →
+//     `YYYY-MM-DD` via Date parse
+//   - V2 `Edm.DateTime` already in `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS`
+// Falls back to the raw string if none of those match.
+function formatSapDate(s) {
+  const m = s.match(/^\/Date\((-?\d+)(?:[+-]\d+)?\)\/$/);
+  if (m) {
+    const ts = parseInt(m[1], 10);
+    if (!isNaN(ts)) return new Date(ts).toISOString().slice(0, 10);
+  }
+  const iso = s.match(/^(\d{4}-\d{2}-\d{2})(?:T|$)/);
+  if (iso) return iso[1];
+  return s;
+}
+
+function formatSapTime(s) {
+  // V4 duration-like `PT10H15M` → rebuild as HH:MM:SS (common in V2).
+  const dur = s.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/);
+  if (dur) {
+    const h = String(parseInt(dur[1] || '0', 10)).padStart(2, '0');
+    const m = String(parseInt(dur[2] || '0', 10)).padStart(2, '0');
+    const sec = String(parseInt(dur[3] || '0', 10)).padStart(2, '0');
+    return `${h}:${m}:${sec}`;
+  }
+  const time = s.match(/^(\d{2}:\d{2}(?::\d{2})?)/);
+  if (time) return time[1];
+  return s;
+}
+
 // OData v4 literal formatting by edm type — enough for the picker's
 // `local eq <lit>` clauses. Falls back to single-quoted strings for
 // unknown types since that's what SAP services overwhelmingly expect.
@@ -2499,26 +2564,28 @@ function renderResults(data, elapsedMs, params) {
         html += `<td class="px-3 py-1"><span class="expand-badge text-[10px] px-1.5 py-0.5 rounded-sm font-mono inline-block" data-action="nested" data-key="${storeKey}" data-col="${escapeHtml(col)}">object</span></td>`;
       } else {
         const text = String(val);
-        // SAP View: fold the Common.Text companion into this cell per
-        // UI.TextArrangement. The raw `text` is still what goes into
-        // filter-tooltip data attributes so clicking "equals this value"
-        // uses the key, not the description.
-        let display = text;
-        if (sapShape) {
-          const prop = propByName.get(col);
-          if (prop && prop.text_path) {
-            const companion = row[prop.text_path];
-            const companionText = companion === null || companion === undefined
-              ? ''
-              : String(companion);
-            const arr = prop.text_arrangement || 'textfirst';
-            if (arr === 'textfirst' && companionText) {
-              display = `${companionText} (${text})`;
-            } else if (arr === 'textlast' && companionText) {
-              display = `${text} (${companionText})`;
-            } else if (arr === 'textonly') {
-              display = companionText || text;
-            }
+        // SAP View: apply sap:display-format to the raw value first
+        // (Date strips the time, UpperCase upcases, ...), THEN compose
+        // with Common.Text per UI.TextArrangement. The raw `text` is
+        // still what goes into filter-tooltip data attributes so
+        // click-to-filter uses the unmodified key.
+        const prop = sapShape ? propByName.get(col) : null;
+        const formatted = prop && prop.display_format
+          ? formatDisplayValue(text, prop.display_format, prop.edm_type)
+          : text;
+        let display = formatted;
+        if (sapShape && prop && prop.text_path) {
+          const companion = row[prop.text_path];
+          const companionText = companion === null || companion === undefined
+            ? ''
+            : String(companion);
+          const arr = prop.text_arrangement || 'textfirst';
+          if (arr === 'textfirst' && companionText) {
+            display = `${companionText} (${formatted})`;
+          } else if (arr === 'textlast' && companionText) {
+            display = `${formatted} (${companionText})`;
+          } else if (arr === 'textonly') {
+            display = companionText || formatted;
           }
         }
         html += `<td class="px-3 py-1 text-ox-text whitespace-nowrap cursor-pointer" data-action="cell-click" data-cell-col="${escapeHtml(col)}" data-cell-val="${escapeHtml(text)}">${escapeHtml(display)}</td>`;
