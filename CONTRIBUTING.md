@@ -6,7 +6,7 @@ Thanks for your interest! This is an early-stage project — issues, discussions
 
 **Prerequisites:**
 - Rust 1.85+ ([rustup.rs](https://rustup.rs))
-- Node.js 18+ (for Tauri app frontend build)
+- Node.js 20+ (for Tauri app frontend build; Tailwind CSS v4 requires it)
 - Windows, Linux, or macOS
 
 **Clone and build:**
@@ -40,7 +40,7 @@ sap-odata-explorer/
 │   ├── core/       # Shared library (protocol, auth, HTTP, metadata, query, catalog, config)
 │   └── cli/        # CLI binary (clap)
 └── tauri-app/
-    ├── src/        # Frontend (vanilla HTML + Tailwind CSS + JS)
+    ├── src/        # Frontend (vanilla HTML + Tailwind CSS v4 + JS)
     └── src-tauri/  # Tauri backend (Rust commands wrapping core)
 ```
 

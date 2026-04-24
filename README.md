@@ -28,13 +28,15 @@ This project is aimed at a narrower problem: understand a real SAP OData service
 - **Entity explorer** — inspect entity sets, properties, keys, navigation properties, and labels
 - **Visual query builder** — build `$select`, `$expand`, `$filter`, `$orderby`, `$top`, and `$skip` interactively
 - **Results grid** — view tabular results with expandable nested data from `$expand`
+- **HTTP inspector** — per-tab request/response trace in the desktop app (headers, body preview, timing) with copy-as-curl; same data on the CLI via `--verbose`
+- **SAP-aware error hints** — 404/403/5xx responses get actionable hints pointing at `/IWFND/MAINT_SERVICE`, `/IWFND/ERROR_LOG`, `ST22`, or the browser SSO sign-in flow when appropriate
 - **Connection profiles** — save SAP systems and store Basic-auth passwords in the OS keyring
 - **Three auth modes** — basic auth, Windows SSO (SPNEGO), and browser SSO
 - **Service aliases** — use short names for long service paths
 - **Auto resolution** — type `API_WAREHOUSE_2` and resolve it from the catalog
-- **Tabs** — keep multiple independent workspaces open in the desktop app
-- **Favorites and history** — star services and replay recent queries
-- **Copy helpers** — copy rows, columns, and generated query URLs quickly
+- **Tabs** — keep multiple independent workspaces open, each with its own profile, service, and trace
+- **Favorites and history** — star services (full object cached locally so they appear instantly on profile switch) and replay recent queries
+- **Copy helpers** — copy rows, columns, generated query URLs, request/response bodies, or curl commands
 - **Filter helper** — click a cell value to turn it into a filter
 - **Local-first** — single-binary CLI and desktop app, no server component, no runtime dependencies (Windows / Linux / macOS source builds)
 
@@ -67,6 +69,10 @@ sap-odata -p DEV services -f warehouse
 sap-odata -p DEV -s API_WAREHOUSE_2 entities
 sap-odata -p DEV -s API_WAREHOUSE_2 describe Warehouse
 sap-odata -p DEV -s API_WAREHOUSE_2 run Warehouse --top 5
+
+# Any command with --verbose prints the full HTTP trace to stderr
+# (same data as the desktop app's Inspector, with auth headers redacted).
+sap-odata -v -p DEV -s API_WAREHOUSE_2 run Warehouse --top 1
 ```
 
 If you prefer scripted setup, `sap-odata profile add ...` is still available for direct profile creation.
@@ -166,8 +172,7 @@ The `sap-odata-core` crate holds all protocol logic. CLI and Tauri are thin wrap
 ## Roadmap
 
 Short term:
-- [ ] Raw request/response inspector panel (Tauri) + richer HTTP tracing in the CLI
-- [ ] Better SAP-specific error diagnostics (service not activated, missing auth, common 4xx/5xx patterns)
+- [ ] Surface SAP/UI5 annotations (criticality colors, `Common.Text` arrangement, `Capabilities.*` in the query bar, Fiori-readiness overview) as opt-in views
 - [ ] Auth validation on real federated landscapes (Azure AD + SAP IAS, Okta, ADFS)
 - [ ] Code signing and release pipeline (CI builds for Windows / Linux / macOS, signed Windows artifacts)
 
