@@ -36,10 +36,10 @@ Overlays on the per-property table that appears when you click an entity set:
 
 - **Selection-fields chip bar** — `UI.SelectionFields` becomes a row of clickable chips above `$filter`. Clicking a chip appends `<chip> eq ''` to `$filter` with the cursor parked inside the quotes. Chips for `RequiredProperties` render amber so you see at a glance which ones the server will reject queries without.
 - **"Fiori cols (N)" button** — next to `$select`. Populates `$select` with the column list from `UI.LineItem` (DataField `Value` paths, direct properties only). Augmented with `UI.PresentationVariant.RequestAtLeast` paths; when present the label shows `Fiori cols (N +M)` and the tooltip explains the augment.
-- **"Fiori filter" button** — next to "Fiori cols". Rebuilds `$filter` from the default (no-qualifier) `UI.SelectionVariant`:
+- **"Fiori filter" button** — next to "Fiori cols". Rebuilds `$filter` from a `UI.SelectionVariant`. Services that declare one "empty" variant first (e.g. a "Show All" with just a `Text`/`ID` and no `Parameters`/`SelectOptions`) would otherwise yield an unactionable button — the renderer walks the declared variants and picks the **first one with actual filter content**, so the click always produces something. The button label shows that variant's `Text`; a `+N` suffix signals how many other variants exist. Translation rules:
   - `Parameters` → `name eq <lit>`
   - `SelectOptions` ranges → per-operator translation (see [validator section](#pre-flight-validator) for the operator table)
-  - Qualified variants show as a `+N` count; picking between them is a future enhancement.
+  - A picker across all declared variants is a later enhancement.
 
 ## Results grid
 
@@ -82,6 +82,8 @@ Clicking the `⇒ F4` marker on a property opens a picker modal that fetches the
 Picker behavior:
 
 - **Pre-seeds its `$filter`** from the current main `$filter` — any `In` or `InOut` parameter whose local property is already pinned in the main filter gets echoed into the picker's filter. `Constant` parameters are always echoed.
+- **`$search` input** — shown when the active ValueList says `SearchSupported=true`, *or* when the resolved F4 service declares `Capabilities.SearchRestrictions.Searchable=true` at the entity-set level (SAP's modern F4 services don't put the flag on the mapping record, so the resolver lifts it from the F4 `$metadata`). Press Enter to fetch with the search term applied; V4 emits `$search="term"`, V2 falls back to `search=term`.
+- **Dynamic `$filter` placeholder** — uses the first `ValueListProperty` from the mapping as a hint (e.g. `startswith(EWMWarehouse,'HB')`), so you don't have to cross-reference the mapping line to guess the F4's column names.
 - **Column order** prioritizes `ValueListProperty` names from the parameter mapping, then remaining keys.
 - **On pick**: for every `InOut` and `Out` parameter with a local binding, writes `local_property eq <literal>` into the main `$filter`. Literals are quoted according to the local property's `edm_type` (`Edm.String` wrapped in single quotes, numerics raw, `Edm.Guid` as `guid'...'`, etc.). Clauses already present in the main filter are deduped.
 
@@ -99,7 +101,7 @@ Compact status table. "Status" reflects what `SAP View` actually uses; parser-on
 | `Capabilities.SortRestrictions` | `no sort` pill + validator | ✅ |
 | `Capabilities.InsertRestrictions` | `no create` pill | ✅ |
 | `Capabilities.UpdateRestrictions` | `no update` pill | ✅ |
-| `Capabilities.SearchRestrictions` | Flag parsed; validator pending UI | ✅ partial |
+| `Capabilities.SearchRestrictions` | Drives `$search` input visibility in F4 picker | ✅ |
 | `Capabilities.CountRestrictions` | `$count` validator | ✅ |
 | `Capabilities.ExpandRestrictions` | `$expand` validator | ✅ |
 | `Capabilities.TopSupported` | `$top` validator | ✅ |

@@ -131,6 +131,7 @@ struct QueryParams {
     skip: Option<u32>,
     key: Option<String>,
     count: Option<bool>,
+    search: Option<String>,
 }
 
 #[derive(Clone)]
@@ -753,6 +754,12 @@ async fn run_query(
     if params.count.unwrap_or(false) {
         q = q.count();
     }
+    if let Some(ref term) = params.search {
+        let trimmed = term.trim();
+        if !trimmed.is_empty() {
+            q = q.search(trimmed);
+        }
+    }
 
     match client.query_json(&service_path, &q).await {
         Ok(value) => Ok(CommandOk {
@@ -1148,7 +1155,7 @@ async fn resolve_value_list_reference(
         .fetch_metadata_xml(&resolved_service_path)
         .await
         .map_err(|e| CommandError::with_client(&client, format!("F4 metadata fetch error: {e}")))?;
-    let vl = metadata::parse_value_list_mapping_xml(&xml, &local_property).ok_or_else(|| {
+    let mut vl = metadata::parse_value_list_mapping_xml(&xml, &local_property).ok_or_else(|| {
         CommandError::with_client(
             &client,
             format!(
@@ -1156,6 +1163,23 @@ async fn resolve_value_list_reference(
             ),
         )
     })?;
+    // SAP F4 services don't put `SearchSupported` on the ValueListMapping
+    // record itself — they declare `Capabilities.SearchRestrictions.
+    // Searchable` at the entity-set level on the F4 service. Parse the
+    // F4 metadata once more to lift that flag onto the returned
+    // `ValueList.search_supported` so the picker's $search input
+    // visibility check works uniformly for both shapes. Parse errors
+    // here are swallowed — they don't invalidate the mapping we already
+    // parsed successfully.
+    if vl.search_supported.is_none() {
+        if let Ok(f4_meta) = metadata::parse_metadata(&xml) {
+            if let Some(et) = f4_meta.entity_type_for_set(&vl.collection_path) {
+                if et.searchable == Some(true) {
+                    vl.search_supported = Some(true);
+                }
+            }
+        }
+    }
     Ok(CommandOk {
         data: ResolvedValueList {
             resolved_service_path,

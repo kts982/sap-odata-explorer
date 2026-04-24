@@ -1176,8 +1176,12 @@ async function openValueListPicker(propertyName) {
   const subtitle = document.getElementById('vlSubtitle');
   const mapping = document.getElementById('vlMapping');
   const filter = document.getElementById('vlFilter');
+  const search = document.getElementById('vlSearch');
   const results = document.getElementById('vlResults');
   const status = document.getElementById('vlStatus');
+  // Fresh opens start clean — leftover search state from a previous
+  // picker run would confuse the user.
+  if (search) { search.value = ''; search.classList.add('hidden'); }
   modal.classList.remove('hidden');
   if (hasInline) {
     _vlActiveValueList = prop.value_list;
@@ -1186,6 +1190,8 @@ async function openValueListPicker(propertyName) {
     subtitle.textContent = prop.value_list.collection_path;
     mapping.textContent = `Mapping: ${valueListSummary(prop.value_list)}`;
     filter.value = buildInitialVlFilter(prop, info, prop.value_list);
+    updateVlSearchVisibility();
+    updateVlFilterPlaceholder();
     results.innerHTML = '<div class="p-4 text-ox-dim text-[11px]">Click Fetch to load values.</div>';
     status.textContent = 'Ready.';
     setTimeout(() => filter.focus(), 0);
@@ -1230,9 +1236,44 @@ async function openValueListPicker(propertyName) {
   subtitle.textContent = resolved.value_list.collection_path;
   mapping.textContent = `Mapping: ${valueListSummary(resolved.value_list)}`;
   filter.value = buildInitialVlFilter(prop, info, resolved.value_list);
+  updateVlSearchVisibility();
+  updateVlFilterPlaceholder();
   results.innerHTML = '<div class="p-4 text-ox-dim text-[11px]">Click Fetch to load values.</div>';
   status.textContent = `Resolved → ${resolved.resolved_service_path}`;
   setTimeout(() => filter.focus(), 0);
+}
+
+// Show the $search input only when the active ValueList declares
+// SearchSupported=true. Hidden otherwise so services that don't accept
+// $search don't offer a dead control that would 400 on fetch.
+function updateVlSearchVisibility() {
+  const search = document.getElementById('vlSearch');
+  if (!search) return;
+  const supported = _vlActiveValueList && _vlActiveValueList.search_supported === true;
+  if (supported) {
+    search.classList.remove('hidden');
+  } else {
+    search.classList.add('hidden');
+    search.value = '';
+  }
+}
+
+// Set the picker's $filter placeholder to a workable example using the
+// first ValueListProperty from the active mapping (usually the key
+// column). Saves the user from guessing that the F4's property name
+// is `EWMWarehouse` and not `Warehouse`.
+function updateVlFilterPlaceholder() {
+  const filter = document.getElementById('vlFilter');
+  if (!filter) return;
+  const vl = _vlActiveValueList;
+  const firstParam = vl && Array.isArray(vl.parameters)
+    ? vl.parameters.find(p => p && p.value_list_property)
+    : null;
+  if (firstParam) {
+    filter.placeholder = `$filter (e.g. startswith(${firstParam.value_list_property},'HB'))`;
+  } else {
+    filter.placeholder = '$filter';
+  }
 }
 
 function closeValueListPicker() {
@@ -1283,6 +1324,10 @@ async function fetchValueListRows() {
   const servicePath = _vlActiveServicePath;
   if (!prop || !vl || !servicePath) return;
   const filter = document.getElementById('vlFilter').value.trim();
+  const searchEl = document.getElementById('vlSearch');
+  const searchTerm = (searchEl && !searchEl.classList.contains('hidden'))
+    ? searchEl.value.trim()
+    : '';
   const top = parseInt(document.getElementById('vlTop').value, 10) || 100;
   const status = document.getElementById('vlStatus');
   const results = document.getElementById('vlResults');
@@ -1292,6 +1337,7 @@ async function fetchValueListRows() {
     const params = {
       entity_set: vl.collection_path,
       filter: filter || null,
+      search: searchTerm || null,
       top,
     };
     const data = await timedInvoke('run_query', {
@@ -1601,36 +1647,61 @@ function renderFioriFilterButton(info) {
     btn.removeAttribute('data-variant-index');
     return;
   }
-  // Parser puts the default variant at index 0; fall back to index 0 if
-  // only qualified variants exist (rare).
-  const variant = variants[0];
-  const clause = buildSelectionVariantFilter(variant, info);
-  if (!clause) {
+  // Pick the first variant that actually builds a non-empty $filter.
+  // Services sometimes declare an empty "default view" variant (e.g.
+  // "Show All") first and only put real filter clauses on qualified
+  // variants — preferring a populated one gives the user a useful
+  // result on the single click.
+  let chosenIndex = -1;
+  let chosenClause = '';
+  for (let i = 0; i < variants.length; i++) {
+    const clause = buildSelectionVariantFilter(variants[i], info);
+    if (clause) {
+      chosenIndex = i;
+      chosenClause = clause;
+      break;
+    }
+  }
+  if (chosenIndex === -1) {
+    // None of the variants produced an actionable filter — hide
+    // rather than offer a dead button.
     btn.classList.add('hidden');
     return;
   }
+  const variant = variants[chosenIndex];
   btn.classList.remove('hidden');
-  const qualifiedCount = variants.filter(v => v.qualifier).length;
+  const totalCount = variants.length;
   const label = variant.text
     ? `Fiori filter: ${variant.text}`
     : 'Fiori filter';
-  const suffix = qualifiedCount && !variant.qualifier
-    ? ` (+${qualifiedCount})`
-    : '';
+  const suffix = totalCount > 1 ? ` (+${totalCount - 1})` : '';
   btn.textContent = label + suffix;
-  const preview = clause.length > 80 ? clause.slice(0, 80) + '…' : clause;
-  btn.title = `$filter ← ${preview}${qualifiedCount && !variant.qualifier ? `\n\n${qualifiedCount} qualified variant(s) not yet exposed.` : ''}`;
-  btn.dataset.variantIndex = '0';
+  const preview = chosenClause.length > 80 ? chosenClause.slice(0, 80) + '…' : chosenClause;
+  const extraLines = [];
+  if (totalCount > 1) {
+    extraLines.push(`${totalCount - 1} additional variant(s) not yet exposed in a picker.`);
+  }
+  if (variant.qualifier) {
+    extraLines.push(`Qualifier: ${variant.qualifier}`);
+  }
+  btn.title = `$filter ← ${preview}${extraLines.length ? '\n\n' + extraLines.join('\n') : ''}`;
+  btn.dataset.variantIndex = String(chosenIndex);
 }
 
 // Replace $filter with the clause built from a UI.SelectionVariant.
 // Overwrites rather than merges (same reasoning as "Fiori cols" — the
-// action's meaning is "show me this variant's filter as-is").
+// action's meaning is "show me this variant's filter as-is"). Uses the
+// variant index stashed by renderFioriFilterButton so an empty leading
+// variant doesn't get picked over a populated qualified one.
 function applyFioriFilter() {
   const tab = getActiveTab();
   const info = tab && tab._lastDescribeInfo;
   if (!info || !Array.isArray(info.selection_variants) || info.selection_variants.length === 0) return;
-  const variant = info.selection_variants[0];
+  const btn = document.getElementById('btnFioriFilter');
+  const idx = btn && btn.dataset.variantIndex
+    ? parseInt(btn.dataset.variantIndex, 10)
+    : 0;
+  const variant = info.selection_variants[idx] || info.selection_variants[0];
   const clause = buildSelectionVariantFilter(variant, info);
   if (!clause) return;
   const input = document.getElementById('qFilter');
@@ -2945,6 +3016,9 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btnVlClose').addEventListener('click', closeValueListPicker);
   document.getElementById('btnVlFetch').addEventListener('click', fetchValueListRows);
   document.getElementById('vlFilter').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') fetchValueListRows();
+  });
+  document.getElementById('vlSearch').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') fetchValueListRows();
   });
   updateSapViewToggleState();

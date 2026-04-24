@@ -13,6 +13,7 @@ pub struct ODataQuery {
     top: Option<u32>,
     skip: Option<u32>,
     count: bool,
+    search: Option<String>,
     format: Option<String>,
     version: Option<ODataVersion>,
     custom: Vec<(String, String)>,
@@ -75,6 +76,14 @@ impl ODataQuery {
         self
     }
 
+    /// Set the free-text search term. V4 emits `$search="term"` (with
+    /// double quotes per spec), V2 falls back to SAP's legacy
+    /// `search=term` custom query param.
+    pub fn search(mut self, term: &str) -> Self {
+        self.search = Some(term.to_string());
+        self
+    }
+
     /// Set the OData version (affects query syntax).
     pub fn version(mut self, v: ODataVersion) -> Self {
         self.version = Some(v);
@@ -127,6 +136,18 @@ impl ODataQuery {
             match self.version {
                 Some(ODataVersion::V4) => params.push("$count=true".to_string()),
                 _ => params.push("$inlinecount=allpages".to_string()),
+            }
+        }
+        if let Some(ref term) = self.search {
+            // V4 requires the search phrase in double quotes. V2 SAP
+            // services accept a bare `search=term` custom param.
+            match self.version {
+                Some(ODataVersion::V4) => {
+                    params.push(format!("$search=\"{term}\""));
+                }
+                _ => {
+                    params.push(format!("search={term}"));
+                }
             }
         }
         if let Some(ref fmt) = self.format {
@@ -199,5 +220,22 @@ mod tests {
     fn test_custom_params() {
         let q = ODataQuery::new("OrderSet").custom("search", "test");
         assert_eq!(q.build(), "OrderSet?search=test");
+    }
+
+    #[test]
+    fn test_search_v4_quotes_term() {
+        let q = ODataQuery::new("OrderSet")
+            .version(ODataVersion::V4)
+            .search("HB");
+        assert!(q.build().contains("$search=\"HB\""));
+    }
+
+    #[test]
+    fn test_search_v2_uses_bare_term() {
+        let q = ODataQuery::new("OrderSet")
+            .version(ODataVersion::V2)
+            .search("HB");
+        assert!(q.build().contains("search=HB"));
+        assert!(!q.build().contains("$search"));
     }
 }

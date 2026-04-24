@@ -703,7 +703,10 @@
         <button id="btnVlClose" class="text-ox-dim hover:text-ox-text text-xs px-2 py-0.5 rounded-sm hover:bg-ox-hover">close</button>
       </div>
       <div class="px-5 py-2 border-b border-ox-border shrink-0 flex items-center gap-2">
-        <input id="vlFilter" type="text" placeholder="$filter (e.g. startswith(Warehouse,'HB'))"
+        <input id="vlSearch" type="text" placeholder="$search"
+          class="hidden bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-32 outline-hidden"
+          title="Free-text search ($search) — available because the value-help service declares SearchSupported / SearchRestrictions.Searchable" />
+        <input id="vlFilter" type="text" placeholder="$filter"
           class="flex-1 bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 outline-hidden" />
         <input id="vlTop" type="number" value="100" min="1" max="1000"
           class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-16 outline-hidden" />
