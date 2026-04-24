@@ -2171,17 +2171,19 @@ function renderFioriReadinessPanel(info) {
     counts.miss ? `<span class="text-ox-red">&#9679; ${counts.miss} miss</span>` : '',
   ].filter(Boolean).join(' <span class="text-ox-border">·</span> ');
   // Group by category, preserve original order within each group.
-  const order = ['identity', 'listreport', 'filtering', 'fields', 'capabilities'];
+  const order = ['profile', 'identity', 'listreport', 'filtering', 'fields', 'integrity', 'capabilities'];
   const byCategory = new Map(order.map(k => [k, []]));
   for (const f of findings) {
     if (!byCategory.has(f.category)) byCategory.set(f.category, []);
     byCategory.get(f.category).push(f);
   }
   const pretty = {
+    profile: 'Profile',
     identity: 'Identity',
     listreport: 'List report',
     filtering: 'Filtering',
     fields: 'Fields',
+    integrity: 'Integrity',
     capabilities: 'Capabilities',
   };
   let html = '<div class="mt-4 border border-ox-border rounded-sm overflow-hidden">';

@@ -169,6 +169,7 @@ Categories:
   - `UI.Hidden` columns appearing in `SelectionFields` (Fiori would both hide and offer to filter on it)
   - `Common.ValueList` without an `InOut`/`Out` parameter (picker can't write back on selection)
   - `UI.TextArrangement` on a property with no `Common.Text` to arrange
+- **Integrity rules** — annotations whose Path/target references a column that doesn't exist on the entity. Typical cause: a column renamed in one CDS layer without the annotation being propagated. Covers `Common.Text`, `Measures.Unit`, `Measures.ISOCurrency`, `UI.Criticality` (Path form), `UI.HeaderInfo.Title`, `Common.SemanticKey`, `UI.SelectionFields`, `UI.LineItem.DataField.Value`, and `UI.PresentationVariant.SortOrder` entries. Each finding names the source annotation and the bad target so the CDS-side fix is obvious.
 
 Each finding has a severity dot (green pass / amber warn / red miss), a short message, and — for actionable warnings / misses — an **ABAP CDS fix hint** plus a one-line "what Fiori does with it" explanation. So `"No UI.SelectionFields"` comes paired with `ABAP CDS: @UI.selectionField` and `"Populates the Fiori filter bar..."`, which means the linter *teaches* rather than just grades.
 

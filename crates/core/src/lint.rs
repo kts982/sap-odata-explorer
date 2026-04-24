@@ -31,6 +31,11 @@ pub enum LintCategory {
     Filtering,
     Fields,
     Capabilities,
+    /// Dangling-reference checks — annotations whose Path/target
+    /// points at a property name that doesn't exist on the entity.
+    /// Usually the result of a rename in one CDS layer that wasn't
+    /// propagated to the annotations.
+    Integrity,
 }
 
 /// Detected shape of an entity — different service kinds have
@@ -506,6 +511,219 @@ pub fn evaluate_entity_type_with_profile(et: &EntityType, profile: LintProfile) 
         }
     }
 
+    // Integrity (dangling-reference) checks ─────────────────────────────
+    // These flag annotations whose Path/target references a property
+    // that doesn't exist on the entity. The usual cause is a column
+    // renamed in one CDS layer without the annotation being updated;
+    // the service still serves metadata but the target column won't
+    // resolve at runtime. Each finding names the source annotation
+    // and the bad target so the fix is obvious.
+    let prop_names: std::collections::HashSet<&str> =
+        et.properties.iter().map(|p| p.name.as_str()).collect();
+    {
+        let dangling: Vec<String> = et
+            .properties
+            .iter()
+            .filter_map(|p| {
+                p.text_path
+                    .as_ref()
+                    .filter(|target| !prop_names.contains(target.as_str()))
+                    .map(|target| format!("{} → {}", p.name, target))
+            })
+            .collect();
+        if !dangling.is_empty() {
+            out.push(actionable(
+                LintSeverity::Warn,
+                LintCategory::Integrity,
+                "text_target_missing",
+                format!(
+                    "Common.Text points at a column that doesn't exist on this entity: {}",
+                    dangling.join(", "),
+                ),
+                "@ObjectModel.text.element",
+                "The referenced description column isn't reachable — Fiori will render the raw code with no text.",
+            ));
+        }
+    }
+    {
+        let dangling: Vec<String> = et
+            .properties
+            .iter()
+            .filter_map(|p| {
+                p.unit_path
+                    .as_ref()
+                    .filter(|target| !prop_names.contains(target.as_str()))
+                    .map(|target| format!("{} → {}", p.name, target))
+            })
+            .collect();
+        if !dangling.is_empty() {
+            out.push(actionable(
+                LintSeverity::Warn,
+                LintCategory::Integrity,
+                "unit_target_missing",
+                format!(
+                    "Measures.Unit / sap:unit points at a column that doesn't exist: {}",
+                    dangling.join(", "),
+                ),
+                "@Semantics.quantity.unitOfMeasure",
+                "The quantity column has no resolvable unit companion — Fiori will show the raw number.",
+            ));
+        }
+    }
+    {
+        let dangling: Vec<String> = et
+            .properties
+            .iter()
+            .filter_map(|p| {
+                p.iso_currency_path
+                    .as_ref()
+                    .filter(|target| !prop_names.contains(target.as_str()))
+                    .map(|target| format!("{} → {}", p.name, target))
+            })
+            .collect();
+        if !dangling.is_empty() {
+            out.push(actionable(
+                LintSeverity::Warn,
+                LintCategory::Integrity,
+                "currency_target_missing",
+                format!(
+                    "Measures.ISOCurrency points at a column that doesn't exist: {}",
+                    dangling.join(", "),
+                ),
+                "@Semantics.amount.currencyCode",
+                "The amount column has no resolvable currency companion — Fiori can't format the value.",
+            ));
+        }
+    }
+    {
+        let dangling: Vec<String> = et
+            .properties
+            .iter()
+            .filter_map(|p| match &p.criticality {
+                Some(crate::metadata::Criticality::Path(path))
+                    if !prop_names.contains(path.as_str()) =>
+                {
+                    Some(format!("{} → {}", p.name, path))
+                }
+                _ => None,
+            })
+            .collect();
+        if !dangling.is_empty() {
+            out.push(actionable(
+                LintSeverity::Warn,
+                LintCategory::Integrity,
+                "criticality_target_missing",
+                format!(
+                    "UI.Criticality Path references a column that doesn't exist: {}",
+                    dangling.join(", "),
+                ),
+                "@UI.criticality (Path form)",
+                "Cell coloring depends on a column that won't resolve — cells will never get colored.",
+            ));
+        }
+    }
+    if let Some(hi) = &et.header_info {
+        if let Some(title) = &hi.title_path {
+            if !prop_names.contains(title.as_str()) {
+                out.push(actionable(
+                    LintSeverity::Warn,
+                    LintCategory::Integrity,
+                    "header_info_title_missing",
+                    format!(
+                        "UI.HeaderInfo.Title references a column that doesn't exist: {}",
+                        title,
+                    ),
+                    "@UI.headerInfo.title.value",
+                    "Object-page title won't resolve — Fiori will fall back to the technical type name.",
+                ));
+            }
+        }
+    }
+    {
+        let bad: Vec<&str> = et
+            .semantic_keys
+            .iter()
+            .filter(|n| !prop_names.contains(n.as_str()))
+            .map(String::as_str)
+            .collect();
+        if !bad.is_empty() {
+            out.push(actionable(
+                LintSeverity::Warn,
+                LintCategory::Integrity,
+                "semantic_key_target_missing",
+                format!(
+                    "Common.SemanticKey references column(s) that don't exist: {}",
+                    bad.join(", "),
+                ),
+                "@ObjectModel.semanticKey",
+                "The business-key hint points at columns Fiori can't resolve.",
+            ));
+        }
+    }
+    {
+        let bad: Vec<&str> = et
+            .selection_fields
+            .iter()
+            .filter(|n| !prop_names.contains(n.as_str()))
+            .map(String::as_str)
+            .collect();
+        if !bad.is_empty() {
+            out.push(actionable(
+                LintSeverity::Warn,
+                LintCategory::Integrity,
+                "selection_field_target_missing",
+                format!(
+                    "UI.SelectionFields references column(s) that don't exist: {}",
+                    bad.join(", "),
+                ),
+                "@UI.selectionField",
+                "Filter-bar chip will be dead — server will 400 when the user types a value.",
+            ));
+        }
+    }
+    {
+        let bad: Vec<String> = et
+            .line_item
+            .iter()
+            .filter(|f| !prop_names.contains(f.value_path.as_str()))
+            .map(|f| f.value_path.clone())
+            .collect();
+        if !bad.is_empty() {
+            out.push(actionable(
+                LintSeverity::Warn,
+                LintCategory::Integrity,
+                "line_item_target_missing",
+                format!(
+                    "UI.LineItem DataField references column(s) that don't exist: {}",
+                    bad.join(", "),
+                ),
+                "@UI.lineItem",
+                "Declared list-report columns point at properties that aren't on the entity — they'll silently drop at runtime.",
+            ));
+        }
+    }
+    {
+        let bad: Vec<&str> = et
+            .sort_order
+            .iter()
+            .filter(|s| !prop_names.contains(s.property.as_str()))
+            .map(|s| s.property.as_str())
+            .collect();
+        if !bad.is_empty() {
+            out.push(actionable(
+                LintSeverity::Warn,
+                LintCategory::Integrity,
+                "sort_order_target_missing",
+                format!(
+                    "UI.PresentationVariant.SortOrder references column(s) that don't exist: {}",
+                    bad.join(", "),
+                ),
+                "@UI.presentationVariant.sortOrder",
+                "Declared default sort won't run — Fiori silently drops the clause.",
+            ));
+        }
+    }
+
     // Capabilities ─────────────────────────────────────────────────────
     // We don't reject services that omit these entirely (many transactional
     // services do), but flag it as a hint.
@@ -802,6 +1020,76 @@ mod tests {
             .find(|f| f.code == "text_arrangement_lonely");
         assert!(lonely.is_some(), "should flag lonely TextArrangement on Product");
         assert!(lonely.unwrap().message.contains("Product"));
+    }
+
+    #[test]
+    fn integrity_dangling_text_and_line_item_targets() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="Product" Type="Edm.String"/>
+        <Property Name="Warehouse" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType/Product">
+        <Annotation Term="SAP__common.Text" Path="ProductDescription"/>
+      </Annotations>
+      <Annotations Target="SAP__self.OrderType">
+        <Annotation Term="SAP__UI.LineItem">
+          <Collection>
+            <Record Type="UI.DataField"><PropertyValue Property="Value" Path="Product"/></Record>
+            <Record Type="UI.DataField"><PropertyValue Property="Value" Path="RenamedColumn"/></Record>
+          </Collection>
+        </Annotation>
+        <Annotation Term="SAP__UI.SelectionFields">
+          <Collection>
+            <PropertyPath>Warehouse</PropertyPath>
+            <PropertyPath>OldWarehouse</PropertyPath>
+          </Collection>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let et = meta.find_entity_type("OrderType").unwrap();
+        let findings = evaluate_entity_type(et);
+        let by_code: std::collections::HashMap<_, _> =
+            findings.iter().map(|f| (f.code, f)).collect();
+        // Common.Text on Product points at missing "ProductDescription".
+        assert!(
+            by_code
+                .get("text_target_missing")
+                .map(|f| f.message.contains("ProductDescription"))
+                .unwrap_or(false),
+            "dangling text target should be flagged",
+        );
+        // LineItem references "RenamedColumn" which doesn't exist.
+        assert!(
+            by_code
+                .get("line_item_target_missing")
+                .map(|f| f.message.contains("RenamedColumn"))
+                .unwrap_or(false),
+            "dangling LineItem target should be flagged",
+        );
+        // SelectionFields references "OldWarehouse" which doesn't exist.
+        assert!(
+            by_code
+                .get("selection_field_target_missing")
+                .map(|f| f.message.contains("OldWarehouse"))
+                .unwrap_or(false),
+            "dangling SelectionField target should be flagged",
+        );
+        // All integrity findings should be warns.
+        for (_, f) in &by_code {
+            if f.category == LintCategory::Integrity {
+                assert_eq!(f.severity, LintSeverity::Warn);
+            }
+        }
     }
 
     #[test]

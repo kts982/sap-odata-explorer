@@ -174,7 +174,6 @@ The `sap-odata-core` crate holds all protocol logic. CLI and Tauri are thin wrap
 ## Roadmap
 
 Short term:
-- [ ] ABAP-CDS convention warnings (complement to the CDS fix hints already shipped) — flag violations of `@ObjectModel.*` / `@VDM.*` / `@Consumption.*` patterns, e.g. "`text.element` points at a non-text column", "C_* view without VDM.usage.type"
 - [ ] V2 F4 convention scan (`sap:value-list` → guess an `*_VH` entity set → drive the picker)
 - [ ] Auth validation on real federated landscapes (Azure AD + SAP IAS, Okta, ADFS)
 - [ ] Code signing and release pipeline (CI builds for Windows / Linux / macOS, signed Windows artifacts)
