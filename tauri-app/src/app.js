@@ -1022,6 +1022,22 @@ function validateQueryRestrictions(params, info) {
   return issues;
 }
 
+// Show or hide the amber warnings strip above the results. An empty
+// list hides it. Called by executeQuery and by the SAP-view toggle so
+// stale warnings don't linger after the user flips the mode off.
+function showSapViewWarnings(issues) {
+  const strip = document.getElementById('sapViewWarnings');
+  const list = document.getElementById('sapViewWarningsList');
+  if (!strip || !list) return;
+  if (!issues || issues.length === 0) {
+    strip.classList.add('hidden');
+    list.textContent = '';
+    return;
+  }
+  strip.classList.remove('hidden');
+  list.textContent = issues.map(i => `• ${i}`).join('\n');
+}
+
 // Render the "selection fields" chip bar above the query inputs. Only
 // visible when SAP View is on, the entity type has UI.SelectionFields,
 // and we're looking at that entity's describe panel. Clicking a chip
@@ -1220,23 +1236,21 @@ async function executeQuery(asJson = false) {
     count:   false,
   };
 
-  // SAP View pre-flight: when enabled, catch queries that target
-  // non-filterable / non-sortable properties or omit required ones before
-  // SAP responds with a 400. Disabled by default so the raw-data flow
-  // stays unopinionated.
+  // SAP View pre-flight: when enabled, surface restriction warnings
+  // without blocking. Annotations describe what Fiori would do; SAP
+  // servers are often more permissive than the metadata claims, so the
+  // server's response is the final word. We just make the context
+  // visible before hitting send.
   if (sapViewEnabled) {
     const tab = getActiveTab();
     const info = tab && tab._lastDescribeInfo;
     if (info && info.name && currentEntitySet === document.getElementById('queryEntitySet').textContent) {
-      const issues = validateQueryRestrictions(params, info);
-      if (issues.length) {
-        const message = issues.map(i => `• ${i}`).join('\n');
-        setStatus(`Blocked by Capabilities: ${issues.length} issue(s). Toggle SAP View off to override.`);
-        document.getElementById('resultsArea').innerHTML =
-          `<div class="p-4 text-ox-red text-sm whitespace-pre-wrap font-mono">SAP View blocked this query:\n\n${escapeHtml(message)}</div>`;
-        return;
-      }
+      showSapViewWarnings(validateQueryRestrictions(params, info));
+    } else {
+      showSapViewWarnings([]);
     }
+  } else {
+    showSapViewWarnings([]);
   }
 
   setStatus(`Querying ${currentEntitySet}...`);
@@ -1637,6 +1651,8 @@ function toggleSapView() {
     // No cached describe — still hide any stale chip bar.
     renderSelectionFieldsBar(null);
   }
+  // Clear any lingering warnings from the previous mode.
+  if (!sapViewEnabled) showSapViewWarnings([]);
 }
 
 function toggleTraceInspector() {
@@ -2162,6 +2178,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btnTraceClose').addEventListener('click', hideTraceInspector);
   document.getElementById('btnSapView').addEventListener('click', toggleSapView);
   updateSapViewToggleState();
+  document.getElementById('btnSapViewWarningsDismiss').addEventListener('click', () => showSapViewWarnings([]));
   document.getElementById('btnHistoryToggle').addEventListener('click', () => {
     const panel = document.getElementById('historyPanel');
     const tab = getActiveTab();

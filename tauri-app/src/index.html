@@ -565,6 +565,15 @@
         <span id="statTiming"></span>
       </div>
 
+      <!-- SAP View warnings strip (pre-flight restriction hints) -->
+      <div id="sapViewWarnings" class="hidden px-4 py-1.5 bg-ox-amberGlow border-b border-ox-amber/30 text-ox-amber text-[11px] font-mono shrink-0">
+        <div class="flex items-start gap-2">
+          <span class="shrink-0">&#9888;</span>
+          <div id="sapViewWarningsList" class="flex-1 whitespace-pre-wrap"></div>
+          <button id="btnSapViewWarningsDismiss" class="shrink-0 text-ox-amber/70 hover:text-ox-amber" title="Dismiss">&#215;</button>
+        </div>
+      </div>
+
       <!-- Results area -->
       <div id="resultsArea" class="flex-1 overflow-auto">
         <div class="flex items-center justify-center h-full">
