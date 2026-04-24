@@ -190,6 +190,21 @@ enum Commands {
 
     /// Fetch and display the raw $metadata XML
     Metadata,
+
+    /// List every SAP/UI5 annotation parsed from `$metadata`, grouped
+    /// by vocabulary namespace. Useful for answering "does this
+    /// service declare X?" without re-reading the raw XML.
+    Annotations {
+        /// Filter to a specific namespace (e.g. "UI", "Common",
+        /// "Capabilities"). Case-insensitive. Omit to list all.
+        #[arg(long)]
+        namespace: Option<String>,
+
+        /// Substring match applied to Term + Target + Value +
+        /// Qualifier (case-insensitive).
+        #[arg(long)]
+        filter: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -420,6 +435,10 @@ async fn main() -> Result<()> {
             Commands::Metadata => {
                 let svc = require_service()?;
                 cmd_metadata(&sap_client, &svc).await
+            }
+            Commands::Annotations { namespace, filter } => {
+                let svc = require_service()?;
+                cmd_annotations(&sap_client, &svc, cli.json, namespace.clone(), filter.clone()).await
             }
         }
     }
@@ -1542,6 +1561,82 @@ async fn cmd_metadata(client: &SapClient, service: &str) -> Result<()> {
         .await
         .context("failed to fetch metadata")?;
     println!("{xml}");
+    Ok(())
+}
+
+async fn cmd_annotations(
+    client: &SapClient,
+    service: &str,
+    as_json: bool,
+    namespace: Option<String>,
+    filter: Option<String>,
+) -> Result<()> {
+    let meta = client
+        .fetch_metadata(service)
+        .await
+        .context("failed to fetch metadata")?;
+
+    // Optional filters applied in order: namespace (exact-ish match) +
+    // free-text substring across term/target/value/qualifier.
+    let ns_needle = namespace.as_deref().map(|s| s.to_ascii_lowercase());
+    let text_needle = filter.as_deref().map(|s| s.to_ascii_lowercase());
+    let filtered: Vec<_> = meta
+        .annotations
+        .into_iter()
+        .filter(|a| {
+            if let Some(ns) = &ns_needle {
+                if a.namespace.to_ascii_lowercase() != *ns {
+                    return false;
+                }
+            }
+            if let Some(n) = &text_needle {
+                let hay = format!(
+                    "{} {} {} {}",
+                    a.term,
+                    a.target,
+                    a.value.as_deref().unwrap_or(""),
+                    a.qualifier.as_deref().unwrap_or(""),
+                )
+                .to_ascii_lowercase();
+                if !hay.contains(n) {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
+
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&filtered)?);
+        return Ok(());
+    }
+
+    if filtered.is_empty() {
+        println!("No annotations match the filters.");
+        return Ok(());
+    }
+
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL)
+        .set_header(vec![
+            Cell::new("Namespace").fg(Color::Cyan),
+            Cell::new("Term").fg(Color::Cyan),
+            Cell::new("Target").fg(Color::Cyan),
+            Cell::new("Value").fg(Color::Cyan),
+            Cell::new("Qualifier").fg(Color::Cyan),
+        ]);
+    for a in &filtered {
+        table.add_row(vec![
+            Cell::new(&a.namespace),
+            Cell::new(&a.term),
+            Cell::new(&a.target),
+            Cell::new(a.value.as_deref().unwrap_or("—")),
+            Cell::new(a.qualifier.as_deref().unwrap_or("")),
+        ]);
+    }
+    println!("{table}");
+    println!("\n{} annotation(s) shown.", filtered.len());
     Ok(())
 }
 

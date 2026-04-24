@@ -145,6 +145,16 @@ Things intentionally left out of SAP View for now, with the reasoning:
 - **Raw annotation inspector panel** — a power-user view dumping `ServiceMetadata.annotations` grouped by namespace. Low UI cost (parser already captures them); on the backlog.
 - **Fiori-readiness linter** — checklist flagging missing-but-expected annotations (no `HeaderInfo`, no `SelectionFields`, no `LineItem`). ABAP-dev-facing feature; on the backlog.
 
+## Annotation inspector
+
+The annotation badge in the footer (`N annotations`) is clickable — it opens a modal that lists every annotation the parser captured, beyond whatever the typed views surface. Use it for "does this service declare X?" spelunking or to confirm a CDS annotation round-tripped into `$metadata`.
+
+- **Namespace chips** toggle visibility by vocabulary (`UI`, `Common`, `Capabilities`, `Measures`, ...). Multi-select; empty = show all.
+- **Search box** matches across Term + Target + Value + Qualifier (case-insensitive).
+- Results are cached per `(profile, service)` so reopens are instant.
+
+The same data is available on the CLI via `sap-odata -p <profile> -s <service> annotations` — see [CLI-REFERENCE.md](./CLI-REFERENCE.md). Supports `--namespace` and `--filter` flags; `--json` dumps the raw list.
+
 ## Parser-derived JSON (CLI)
 
 Running `sap-odata describe <EntitySet> --json` on the CLI surfaces all of the above as structured fields on the entity type and its properties — see [CLI-REFERENCE.md](./CLI-REFERENCE.md) for the full schema. Handy for scripting linting or comparing services across environments without re-parsing `$metadata`.

@@ -98,6 +98,19 @@
     .modal-content {
       animation: slideUp 0.2s ease;
     }
+    /* Tinted resize corner — the default WebKit handle blends into the
+       dark theme. This paints a small diagonal pattern in ox-blue so
+       users can see where to grab. Only fires on elements with
+       `resize` set (our annotation inspector today). */
+    .modal-content::-webkit-resizer {
+      background:
+        linear-gradient(135deg,
+          transparent 0, transparent 40%,
+          rgba(76, 154, 255, 0.5) 40%, rgba(76, 154, 255, 0.5) 48%,
+          transparent 48%, transparent 60%,
+          rgba(76, 154, 255, 0.7) 60%, rgba(76, 154, 255, 0.7) 68%,
+          transparent 68%);
+    }
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
     @keyframes slideUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
@@ -721,6 +734,27 @@
       <div class="px-5 py-2 border-t border-ox-border text-[10px] text-ox-dim shrink-0">
         <span id="vlStatus">Fetching…</span>
       </div>
+    </div>
+  </div>
+
+  <!-- ═══ Annotation Inspector Modal ═══ -->
+  <div id="annotationInspectorModal" class="hidden fixed inset-0 z-50 modal-overlay flex items-center justify-center">
+    <div class="modal-content bg-ox-panel border border-ox-border rounded-lg shadow-2xl w-[880px] h-[680px] min-w-[560px] min-h-[360px] max-w-[95vw] max-h-[90vh] flex flex-col resize overflow-hidden">
+      <div class="px-5 py-3 border-b border-ox-border flex items-center justify-between shrink-0">
+        <div class="flex items-baseline gap-2">
+          <span class="text-ox-blue text-xs font-semibold tracking-wide">&#9670;</span>
+          <h3 class="text-sm font-medium text-ox-text">Annotations</h3>
+          <span id="aiSubtitle" class="text-[10px] text-ox-dim font-mono"></span>
+        </div>
+        <button id="btnAiClose" class="text-ox-dim hover:text-ox-text text-xs px-2 py-0.5 rounded-sm hover:bg-ox-hover">close</button>
+      </div>
+      <div class="px-5 py-2 border-b border-ox-border shrink-0 flex items-center gap-2">
+        <input id="aiSearch" type="text" placeholder="Filter by term, target, or value…"
+          class="flex-1 bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 outline-hidden" />
+        <span id="aiCount" class="text-[10px] text-ox-dim font-mono"></span>
+      </div>
+      <div id="aiNamespaceBar" class="px-5 py-1.5 border-b border-ox-border text-[10px] font-mono shrink-0 flex items-center gap-1 flex-wrap"></div>
+      <div id="aiResults" class="flex-1 overflow-auto text-xs font-mono"></div>
     </div>
   </div>
 

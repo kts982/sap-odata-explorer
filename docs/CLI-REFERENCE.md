@@ -310,6 +310,31 @@ sap-odata -p DEV -s API_BUSINESS_PARTNER metadata > api_bp_metadata.xml
 sap-odata -p DEV -s API_MATERIAL_DOCUMENT_SRV metadata | xmllint --format -
 ```
 
+### `annotations`
+
+List every SAP/UI5 annotation parsed from `$metadata`, grouped by vocabulary namespace. The same data the desktop app's annotation inspector shows — handy on the command line for "does this service declare X?" grepping and for diffing annotation sets across environments.
+
+| Flag | Purpose |
+|---|---|
+| `--namespace <ns>` | Filter to one vocabulary (`UI`, `Common`, `Capabilities`, `Measures`, `SAP`, ...). Case-insensitive. |
+| `--filter <text>` | Substring match across Term + Target + Value + Qualifier. |
+| `--json` | Dump the raw list instead of a table. |
+
+```bash
+# Everything declared on the service
+sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 annotations
+
+# Only UI.LineItem / HeaderInfo / SelectionFields — the Fiori view set
+sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 annotations --namespace UI
+
+# Search across namespaces for a specific property's annotations
+sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 annotations --filter EWMWarehouse
+
+# Pipe the raw list through jq for scripting
+sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 annotations --json \
+  | jq '[.[] | select(.namespace == "Capabilities")] | length'
+```
+
 ### `signout`
 
 Clear the persisted Browser SSO session for a profile, so the next run forces a fresh sign-in.

@@ -8,7 +8,7 @@ use sap_odata_core::{
     diagnostics::HttpTraceEntry,
     metadata::{
         self, AnnotationSummary, Criticality, FieldControl, HeaderInfo, LineItemField,
-        SelectionVariant, SortOrder, TextArrangement, ValueList,
+        RawAnnotation, SelectionVariant, SortOrder, TextArrangement, ValueList,
     },
     query::ODataQuery,
 };
@@ -599,6 +599,26 @@ async fn resolve_service(
             format!("Resolution error: {e}"),
         )),
     }
+}
+
+/// Return the full raw annotation list for a service. Fetched lazily by
+/// the desktop app's annotation inspector panel so a service with
+/// hundreds of annotations doesn't bloat every catalog/entities response.
+#[tauri::command]
+async fn get_annotations(
+    state: tauri::State<'_, AppState>,
+    profile_name: String,
+    service_path: String,
+) -> CmdResult<Vec<RawAnnotation>> {
+    let client = client_from_profile(&profile_name, &state).map_err(CommandError::msg)?;
+    let meta = client
+        .fetch_metadata(&service_path)
+        .await
+        .map_err(|e| CommandError::with_client(&client, format!("Metadata error: {e}")))?;
+    Ok(CommandOk {
+        data: meta.annotations,
+        trace: client.diagnostics_snapshot(),
+    })
 }
 
 #[tauri::command]
@@ -1239,6 +1259,7 @@ fn main() {
             get_services,
             resolve_service,
             get_entities,
+            get_annotations,
             describe_entity,
             run_query,
             resolve_value_list_reference,
