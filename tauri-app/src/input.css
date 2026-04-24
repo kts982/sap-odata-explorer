@@ -1,3 +1,42 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'DM Sans', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', Consolas, monospace;
+
+  --color-ox-bg: #0c0e13;
+  --color-ox-surface: #12151c;
+  --color-ox-panel: #181c25;
+  --color-ox-border: #252a36;
+  --color-ox-hover: #1e2330;
+  --color-ox-active: #262d3d;
+  --color-ox-text: #d4d8e0;
+  --color-ox-muted: #6b7280;
+  --color-ox-dim: #454d5e;
+  --color-ox-amber: #e5a200;
+  --color-ox-amberDim: #a07000;
+  --color-ox-amberGlow: rgba(229, 162, 0, 0.08);
+  --color-ox-blue: #4c9aff;
+  --color-ox-green: #3ddc84;
+  --color-ox-red: #ff5c5c;
+  --color-ox-v2: #3ddc84;
+  --color-ox-v4: #4c9aff;
+}
+
+/*
+  The default border color has changed to `currentcolor` in Tailwind CSS v4,
+  so we've added these compatibility styles to make sure everything still
+  looks the same as it did with Tailwind CSS v3.
+
+  If we ever want to remove these styles, we need to add an explicit border
+  color utility to any element that depends on these defaults.
+*/
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentcolor);
+  }
+}

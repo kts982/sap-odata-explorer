@@ -430,7 +430,7 @@ function updateServicePathBar(tab) {
     const verEl = document.getElementById('servicePathVersion');
     if (tab.serviceVersion) {
       verEl.textContent = tab.serviceVersion;
-      verEl.className = 'text-[10px] px-1 py-px rounded font-mono ' +
+      verEl.className = 'text-[10px] px-1 py-px rounded-sm font-mono ' +
         (tab.serviceVersion === 'V4' ? 'badge-v4' : 'badge-v2');
       verEl.style.display = '';
     } else {
@@ -671,7 +671,7 @@ function makeSvcItem(svc, starred) {
   const badgeClass = svc.version === 'V4' ? 'badge-v4' : 'badge-v2';
   div.innerHTML = `
     <div class="flex items-center gap-1.5">
-      <span class="text-[9px] px-1 py-px rounded font-mono ${badgeClass}">${escapeHtml(svc.version || '')}</span>
+      <span class="text-[9px] px-1 py-px rounded-sm font-mono ${badgeClass}">${escapeHtml(svc.version || '')}</span>
       <span class="text-[13px] text-ox-text truncate font-mono flex-1">${escapeHtml(svc.technical_name)}</span>
       <span class="svc-star${starred ? ' starred' : ''}" data-action="toggle-favorite" data-svc-name="${escapeHtml(svc.technical_name)}">${starred ? '★' : '☆'}</span>
     </div>
@@ -1532,11 +1532,11 @@ function renderResults(data, elapsedMs, params) {
         const storeKey = `r${i}_${col}`;
         expandedDataStore[storeKey] = val;
         const count = val.length;
-        html += `<td class="px-3 py-1"><span class="expand-badge text-[10px] px-1.5 py-0.5 rounded font-mono inline-block" data-action="nested" data-key="${storeKey}" data-col="${escapeHtml(col)}">${count} item${count !== 1 ? 's' : ''}</span></td>`;
+        html += `<td class="px-3 py-1"><span class="expand-badge text-[10px] px-1.5 py-0.5 rounded-sm font-mono inline-block" data-action="nested" data-key="${storeKey}" data-col="${escapeHtml(col)}">${count} item${count !== 1 ? 's' : ''}</span></td>`;
       } else if (typeof val === 'object') {
         const storeKey = `r${i}_${col}`;
         expandedDataStore[storeKey] = val;
-        html += `<td class="px-3 py-1"><span class="expand-badge text-[10px] px-1.5 py-0.5 rounded font-mono inline-block" data-action="nested" data-key="${storeKey}" data-col="${escapeHtml(col)}">object</span></td>`;
+        html += `<td class="px-3 py-1"><span class="expand-badge text-[10px] px-1.5 py-0.5 rounded-sm font-mono inline-block" data-action="nested" data-key="${storeKey}" data-col="${escapeHtml(col)}">object</span></td>`;
       } else {
         const text = String(val);
         // Feature 7: data-cell-col / data-cell-val for filter tooltip
@@ -1611,7 +1611,7 @@ function showNestedPanel(title, contentHtml) {
         <div class="w-1.5 h-1.5 rounded-full bg-ox-blue"></div>
         <span class="text-xs font-mono font-medium text-ox-text">${escapeHtml(title)}</span>
       </div>
-      <button data-action="close-nested" class="text-ox-dim hover:text-ox-text text-xs px-2 py-0.5 rounded hover:bg-ox-hover">close</button>
+      <button data-action="close-nested" class="text-ox-dim hover:text-ox-text text-xs px-2 py-0.5 rounded-sm hover:bg-ox-hover">close</button>
     </div>
     <div class="p-2">${contentHtml}</div>
   `;

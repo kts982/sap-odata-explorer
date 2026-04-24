@@ -435,7 +435,7 @@
   <header class="bg-ox-panel border-b border-ox-border px-4 py-2 flex items-center gap-5 shrink-0">
     <!-- Logo -->
     <div class="flex items-center gap-2">
-      <div class="w-5 h-5 rounded bg-gradient-to-br from-ox-amber to-ox-amberDim flex items-center justify-center">
+      <div class="w-5 h-5 rounded-sm bg-linear-to-br from-ox-amber to-ox-amberDim flex items-center justify-center">
         <span class="text-[10px] font-bold text-ox-bg">O</span>
       </div>
       <h1 class="text-sm font-medium text-ox-text tracking-tight">OData <span class="text-ox-amber">Explorer</span></h1>
@@ -448,13 +448,13 @@
     <div class="flex items-center gap-2">
       <span class="text-[10px] uppercase tracking-widest text-ox-dim font-medium">System</span>
       <select id="profileSelect"
-        class="bg-ox-surface text-ox-text text-sm border border-ox-border rounded-md px-2.5 py-1 outline-none min-w-[140px]">
+        class="bg-ox-surface text-ox-text text-sm border border-ox-border rounded-md px-2.5 py-1 outline-hidden min-w-[140px]">
         <option value="">Select profile...</option>
       </select>
-      <button id="btnProfileSignIn" class="btn-ghost text-xs px-2.5 py-1 rounded hidden" title="Sign in with browser SSO">Sign In</button>
-      <button id="btnProfileSignOut" class="btn-ghost text-xs px-2.5 py-1 rounded hidden" title="Clear persisted SSO session">Sign Out</button>
-      <button id="btnAddProfile" class="btn-ghost text-xs px-1.5 py-1 rounded" title="Add system">+</button>
-      <button id="btnRemoveProfile" class="btn-ghost text-xs px-1.5 py-1 rounded hidden" title="Remove selected profile">−</button>
+      <button id="btnProfileSignIn" class="btn-ghost text-xs px-2.5 py-1 rounded-sm hidden" title="Sign in with browser SSO">Sign In</button>
+      <button id="btnProfileSignOut" class="btn-ghost text-xs px-2.5 py-1 rounded-sm hidden" title="Clear persisted SSO session">Sign Out</button>
+      <button id="btnAddProfile" class="btn-ghost text-xs px-1.5 py-1 rounded-sm" title="Add system">+</button>
+      <button id="btnRemoveProfile" class="btn-ghost text-xs px-1.5 py-1 rounded-sm hidden" title="Remove selected profile">−</button>
     </div>
 
     <!-- Divider -->
@@ -465,7 +465,7 @@
       <span class="text-[10px] uppercase tracking-widest text-ox-dim font-medium">Service</span>
       <div class="relative flex-1 max-w-md">
         <input id="serviceInput" type="text" placeholder="Search services or enter path..."
-          class="bg-ox-surface text-ox-text text-sm border border-ox-border rounded-md pl-3 pr-8 py-1 w-full outline-none font-mono" />
+          class="bg-ox-surface text-ox-text text-sm border border-ox-border rounded-md pl-3 pr-8 py-1 w-full outline-hidden font-mono" />
         <svg class="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-ox-dim" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
         </svg>
@@ -504,7 +504,7 @@
 
       <!-- Service path display -->
       <div id="servicePathBar">
-        <span id="servicePathVersion" class="text-[10px] px-1 py-px rounded font-mono badge-v4"></span>
+        <span id="servicePathVersion" class="text-[10px] px-1 py-px rounded-sm font-mono badge-v4"></span>
         <span id="servicePathText" class="truncate"></span>
       </div>
 
@@ -515,7 +515,7 @@
             <div class="w-1.5 h-1.5 rounded-full bg-ox-amber"></div>
             <h2 id="entityTitle" class="text-xs font-mono font-medium text-ox-text"></h2>
           </div>
-          <button id="btnCloseDescribe" class="text-ox-dim hover:text-ox-text text-xs px-2 py-0.5 rounded hover:bg-ox-hover transition-colors">close</button>
+          <button id="btnCloseDescribe" class="text-ox-dim hover:text-ox-text text-xs px-2 py-0.5 rounded-sm hover:bg-ox-hover transition-colors">close</button>
         </div>
         <div id="describeContent" class="p-4"></div>
       </div>
@@ -528,24 +528,24 @@
             <span id="queryEntitySet" class="text-xs font-mono font-medium text-ox-text"></span>
           </div>
           <input id="qSelect" type="text" placeholder="$select" title="Click properties above to add"
-            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded px-2 py-1 w-44 outline-none" />
+            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-44 outline-hidden" />
           <input id="qFilter" type="text" placeholder="$filter"
-            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded px-2 py-1 w-52 outline-none" />
+            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-52 outline-hidden" />
           <input id="qExpand" type="text" placeholder="$expand" title="Click nav properties above to add"
-            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded px-2 py-1 w-36 outline-none" />
+            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-36 outline-hidden" />
           <input id="qOrderby" type="text" placeholder="$orderby"
-            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded px-2 py-1 w-32 outline-none" />
+            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-32 outline-hidden" />
           <input id="qTop" type="number" placeholder="top" value="20"
-            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded px-2 py-1 w-16 outline-none" />
+            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-16 outline-hidden" />
           <input id="qSkip" type="number" placeholder="skip"
-            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded px-2 py-1 w-16 outline-none" />
-          <button id="btnRun" class="btn-primary text-xs px-3 py-1 rounded">Run</button>
-          <button id="btnJson" class="btn-ghost text-xs px-2.5 py-1 rounded">{&thinsp;}</button>
-          <button id="btnCopyUrl" class="btn-ghost text-xs px-2 py-1 rounded" title="Copy OData URL">
+            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-16 outline-hidden" />
+          <button id="btnRun" class="btn-primary text-xs px-3 py-1 rounded-sm">Run</button>
+          <button id="btnJson" class="btn-ghost text-xs px-2.5 py-1 rounded-sm">{&thinsp;}</button>
+          <button id="btnCopyUrl" class="btn-ghost text-xs px-2 py-1 rounded-sm" title="Copy OData URL">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;vertical-align:middle"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
             <span style="margin-left:3px">URL</span>
           </button>
-          <button id="btnHistoryToggle" class="btn-ghost text-xs px-2 py-1 rounded">History</button>
+          <button id="btnHistoryToggle" class="btn-ghost text-xs px-2 py-1 rounded-sm">History</button>
         </div>
       </div>
 
@@ -593,7 +593,7 @@
       <!-- Status bar -->
       <footer class="bg-ox-panel border-t border-ox-border px-4 py-1 text-[11px] text-ox-text flex items-center gap-4 shrink-0 font-mono">
         <span id="statusText">Ready</span>
-        <button id="btnTraceToggle" class="ml-auto inline-flex items-center gap-1 border border-ox-border rounded px-1.5 py-0.5 text-ox-dim hover:text-ox-text hover:border-ox-dim transition-colors">
+        <button id="btnTraceToggle" class="ml-auto inline-flex items-center gap-1 border border-ox-border rounded-sm px-1.5 py-0.5 text-ox-dim hover:text-ox-text hover:border-ox-dim transition-colors">
           <span id="traceToggleChevron">&#x25B4;</span><span>Inspector</span>
         </button>
         <span id="traceSummary" class="text-ox-dim">No trace</span>
@@ -607,35 +607,35 @@
     <div class="modal-content bg-ox-panel border border-ox-border rounded-lg shadow-2xl w-[420px]">
       <div class="px-5 py-3 border-b border-ox-border flex items-center justify-between">
         <h3 class="text-sm font-medium text-ox-text">Add SAP System</h3>
-        <button id="btnModalClose" class="text-ox-dim hover:text-ox-text text-xs px-2 py-0.5 rounded hover:bg-ox-hover">close</button>
+        <button id="btnModalClose" class="text-ox-dim hover:text-ox-text text-xs px-2 py-0.5 rounded-sm hover:bg-ox-hover">close</button>
       </div>
       <div class="p-5 space-y-3">
         <div>
           <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Profile Name</label>
           <input id="mpName" type="text" placeholder="e.g. DEV, QAS, PRD"
-            class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-none" />
+            class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-hidden" />
         </div>
         <div>
           <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Base URL</label>
           <input id="mpUrl" type="text" placeholder="https://hostname:port"
-            class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-none" />
+            class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-hidden" />
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Client</label>
             <input id="mpClient" type="text" value="100"
-              class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-none" />
+              class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-hidden" />
           </div>
           <div>
             <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Language</label>
             <input id="mpLang" type="text" value="EN"
-              class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-none" />
+              class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-hidden" />
           </div>
         </div>
         <div>
           <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Authentication</label>
           <select id="mpAuthMode"
-            class="bg-ox-surface text-ox-text text-sm border border-ox-border rounded-md px-3 py-1.5 w-full outline-none">
+            class="bg-ox-surface text-ox-text text-sm border border-ox-border rounded-md px-3 py-1.5 w-full outline-hidden">
             <option value="basic">Username / Password</option>
             <option value="sso">Windows SSO (Kerberos)</option>
             <option value="browser">Browser SSO (Azure / SAML)</option>
@@ -646,12 +646,12 @@
           <div class="mb-3">
             <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Username</label>
             <input id="mpUser" type="text"
-              class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-none" />
+              class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-hidden" />
           </div>
           <div>
             <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Password</label>
             <input id="mpPass" type="password"
-              class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-none" />
+              class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-hidden" />
             <div class="text-[10px] text-ox-dim mt-1">Stored in Windows Credential Manager</div>
           </div>
         </div>
@@ -659,10 +659,10 @@
         <div id="mpSuccess" class="text-ox-green text-xs hidden"></div>
       </div>
       <div class="px-5 py-3 border-t border-ox-border flex items-center justify-between">
-        <button id="btnTest" class="btn-ghost text-xs px-3 py-1 rounded">Test</button>
+        <button id="btnTest" class="btn-ghost text-xs px-3 py-1 rounded-sm">Test</button>
         <div class="flex gap-2">
-          <button id="btnCancel" class="btn-ghost text-xs px-3 py-1 rounded">Cancel</button>
-          <button id="btnSave" class="btn-primary text-xs px-4 py-1 rounded">Save</button>
+          <button id="btnCancel" class="btn-ghost text-xs px-3 py-1 rounded-sm">Cancel</button>
+          <button id="btnSave" class="btn-primary text-xs px-4 py-1 rounded-sm">Save</button>
         </div>
       </div>
     </div>
