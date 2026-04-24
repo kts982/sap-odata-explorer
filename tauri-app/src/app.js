@@ -252,12 +252,50 @@ function isBrowserAuthProfile(profileName = currentProfile) {
 }
 
 function updateProfileAuthUi(profileName = currentProfile) {
-  const btn = document.getElementById('btnProfileSignIn');
+  const signInBtn = document.getElementById('btnProfileSignIn');
+  const removeBtn = document.getElementById('btnRemoveProfile');
+
+  // Sign In button: only for browser SSO profiles
   if (!profileName || !isBrowserAuthProfile(profileName)) {
-    btn.classList.add('hidden');
+    signInBtn.classList.add('hidden');
+  } else {
+    signInBtn.classList.remove('hidden');
+  }
+
+  // Remove button: shown whenever any profile is selected
+  if (!profileName) {
+    removeBtn.classList.add('hidden');
+  } else {
+    removeBtn.classList.remove('hidden');
+  }
+}
+
+async function removeCurrentProfile() {
+  if (!currentProfile) {
+    setStatus('Select a profile first');
     return;
   }
-  btn.classList.remove('hidden');
+  const name = currentProfile;
+  if (!confirm(`Remove profile '${name}'?\n\nThis will also delete its password from the OS keyring.`)) {
+    return;
+  }
+  try {
+    const msg = await invoke('remove_profile', { name });
+    setStatus(msg);
+    // Reset UI state
+    currentProfile = null;
+    cachedServices = null;
+    document.getElementById('profileSelect').value = '';
+    document.getElementById('entityList').innerHTML =
+      '<div class="px-4 py-8 text-center"><div class="text-ox-dim text-xs">Select a profile</div></div>';
+    updateProfileAuthUi(null);
+    updateServicePathBar(null);
+    resetResultsArea();
+    // Refresh dropdown
+    await loadProfiles();
+  } catch (e) {
+    setStatus('Remove failed: ' + e);
+  }
 }
 
 function browserAuthMessage(err) {
@@ -1422,6 +1460,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Static button wiring ──
   document.getElementById('btnAddProfile').addEventListener('click', showAddProfileModal);
   document.getElementById('btnProfileSignIn').addEventListener('click', signInCurrentProfile);
+  document.getElementById('btnRemoveProfile').addEventListener('click', removeCurrentProfile);
   document.getElementById('btnSearch').addEventListener('click', loadService);
   document.getElementById('btnCloseDescribe').addEventListener('click', hideDescribe);
   document.getElementById('btnRun').addEventListener('click', () => executeQuery(false));
