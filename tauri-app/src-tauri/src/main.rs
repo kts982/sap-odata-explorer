@@ -7,7 +7,8 @@ use sap_odata_core::{
     config,
     diagnostics::HttpTraceEntry,
     metadata::{
-        self, AnnotationSummary, Criticality, HeaderInfo, LineItemField, ValueList,
+        self, AnnotationSummary, Criticality, HeaderInfo, LineItemField, TextArrangement,
+        ValueList,
     },
     query::ODataQuery,
 };
@@ -75,6 +76,7 @@ struct EntityTypeInfo {
     header_info: Option<HeaderInfo>,
     selection_fields: Vec<String>,
     line_item: Vec<LineItemField>,
+    request_at_least: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -97,6 +99,7 @@ struct PropertyInfo {
     value_list: Option<ValueList>,
     value_list_references: Vec<String>,
     value_list_fixed: bool,
+    text_arrangement: Option<TextArrangement>,
 }
 
 #[derive(Serialize)]
@@ -642,6 +645,7 @@ async fn describe_entity(
         header_info: et.header_info.clone(),
         selection_fields: et.selection_fields.clone(),
         line_item: et.line_item.clone(),
+        request_at_least: et.request_at_least.clone(),
         properties: et
             .properties
             .iter()
@@ -664,6 +668,7 @@ async fn describe_entity(
                 value_list: p.value_list.clone(),
                 value_list_references: p.value_list_references.clone(),
                 value_list_fixed: p.value_list_fixed,
+                text_arrangement: p.text_arrangement,
             })
             .collect(),
         nav_properties: nav_targets

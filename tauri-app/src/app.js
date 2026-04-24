@@ -1424,22 +1424,38 @@ function valueListHint(p) {
 function renderFioriColsButton(info) {
   const btn = document.getElementById('btnFioriCols');
   if (!btn) return;
-  const fields = sapViewEnabled && info && Array.isArray(info.line_item)
-    ? info.line_item
-    : [];
+  const active = sapViewEnabled && info;
+  const fields = active && Array.isArray(info.line_item) ? info.line_item : [];
   const propNames = new Set(
     Array.isArray(info && info.properties) ? info.properties.map(p => p.name) : []
   );
-  const paths = fields
+  // LineItem value_paths (the visible columns Fiori would show).
+  const linePaths = fields
     .map(f => f && f.value_path)
     .filter(p => typeof p === 'string' && propNames.has(p));
+  // PresentationVariant.RequestAtLeast (the silent "always include" set
+  // — time zones, description keys, etc.). Appended AFTER the LineItem
+  // columns so they don't disturb the positional order a Fiori list
+  // report would use. Dedupe against line_item to avoid double-listing.
+  const lineSet = new Set(linePaths);
+  const requestAtLeast = active && Array.isArray(info.request_at_least)
+    ? info.request_at_least.filter(p => propNames.has(p) && !lineSet.has(p))
+    : [];
+  const paths = [...linePaths, ...requestAtLeast];
   if (paths.length === 0) {
     btn.classList.add('hidden');
     btn.removeAttribute('data-paths');
     return;
   }
   btn.classList.remove('hidden');
-  btn.textContent = `Fiori cols (${paths.length})`;
+  // Label notes the RequestAtLeast augment when it kicked in so the
+  // user understands why the select is wider than the visible cols.
+  const suffix = requestAtLeast.length ? ` +${requestAtLeast.length}` : '';
+  btn.textContent = `Fiori cols (${linePaths.length}${suffix})`;
+  const tipBase = 'Populate $select with UI.LineItem default columns (Fiori list report).';
+  btn.title = requestAtLeast.length
+    ? `${tipBase}\nIncludes ${requestAtLeast.length} UI.PresentationVariant.RequestAtLeast field(s).`
+    : tipBase;
   btn.dataset.paths = paths.join(',');
 }
 
@@ -2180,7 +2196,48 @@ function renderResults(data, elapsedMs, params) {
     }
   }
 
-  const allCols = [...scalarCols, ...nestedCols];
+  // SAP-View-driven reshaping: column order from UI.LineItem, plus a
+  // propByName lookup used below to render cells per UI.TextArrangement
+  // and to hide text-companion columns when they're already folded
+  // into their ID column.
+  const tab = getActiveTab();
+  const info = tab && tab._lastDescribeInfo;
+  const sapShape = sapViewEnabled && info && Array.isArray(info.properties);
+  const propByName = sapShape ? new Map(info.properties.map(p => [p.name, p])) : null;
+  // Text-companion columns that will be folded into their ID column's
+  // cell — we skip rendering them as standalone columns when the
+  // arrangement is anything other than TextSeparate.
+  const foldedTextCols = new Set();
+  if (sapShape) {
+    for (const p of info.properties) {
+      if (!p.text_path) continue;
+      const arrangement = p.text_arrangement || 'textfirst';
+      if (arrangement !== 'textseparate') foldedTextCols.add(p.text_path);
+    }
+  }
+  // Reorder scalars: declared LineItem columns first in position order,
+  // then whatever else the response carried (keys, RequestAtLeast
+  // fields, technical columns). Only applies in SAP View.
+  let orderedScalars = scalarCols;
+  if (sapShape && Array.isArray(info.line_item) && info.line_item.length > 0) {
+    const scalarSet = new Set(scalarCols);
+    const seen = new Set();
+    const head = [];
+    for (const li of info.line_item) {
+      const name = li && li.value_path;
+      if (name && scalarSet.has(name) && !seen.has(name)) {
+        head.push(name);
+        seen.add(name);
+      }
+    }
+    const tail = scalarCols.filter(c => !seen.has(c));
+    orderedScalars = [...head, ...tail];
+  }
+  if (sapShape) {
+    orderedScalars = orderedScalars.filter(c => !foldedTextCols.has(c));
+  }
+
+  const allCols = [...orderedScalars, ...nestedCols];
 
   // Estimate JSON size for stats
   const jsonSize = new Blob([JSON.stringify(data)]).size;
@@ -2226,8 +2283,29 @@ function renderResults(data, elapsedMs, params) {
         html += `<td class="px-3 py-1"><span class="expand-badge text-[10px] px-1.5 py-0.5 rounded-sm font-mono inline-block" data-action="nested" data-key="${storeKey}" data-col="${escapeHtml(col)}">object</span></td>`;
       } else {
         const text = String(val);
-        // Feature 7: data-cell-col / data-cell-val for filter tooltip
-        html += `<td class="px-3 py-1 text-ox-text whitespace-nowrap cursor-pointer" data-action="cell-click" data-cell-col="${escapeHtml(col)}" data-cell-val="${escapeHtml(text)}">${escapeHtml(text)}</td>`;
+        // SAP View: fold the Common.Text companion into this cell per
+        // UI.TextArrangement. The raw `text` is still what goes into
+        // filter-tooltip data attributes so clicking "equals this value"
+        // uses the key, not the description.
+        let display = text;
+        if (sapShape) {
+          const prop = propByName.get(col);
+          if (prop && prop.text_path) {
+            const companion = row[prop.text_path];
+            const companionText = companion === null || companion === undefined
+              ? ''
+              : String(companion);
+            const arr = prop.text_arrangement || 'textfirst';
+            if (arr === 'textfirst' && companionText) {
+              display = `${companionText} (${text})`;
+            } else if (arr === 'textlast' && companionText) {
+              display = `${text} (${companionText})`;
+            } else if (arr === 'textonly') {
+              display = companionText || text;
+            }
+          }
+        }
+        html += `<td class="px-3 py-1 text-ox-text whitespace-nowrap cursor-pointer" data-action="cell-click" data-cell-col="${escapeHtml(col)}" data-cell-val="${escapeHtml(text)}">${escapeHtml(display)}</td>`;
       }
     }
 

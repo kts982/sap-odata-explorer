@@ -81,6 +81,12 @@ pub struct EntityType {
     /// IntentBasedNavigation, ...) are ignored because they don't map to
     /// `$select`-able columns. Order matches the source collection.
     pub line_item: Vec<LineItemField>,
+    /// Property paths listed under `UI.PresentationVariant.RequestAtLeast`
+    /// — fields Fiori silently appends to `$select` regardless of which
+    /// columns the user picks, typically technical supports like time
+    /// zones and key descriptions. Used to augment the "Fiori cols"
+    /// quick-action. Empty when the service doesn't declare any.
+    pub request_at_least: Vec<String>,
 }
 
 /// One `UI.DataField` inside a `UI.LineItem` collection — enough to
@@ -155,6 +161,28 @@ pub struct Property {
     /// (Fiori typically renders this as a dropdown). The annotation
     /// carries no mapping of its own, so it's a hint for the UI only.
     pub value_list_fixed: bool,
+    /// How an ID column and its `Common.Text` companion should be
+    /// displayed together. Source: `UI.TextArrangement` (per-property
+    /// when nested inside `Common.Text`, or entity-type-level as the
+    /// default for every text-bearing property in the type). `None`
+    /// means "no explicit arrangement" — callers default to
+    /// `TextFirst` per Fiori convention.
+    pub text_arrangement: Option<TextArrangement>,
+}
+
+/// `UI.TextArrangement` — how a coded-value column combines with its
+/// `Common.Text` description when rendered.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TextArrangement {
+    /// Description first, then the code in parens — "English (EN)".
+    TextFirst,
+    /// Code first, then the description in parens — "EN (English)".
+    TextLast,
+    /// Keep the two columns separate — no combination.
+    TextSeparate,
+    /// Description only; hide the code.
+    TextOnly,
 }
 
 /// `UI.Criticality` value. Absent means "no criticality annotation",
@@ -518,6 +546,7 @@ fn parse_entity_types(schema: &roxmltree::Node, version: ODataVersion) -> Vec<En
                     value_list: None,
                     value_list_references: Vec::new(),
                     value_list_fixed: false,
+                    text_arrangement: None,
                 })
                 .collect();
 
@@ -551,6 +580,7 @@ fn parse_entity_types(schema: &roxmltree::Node, version: ODataVersion) -> Vec<En
                 header_info: None,
                 selection_fields: Vec::new(),
                 line_item: Vec::new(),
+                request_at_least: Vec::new(),
             }
         })
         .collect()
@@ -754,12 +784,43 @@ fn apply_v4_typed_annotations(
                         et.header_info = Some(info);
                     }
                 }
-            } else if lower.ends_with(".text") {
+            } else if lower.ends_with(".text") && !lower.ends_with(".textarrangement") {
                 if let Some((et_name, prop_name)) = target.split_once('/') {
                     if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
                         if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
                             if prop.text_path.is_none() {
                                 prop.text_path = annot.attribute("Path").map(String::from);
+                            }
+                            // A `UI.TextArrangement` nested inside the
+                            // `Common.Text` annotation is the per-property
+                            // override — takes priority over any type-level
+                            // default set later.
+                            for nested in children_by_tag(&annot, "Annotation") {
+                                let n_term = nested.attribute("Term").unwrap_or("");
+                                let n_lower = n_term.trim_start_matches("SAP__").to_ascii_lowercase();
+                                if n_lower.ends_with(".textarrangement") {
+                                    if let Some(ta) = parse_text_arrangement(&nested) {
+                                        prop.text_arrangement = Some(ta);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if lower.ends_with(".textarrangement") {
+                // Entity-type-level default: apply to every property that
+                // already has a `text_path` and no per-property override.
+                // (We parse annotations in file order, and `Common.Text`
+                // is typically declared *before* a standalone
+                // `UI.TextArrangement` on the type — but we guard against
+                // either order.)
+                if !target.contains('/') {
+                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == target) {
+                        if let Some(ta) = parse_text_arrangement(&annot) {
+                            for prop in et.properties.iter_mut() {
+                                if prop.text_arrangement.is_none() {
+                                    prop.text_arrangement = Some(ta);
+                                }
                             }
                         }
                     }
@@ -863,6 +924,30 @@ fn apply_v4_typed_annotations(
                     if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
                         if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
                             prop.value_list_fixed = true;
+                        }
+                    }
+                }
+            } else if lower.ends_with(".presentationvariant") {
+                // UI.PresentationVariant = Record with RequestAtLeast /
+                // SortOrder / Visualizations / ... We only pull
+                // RequestAtLeast for now (the Fiori cols $select booster).
+                // Targets the entity type or the entity set; resolve both.
+                let paths = parse_request_at_least(&annot);
+                if paths.is_empty() {
+                    continue;
+                }
+                let type_name = if let Some((_, set_name)) = target.split_once('/') {
+                    entity_sets
+                        .iter()
+                        .find(|s| s.name == set_name)
+                        .map(|s| extract_type_name(&s.entity_type).to_string())
+                } else {
+                    Some(target.to_string())
+                };
+                if let Some(name) = type_name {
+                    if let Some(et) = entity_types.iter_mut().find(|t| t.name == name) {
+                        if et.request_at_least.is_empty() {
+                            et.request_at_least = paths;
                         }
                     }
                 }
@@ -1055,6 +1140,33 @@ fn parse_value_list_parameter(record: &roxmltree::Node) -> Option<ValueListParam
     Some(ValueListParameter { kind, local_property, value_list_property, constant })
 }
 
+/// Pull `RequestAtLeast` property paths out of a
+/// `UI.PresentationVariant` record. Returns empty when the record is
+/// missing, the property isn't set, or the inner collection is empty.
+fn parse_request_at_least(annot: &roxmltree::Node) -> Vec<String> {
+    let mut out = Vec::new();
+    let record = match children_by_tag(annot, "Record").into_iter().next() {
+        Some(r) => r,
+        None => return out,
+    };
+    for pv in children_by_tag(&record, "PropertyValue") {
+        if pv.attribute("Property") != Some("RequestAtLeast") {
+            continue;
+        }
+        for coll in children_by_tag(&pv, "Collection") {
+            for pp in children_by_tag(&coll, "PropertyPath") {
+                if let Some(text) = pp.text() {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() && !out.iter().any(|x: &String| x == trimmed) {
+                        out.push(trimmed.to_string());
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Walk a `UI.LineItem` annotation's `<Collection>` of `<Record>`s and
 /// return one `LineItemField` per `UI.DataField` record that has a
 /// `Value Path="..."`. Records whose `Type` is `UI.DataFieldFor*`
@@ -1114,6 +1226,23 @@ fn parse_property_path_collection(pv: &roxmltree::Node) -> Vec<String> {
         }
     }
     out
+}
+
+/// Extract a `UI.TextArrangement` value from an `<Annotation>` node.
+/// Accepts the `EnumMember="UI.TextArrangementType/TextFirst"` form
+/// (with or without the `SAP__` namespace alias) and the SAP-shorthand
+/// `TextFirst` unqualified. Unknown variants return `None` rather than
+/// guessing — we'd rather fall back to Fiori's default than mis-render.
+fn parse_text_arrangement(annot: &roxmltree::Node) -> Option<TextArrangement> {
+    let em = annot.attribute("EnumMember")?;
+    let leaf = em.rsplit('/').next().unwrap_or(em);
+    match leaf {
+        "TextFirst" => Some(TextArrangement::TextFirst),
+        "TextLast" => Some(TextArrangement::TextLast),
+        "TextSeparate" => Some(TextArrangement::TextSeparate),
+        "TextOnly" => Some(TextArrangement::TextOnly),
+        _ => None,
+    }
 }
 
 /// Extract a `UI.Criticality` value from a `<Annotation>` node. Accepts
@@ -2115,6 +2244,119 @@ mod tests {
         let ot = meta.find_entity_type("OrderType").unwrap();
         let wh = ot.properties.iter().find(|p| p.name == "Warehouse").unwrap();
         assert!(wh.value_list.is_none());
+    }
+
+    #[test]
+    fn test_v4_text_arrangement_nested_in_common_text() {
+        // Per-property override: `@UI.textArrangement` inside the CDS
+        // annotation on a single field becomes a nested
+        // `<Annotation Term="UI.TextArrangement"/>` inside the
+        // `<Annotation Term="Common.Text"/>` in $metadata.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="Product" Type="Edm.String"/>
+        <Property Name="ProductDescription" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType/Product">
+        <Annotation Term="SAP__common.Text" Path="ProductDescription">
+          <Annotation Term="SAP__UI.TextArrangement" EnumMember="UI.TextArrangementType/TextSeparate"/>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let ot = meta.find_entity_type("OrderType").unwrap();
+        let p = ot.properties.iter().find(|p| p.name == "Product").unwrap();
+        assert_eq!(p.text_path.as_deref(), Some("ProductDescription"));
+        assert_eq!(p.text_arrangement, Some(TextArrangement::TextSeparate));
+    }
+
+    #[test]
+    fn test_v4_text_arrangement_on_entity_type_is_default() {
+        // Type-level default applies to every text-bearing property that
+        // didn't override it. Properties without a `Common.Text` still
+        // get the arrangement stamped (harmless — they have no text to
+        // arrange, the frontend ignores it).
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="Product" Type="Edm.String"/>
+        <Property Name="ProductDescription" Type="Edm.String"/>
+        <Property Name="Warehouse" Type="Edm.String"/>
+        <Property Name="WarehouseDescription" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType/Product">
+        <Annotation Term="SAP__common.Text" Path="ProductDescription">
+          <Annotation Term="SAP__UI.TextArrangement" EnumMember="UI.TextArrangementType/TextLast"/>
+        </Annotation>
+      </Annotations>
+      <Annotations Target="SAP__self.OrderType/Warehouse">
+        <Annotation Term="SAP__common.Text" Path="WarehouseDescription"/>
+      </Annotations>
+      <Annotations Target="SAP__self.OrderType">
+        <Annotation Term="SAP__UI.TextArrangement" EnumMember="UI.TextArrangementType/TextFirst"/>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let ot = meta.find_entity_type("OrderType").unwrap();
+        let prod = ot.properties.iter().find(|p| p.name == "Product").unwrap();
+        // Per-property override wins.
+        assert_eq!(prod.text_arrangement, Some(TextArrangement::TextLast));
+        let wh = ot.properties.iter().find(|p| p.name == "Warehouse").unwrap();
+        // Warehouse had no override → picks up the type default.
+        assert_eq!(wh.text_arrangement, Some(TextArrangement::TextFirst));
+    }
+
+    #[test]
+    fn test_v4_presentation_variant_request_at_least() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="WarehouseTimeZone" Type="Edm.String"/>
+        <Property Name="EWMWarehouse" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType">
+        <Annotation Term="SAP__UI.PresentationVariant">
+          <Record>
+            <PropertyValue Property="RequestAtLeast">
+              <Collection>
+                <PropertyPath>WarehouseTimeZone</PropertyPath>
+                <PropertyPath>EWMWarehouse</PropertyPath>
+              </Collection>
+            </PropertyValue>
+            <PropertyValue Property="Visualizations">
+              <Collection>
+                <AnnotationPath>@UI.LineItem</AnnotationPath>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let ot = meta.find_entity_type("OrderType").unwrap();
+        assert_eq!(ot.request_at_least, vec!["WarehouseTimeZone", "EWMWarehouse"]);
     }
 
     #[test]
