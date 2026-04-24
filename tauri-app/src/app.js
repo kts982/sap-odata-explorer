@@ -1459,6 +1459,130 @@ function renderFioriColsButton(info) {
   btn.dataset.paths = paths.join(',');
 }
 
+// Show the "Fiori filter" button when SAP View is on and the entity
+// has at least one UI.SelectionVariant declared. We use the default
+// (no-qualifier) variant for the actual filter build; the button's
+// label hints at the qualified-variant count so the user knows extras
+// exist (multi-variant picker UI can come later).
+function renderFioriFilterButton(info) {
+  const btn = document.getElementById('btnFioriFilter');
+  if (!btn) return;
+  const variants = sapViewEnabled && info && Array.isArray(info.selection_variants)
+    ? info.selection_variants
+    : [];
+  if (variants.length === 0) {
+    btn.classList.add('hidden');
+    btn.removeAttribute('data-variant-index');
+    return;
+  }
+  // Parser puts the default variant at index 0; fall back to index 0 if
+  // only qualified variants exist (rare).
+  const variant = variants[0];
+  const clause = buildSelectionVariantFilter(variant, info);
+  if (!clause) {
+    btn.classList.add('hidden');
+    return;
+  }
+  btn.classList.remove('hidden');
+  const qualifiedCount = variants.filter(v => v.qualifier).length;
+  const label = variant.text
+    ? `Fiori filter: ${variant.text}`
+    : 'Fiori filter';
+  const suffix = qualifiedCount && !variant.qualifier
+    ? ` (+${qualifiedCount})`
+    : '';
+  btn.textContent = label + suffix;
+  const preview = clause.length > 80 ? clause.slice(0, 80) + '…' : clause;
+  btn.title = `$filter ← ${preview}${qualifiedCount && !variant.qualifier ? `\n\n${qualifiedCount} qualified variant(s) not yet exposed.` : ''}`;
+  btn.dataset.variantIndex = '0';
+}
+
+// Replace $filter with the clause built from a UI.SelectionVariant.
+// Overwrites rather than merges (same reasoning as "Fiori cols" — the
+// action's meaning is "show me this variant's filter as-is").
+function applyFioriFilter() {
+  const tab = getActiveTab();
+  const info = tab && tab._lastDescribeInfo;
+  if (!info || !Array.isArray(info.selection_variants) || info.selection_variants.length === 0) return;
+  const variant = info.selection_variants[0];
+  const clause = buildSelectionVariantFilter(variant, info);
+  if (!clause) return;
+  const input = document.getElementById('qFilter');
+  input.value = clause;
+  input.focus();
+}
+
+// Convert a SelectionVariant into an OData $filter expression:
+//   - Parameters become `name eq <lit>` clauses (AND-joined with the rest).
+//   - Each SelectOption becomes an OR-joined group of range clauses for
+//     that property, optionally wrapped in `not (...)` for sign=E.
+//   - Properties are AND-joined overall.
+// Returns an empty string when the variant has no usable clauses.
+function buildSelectionVariantFilter(variant, info) {
+  if (!variant) return '';
+  const propByName = new Map(
+    Array.isArray(info && info.properties) ? info.properties.map(p => [p.name, p]) : []
+  );
+  const andParts = [];
+  for (const param of variant.parameters || []) {
+    const prop = propByName.get(param.property_name);
+    if (!prop) continue;
+    const lit = formatODataLiteral(param.property_value, prop.edm_type);
+    andParts.push(`${param.property_name} eq ${lit}`);
+  }
+  for (const opt of variant.select_options || []) {
+    const prop = propByName.get(opt.property_name);
+    if (!prop) continue;
+    const rangeClauses = [];
+    for (const range of opt.ranges || []) {
+      const clause = rangeToFilter(prop, range);
+      if (clause) rangeClauses.push(clause);
+    }
+    if (rangeClauses.length === 0) continue;
+    const combined = rangeClauses.length === 1
+      ? rangeClauses[0]
+      : `(${rangeClauses.join(' or ')})`;
+    andParts.push(combined);
+  }
+  return andParts.join(' and ');
+}
+
+// One SelectionRange → one OData filter clause. Handles the seven
+// common operators; CP/NP (SAP SELECT-OPTIONS pattern matching with *)
+// are skipped because their OData translation depends on server-side
+// substringof/contains support and the wildcard syntax mismatch — not
+// worth mis-rendering for an MVP.
+function rangeToFilter(prop, range) {
+  const lit = formatODataLiteral(range.low, prop.edm_type);
+  const name = prop.name;
+  let clause;
+  switch (range.option) {
+    case 'eq': clause = `${name} eq ${lit}`; break;
+    case 'ne': clause = `${name} ne ${lit}`; break;
+    case 'gt': clause = `${name} gt ${lit}`; break;
+    case 'ge': clause = `${name} ge ${lit}`; break;
+    case 'lt': clause = `${name} lt ${lit}`; break;
+    case 'le': clause = `${name} le ${lit}`; break;
+    case 'bt': {
+      if (range.high === null || range.high === undefined) return '';
+      const hi = formatODataLiteral(range.high, prop.edm_type);
+      clause = `(${name} ge ${lit} and ${name} le ${hi})`;
+      break;
+    }
+    case 'nb': {
+      if (range.high === null || range.high === undefined) return '';
+      const hi = formatODataLiteral(range.high, prop.edm_type);
+      // Invert BT: outside the closed interval.
+      clause = `(${name} lt ${lit} or ${name} gt ${hi})`;
+      break;
+    }
+    default:
+      // CP/NP and anything unknown — skip rather than guess.
+      return '';
+  }
+  return range.sign === 'e' ? `not (${clause})` : clause;
+}
+
 // Replace $select with the Fiori LineItem defaults. We overwrite rather
 // than append — the point of this action is "show me what Fiori shows",
 // and merging would defeat that.
@@ -1509,6 +1633,8 @@ function renderDescribe(info) {
   renderSelectionFieldsBar(info);
   // UI.LineItem → "Fiori cols" quick-action button next to $select.
   renderFioriColsButton(info);
+  // UI.SelectionVariant → "Fiori filter" button next to "Fiori cols".
+  renderFioriFilterButton(info);
 
   // Title: technical name always; in SAP view, append the HeaderInfo
   // singular/plural so the entity reads as "WarehouseOrderType · Warehouse Order / Warehouse Orders".
@@ -2065,9 +2191,10 @@ function toggleSapView() {
   if (tab && tab._lastDescribeInfo) {
     renderDescribe(tab._lastDescribeInfo);
   } else {
-    // No cached describe — still hide any stale chip bar and quick-action.
+    // No cached describe — still hide any stale chip bar and quick-actions.
     renderSelectionFieldsBar(null);
     renderFioriColsButton(null);
+    renderFioriFilterButton(null);
   }
   // Clear any lingering warnings from the previous mode.
   if (!sapViewEnabled) showSapViewWarnings([]);
@@ -2658,6 +2785,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btnTraceClose').addEventListener('click', hideTraceInspector);
   document.getElementById('btnSapView').addEventListener('click', toggleSapView);
   document.getElementById('btnFioriCols').addEventListener('click', applyFioriCols);
+  document.getElementById('btnFioriFilter').addEventListener('click', applyFioriFilter);
   document.getElementById('btnVlClose').addEventListener('click', closeValueListPicker);
   document.getElementById('btnVlFetch').addEventListener('click', fetchValueListRows);
   document.getElementById('vlFilter').addEventListener('keydown', (e) => {

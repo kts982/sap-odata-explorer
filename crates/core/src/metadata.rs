@@ -87,6 +87,86 @@ pub struct EntityType {
     /// zones and key descriptions. Used to augment the "Fiori cols"
     /// quick-action. Empty when the service doesn't declare any.
     pub request_at_least: Vec<String>,
+    /// Declared `UI.SelectionVariant` records on this entity — Fiori's
+    /// "filter variants" (e.g. "Pending", "Completed"). Includes the
+    /// default (no-qualifier) variant and any qualified ones. Used by
+    /// the desktop's "Fiori filter" button to drop pre-declared
+    /// filter defaults into `$filter`. Empty when the service declares
+    /// no variants.
+    pub selection_variants: Vec<SelectionVariant>,
+}
+
+/// One `UI.SelectionVariant` record — the declarative shape of a
+/// Fiori filter variant. Contains single-valued `Parameters` (always
+/// equality) and multi-valued `SelectOptions` (SELECT-OPTIONS-style
+/// ranges with sign and option code).
+#[derive(Debug, Clone, Serialize)]
+pub struct SelectionVariant {
+    /// Optional `Qualifier` on the annotation — distinguishes variants
+    /// on the same entity (e.g. `Qualifier="Pending"`). `None` for the
+    /// default variant.
+    pub qualifier: Option<String>,
+    /// `Text` property — human-readable variant name (e.g.
+    /// `"Pending Orders"`). `None` if not declared.
+    pub text: Option<String>,
+    /// Fixed `property = value` assignments fed as filter constraints.
+    pub parameters: Vec<SelectionParameter>,
+    /// Per-property lists of SELECT-OPTIONS-style ranges.
+    pub select_options: Vec<SelectOption>,
+}
+
+/// Single-valued parameter in a `UI.SelectionVariant.Parameters`.
+/// Shape: `<Record Type="UI.ParameterType">` with `PropertyName` +
+/// `PropertyValue`. Always interpreted as `property eq value`.
+#[derive(Debug, Clone, Serialize)]
+pub struct SelectionParameter {
+    pub property_name: String,
+    pub property_value: String,
+}
+
+/// One property's worth of SELECT-OPTIONS ranges inside
+/// `UI.SelectionVariant.SelectOptions`. Multiple ranges on the same
+/// property are OR-joined when building `$filter`.
+#[derive(Debug, Clone, Serialize)]
+pub struct SelectOption {
+    pub property_name: String,
+    pub ranges: Vec<SelectionRange>,
+}
+
+/// One `<Record Type="UI.SelectionRangeType">` inside a `SelectOption`.
+/// Mirrors ABAP SELECT-OPTIONS semantics: Include/Exclude × operator.
+#[derive(Debug, Clone, Serialize)]
+pub struct SelectionRange {
+    /// `I` (include, normal comparison) or `E` (exclude, negated).
+    pub sign: SelectionSign,
+    /// Comparison operator — `EQ`/`NE`/`GT`/`GE`/`LT`/`LE`/`BT`/`NB`/`CP`/`NP`.
+    pub option: SelectionOption,
+    /// Primary value. For `BT`/`NB` this is the lower bound.
+    pub low: String,
+    /// Upper bound — only present for `BT`/`NB`. `None` otherwise.
+    pub high: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SelectionSign {
+    I,
+    E,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SelectionOption {
+    Eq,
+    Ne,
+    Gt,
+    Ge,
+    Lt,
+    Le,
+    Bt,
+    Nb,
+    Cp,
+    Np,
 }
 
 /// One `UI.DataField` inside a `UI.LineItem` collection — enough to
@@ -581,6 +661,7 @@ fn parse_entity_types(schema: &roxmltree::Node, version: ODataVersion) -> Vec<En
                 selection_fields: Vec::new(),
                 line_item: Vec::new(),
                 request_at_least: Vec::new(),
+                selection_variants: Vec::new(),
             }
         })
         .collect()
@@ -927,6 +1008,36 @@ fn apply_v4_typed_annotations(
                         }
                     }
                 }
+            } else if lower.ends_with(".selectionvariant") {
+                // UI.SelectionVariant = declared Fiori filter variant.
+                // Multiple qualifiers are allowed (one per named variant),
+                // so we push every match rather than keeping just the
+                // first. Targets the entity type or the entity set.
+                let variant_opt = parse_selection_variant_record(&annot);
+                if let Some(mut variant) = variant_opt {
+                    variant.qualifier = annot.attribute("Qualifier").map(String::from);
+                    let type_name = if let Some((_, set_name)) = target.split_once('/') {
+                        entity_sets
+                            .iter()
+                            .find(|s| s.name == set_name)
+                            .map(|s| extract_type_name(&s.entity_type).to_string())
+                    } else {
+                        Some(target.to_string())
+                    };
+                    if let Some(name) = type_name {
+                        if let Some(et) = entity_types.iter_mut().find(|t| t.name == name) {
+                            // Default (no-qualifier) variant goes first so
+                            // the frontend's "pick one" logic can grab it
+                            // with .first(). Qualified variants preserve
+                            // their parse order after.
+                            if variant.qualifier.is_none() {
+                                et.selection_variants.insert(0, variant);
+                            } else {
+                                et.selection_variants.push(variant);
+                            }
+                        }
+                    }
+                }
             } else if lower.ends_with(".presentationvariant") {
                 // UI.PresentationVariant = Record with RequestAtLeast /
                 // SortOrder / Visualizations / ... We only pull
@@ -1138,6 +1249,168 @@ fn parse_value_list_parameter(record: &roxmltree::Node) -> Option<ValueListParam
     }
     let value_list_property = value_list_property?;
     Some(ValueListParameter { kind, local_property, value_list_property, constant })
+}
+
+/// Parse the `Record` inside a `UI.SelectionVariant` annotation into
+/// a typed variant. Qualifier is stitched on by the caller (it's on
+/// the outer `<Annotation Qualifier="...">`, not on the record). Returns
+/// `None` only when the annotation has no inner `<Record>`.
+fn parse_selection_variant_record(annot: &roxmltree::Node) -> Option<SelectionVariant> {
+    let record = children_by_tag(annot, "Record").into_iter().next()?;
+    let mut text: Option<String> = None;
+    let mut parameters: Vec<SelectionParameter> = Vec::new();
+    let mut select_options: Vec<SelectOption> = Vec::new();
+    for pv in children_by_tag(&record, "PropertyValue") {
+        match pv.attribute("Property") {
+            Some("Text") => text = pv.attribute("String").map(String::from),
+            Some("Parameters") => {
+                for coll in children_by_tag(&pv, "Collection") {
+                    for param_rec in children_by_tag(&coll, "Record") {
+                        if let Some(p) = parse_selection_parameter(&param_rec) {
+                            parameters.push(p);
+                        }
+                    }
+                }
+            }
+            Some("SelectOptions") => {
+                for coll in children_by_tag(&pv, "Collection") {
+                    for opt_rec in children_by_tag(&coll, "Record") {
+                        if let Some(o) = parse_select_option(&opt_rec) {
+                            select_options.push(o);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(SelectionVariant {
+        qualifier: None,
+        text,
+        parameters,
+        select_options,
+    })
+}
+
+/// Parse a `<Record Type="UI.ParameterType">` — a single-valued filter
+/// constraint with a literal `PropertyValue`.
+fn parse_selection_parameter(record: &roxmltree::Node) -> Option<SelectionParameter> {
+    let mut property_name: Option<String> = None;
+    let mut property_value: Option<String> = None;
+    for pv in children_by_tag(record, "PropertyValue") {
+        match pv.attribute("Property") {
+            Some("PropertyName") => {
+                property_name = pv.attribute("PropertyPath").map(String::from);
+            }
+            Some("PropertyValue") => {
+                // Parameters take a literal primitive value. SAP emits
+                // `String=`, `Int=`, or `Bool=`; fall through so we
+                // don't lose numeric/bool defaults.
+                property_value = pv
+                    .attribute("String")
+                    .or_else(|| pv.attribute("Int"))
+                    .or_else(|| pv.attribute("Bool"))
+                    .map(String::from);
+            }
+            _ => {}
+        }
+    }
+    Some(SelectionParameter {
+        property_name: property_name?,
+        property_value: property_value?,
+    })
+}
+
+/// Parse a `<Record Type="UI.SelectOptionType">` — one property's
+/// SELECT-OPTIONS list, with zero or more ranges inside.
+fn parse_select_option(record: &roxmltree::Node) -> Option<SelectOption> {
+    let mut property_name: Option<String> = None;
+    let mut ranges: Vec<SelectionRange> = Vec::new();
+    for pv in children_by_tag(record, "PropertyValue") {
+        match pv.attribute("Property") {
+            Some("PropertyName") => {
+                property_name = pv.attribute("PropertyPath").map(String::from);
+            }
+            Some("Ranges") => {
+                for coll in children_by_tag(&pv, "Collection") {
+                    for range_rec in children_by_tag(&coll, "Record") {
+                        if let Some(r) = parse_selection_range(&range_rec) {
+                            ranges.push(r);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let property_name = property_name?;
+    if ranges.is_empty() {
+        return None;
+    }
+    Some(SelectOption { property_name, ranges })
+}
+
+/// Parse a `<Record Type="UI.SelectionRangeType">` — one range with
+/// sign, operator, and one or two bounds. Unknown enum members short-
+/// circuit the whole range (better to drop than to mis-interpret as EQ).
+fn parse_selection_range(record: &roxmltree::Node) -> Option<SelectionRange> {
+    let mut sign: Option<SelectionSign> = None;
+    let mut option: Option<SelectionOption> = None;
+    let mut low: Option<String> = None;
+    let mut high: Option<String> = None;
+    for pv in children_by_tag(record, "PropertyValue") {
+        match pv.attribute("Property") {
+            Some("Sign") => {
+                if let Some(em) = pv.attribute("EnumMember") {
+                    let leaf = em.rsplit('/').next().unwrap_or(em);
+                    sign = match leaf {
+                        "I" => Some(SelectionSign::I),
+                        "E" => Some(SelectionSign::E),
+                        _ => None,
+                    };
+                }
+            }
+            Some("Option") => {
+                if let Some(em) = pv.attribute("EnumMember") {
+                    let leaf = em.rsplit('/').next().unwrap_or(em);
+                    option = match leaf {
+                        "EQ" => Some(SelectionOption::Eq),
+                        "NE" => Some(SelectionOption::Ne),
+                        "GT" => Some(SelectionOption::Gt),
+                        "GE" => Some(SelectionOption::Ge),
+                        "LT" => Some(SelectionOption::Lt),
+                        "LE" => Some(SelectionOption::Le),
+                        "BT" => Some(SelectionOption::Bt),
+                        "NB" => Some(SelectionOption::Nb),
+                        "CP" => Some(SelectionOption::Cp),
+                        "NP" => Some(SelectionOption::Np),
+                        _ => None,
+                    };
+                }
+            }
+            Some("Low") => {
+                low = pv
+                    .attribute("String")
+                    .or_else(|| pv.attribute("Int"))
+                    .or_else(|| pv.attribute("Bool"))
+                    .map(String::from);
+            }
+            Some("High") => {
+                high = pv
+                    .attribute("String")
+                    .or_else(|| pv.attribute("Int"))
+                    .or_else(|| pv.attribute("Bool"))
+                    .map(String::from);
+            }
+            _ => {}
+        }
+    }
+    Some(SelectionRange {
+        sign: sign?,
+        option: option?,
+        low: low?,
+        high,
+    })
 }
 
 /// Pull `RequestAtLeast` property paths out of a
@@ -2319,6 +2592,103 @@ mod tests {
         let wh = ot.properties.iter().find(|p| p.name == "Warehouse").unwrap();
         // Warehouse had no override → picks up the type default.
         assert_eq!(wh.text_arrangement, Some(TextArrangement::TextFirst));
+    }
+
+    #[test]
+    fn test_v4_selection_variant_default_and_qualified() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="Warehouse" Type="Edm.String"/>
+        <Property Name="Status" Type="Edm.String"/>
+        <Property Name="NetAmount" Type="Edm.Decimal"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType">
+        <Annotation Term="SAP__UI.SelectionVariant" Qualifier="Pending">
+          <Record>
+            <PropertyValue Property="Text" String="Pending Orders"/>
+            <PropertyValue Property="Parameters">
+              <Collection>
+                <Record Type="UI.ParameterType">
+                  <PropertyValue Property="PropertyName" PropertyPath="Warehouse"/>
+                  <PropertyValue Property="PropertyValue" String="HB01"/>
+                </Record>
+              </Collection>
+            </PropertyValue>
+            <PropertyValue Property="SelectOptions">
+              <Collection>
+                <Record Type="UI.SelectOptionType">
+                  <PropertyValue Property="PropertyName" PropertyPath="Status"/>
+                  <PropertyValue Property="Ranges">
+                    <Collection>
+                      <Record Type="UI.SelectionRangeType">
+                        <PropertyValue Property="Sign" EnumMember="UI.SelectionRangeSignType/I"/>
+                        <PropertyValue Property="Option" EnumMember="UI.SelectionRangeOptionType/EQ"/>
+                        <PropertyValue Property="Low" String="PENDING"/>
+                      </Record>
+                      <Record Type="UI.SelectionRangeType">
+                        <PropertyValue Property="Sign" EnumMember="UI.SelectionRangeSignType/I"/>
+                        <PropertyValue Property="Option" EnumMember="UI.SelectionRangeOptionType/EQ"/>
+                        <PropertyValue Property="Low" String="HOLD"/>
+                      </Record>
+                    </Collection>
+                  </PropertyValue>
+                </Record>
+                <Record Type="UI.SelectOptionType">
+                  <PropertyValue Property="PropertyName" PropertyPath="NetAmount"/>
+                  <PropertyValue Property="Ranges">
+                    <Collection>
+                      <Record Type="UI.SelectionRangeType">
+                        <PropertyValue Property="Sign" EnumMember="UI.SelectionRangeSignType/I"/>
+                        <PropertyValue Property="Option" EnumMember="UI.SelectionRangeOptionType/BT"/>
+                        <PropertyValue Property="Low" Int="100"/>
+                        <PropertyValue Property="High" Int="1000"/>
+                      </Record>
+                    </Collection>
+                  </PropertyValue>
+                </Record>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+        <Annotation Term="SAP__UI.SelectionVariant">
+          <Record>
+            <PropertyValue Property="Text" String="All"/>
+          </Record>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let ot = meta.find_entity_type("OrderType").unwrap();
+        // Default variant (no qualifier) is first.
+        assert_eq!(ot.selection_variants.len(), 2);
+        assert!(ot.selection_variants[0].qualifier.is_none());
+        assert_eq!(ot.selection_variants[0].text.as_deref(), Some("All"));
+        let v = &ot.selection_variants[1];
+        assert_eq!(v.qualifier.as_deref(), Some("Pending"));
+        assert_eq!(v.text.as_deref(), Some("Pending Orders"));
+        assert_eq!(v.parameters.len(), 1);
+        assert_eq!(v.parameters[0].property_name, "Warehouse");
+        assert_eq!(v.parameters[0].property_value, "HB01");
+        assert_eq!(v.select_options.len(), 2);
+        let status = &v.select_options[0];
+        assert_eq!(status.property_name, "Status");
+        assert_eq!(status.ranges.len(), 2);
+        assert_eq!(status.ranges[0].sign, SelectionSign::I);
+        assert_eq!(status.ranges[0].option, SelectionOption::Eq);
+        assert_eq!(status.ranges[0].low, "PENDING");
+        let amount = &v.select_options[1];
+        assert_eq!(amount.property_name, "NetAmount");
+        assert_eq!(amount.ranges[0].option, SelectionOption::Bt);
+        assert_eq!(amount.ranges[0].low, "100");
+        assert_eq!(amount.ranges[0].high.as_deref(), Some("1000"));
     }
 
     #[test]
