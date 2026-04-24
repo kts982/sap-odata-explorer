@@ -142,9 +142,14 @@ Things intentionally left out of SAP View for now, with the reasoning:
 
 - **`UI.Facets` / `UI.FieldGroup` / `UI.Identification`** — the Object Page layout family. Implementing a "Fiori preview" mode is a large UI investment for low daily-troubleshooting payoff; keeping SAP View as an overlay on the explorer (not a Fiori runtime) is a design principle.
 - **`edmx:Reference` / `edmx:IncludeAnnotations`** — external annotation-document loading. Theoretically elegant; the practical payoff (`Common.ValueListReferences`) is already handled. Other external-annotation cases are rare in SAP practice.
-- **Results-grid criticality coloring** — `UI.Criticality = Path("StatusCriticality")` could color cells per row by looking up the linked column. Doable, but niche outside KPI services.
-- **Raw annotation inspector panel** — a power-user view dumping `ServiceMetadata.annotations` grouped by namespace. Low UI cost (parser already captures them); on the backlog.
-- **Fiori-readiness linter** — checklist flagging missing-but-expected annotations (no `HeaderInfo`, no `SelectionFields`, no `LineItem`). ABAP-dev-facing feature; on the backlog.
+- **V2 F4 convention scan** — V2 services declare `sap:value-list="standard"` as a marker but don't carry a mapping record. We could guess at a value-help entity set by naming convention (`*_VH`) and open the picker against it. Deferred because our test landscapes are V4-heavy; revisit if a V2 service lands in daily use.
+
+Still on the roadmap (above the deliberate-gap line — we *will* do these):
+
+- **ABAP-CDS "fix hints"** in lint findings — each finding names the likely CDS annotation to add (`@ObjectModel.text.element`, `@Consumption.valueHelpDefinition`, `@Search.searchable`, ...). Makes the linter *teach* rather than just grade.
+- **Lint profiles** — today's linter judges every entity as a list-report. An F4 service (`*VH`) doesn't need `UI.LineItem`. Auto-detect the profile from annotations present + naming conventions, allow manual override.
+- **Consistency-rule lint checks** — beyond presence: flag `SelectionFields` pointing at non-filterable properties, `SortOrder` using non-sortable ones, `ValueList` without a writable `Out`/`InOut` mapping back to the local property, `TextArrangement` without a `Common.Text`, etc.
+- **Prominence of the readiness panel** — currently below the describe tables; a summary pill or a separate button may work better depending on how the describe view evolves.
 
 ## Fiori-readiness checklist
 

@@ -1466,9 +1466,14 @@ fn apply_v4_typed_annotations(
                 };
                 if let Some(name) = type_name {
                     if let Some(et) = entity_types.iter_mut().find(|t| t.name == name) {
-                        // Only the default (no qualifier) wins, so we
-                        // don't let a "Simplified" variant overwrite.
-                        if et.line_item.is_empty() {
+                        // Prefer the no-qualifier (default) variant
+                        // regardless of source order: fill when empty,
+                        // and always overwrite with the unqualified
+                        // one. A qualified variant never displaces an
+                        // already-stored unqualified one. Mirrors how
+                        // we handle UI.SelectionVariant.
+                        let is_qualified = annot.attribute("Qualifier").is_some();
+                        if et.line_item.is_empty() || !is_qualified {
                             et.line_item = fields;
                         }
                     }
@@ -1492,7 +1497,13 @@ fn apply_v4_typed_annotations(
                 };
                 if let Some(name) = type_name {
                     if let Some(et) = entity_types.iter_mut().find(|t| t.name == name) {
-                        et.selection_fields = paths;
+                        // Same precedence rule as UI.LineItem: the
+                        // unqualified variant wins regardless of
+                        // source order.
+                        let is_qualified = annot.attribute("Qualifier").is_some();
+                        if et.selection_fields.is_empty() || !is_qualified {
+                            et.selection_fields = paths;
+                        }
                     }
                 }
             }
@@ -3617,6 +3628,79 @@ mod tests {
         assert!(!ot.sort_order[0].descending);
         assert_eq!(ot.sort_order[1].property, "EWMStorageBin");
         assert!(ot.sort_order[1].descending);
+    }
+
+    #[test]
+    fn test_v4_line_item_prefers_unqualified_regardless_of_order() {
+        // Qualified variant appears FIRST in the XML but the unqualified
+        // one should still win. Previously (pre-fix) first-wins would
+        // have stored the "Simplified" columns.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="A" Type="Edm.String"/>
+        <Property Name="B" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType">
+        <Annotation Term="SAP__UI.LineItem" Qualifier="Simplified">
+          <Collection>
+            <Record Type="UI.DataField"><PropertyValue Property="Value" Path="A"/></Record>
+          </Collection>
+        </Annotation>
+        <Annotation Term="SAP__UI.LineItem">
+          <Collection>
+            <Record Type="UI.DataField"><PropertyValue Property="Value" Path="A"/></Record>
+            <Record Type="UI.DataField"><PropertyValue Property="Value" Path="B"/></Record>
+          </Collection>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let ot = meta.find_entity_type("OrderType").unwrap();
+        assert_eq!(ot.line_item.len(), 2, "unqualified variant should win even when it comes second");
+        assert_eq!(ot.line_item[0].value_path, "A");
+        assert_eq!(ot.line_item[1].value_path, "B");
+    }
+
+    #[test]
+    fn test_v4_selection_fields_prefers_unqualified_regardless_of_order() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="A" Type="Edm.String"/>
+        <Property Name="B" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType">
+        <Annotation Term="SAP__UI.SelectionFields">
+          <Collection><PropertyPath>A</PropertyPath></Collection>
+        </Annotation>
+        <Annotation Term="SAP__UI.SelectionFields" Qualifier="Extended">
+          <Collection>
+            <PropertyPath>A</PropertyPath>
+            <PropertyPath>B</PropertyPath>
+          </Collection>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let ot = meta.find_entity_type("OrderType").unwrap();
+        // Unqualified came first; the qualified "Extended" must NOT
+        // overwrite (pre-fix last-wins would have stored [A, B]).
+        assert_eq!(ot.selection_fields, vec!["A"]);
     }
 
     #[test]

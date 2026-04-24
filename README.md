@@ -174,7 +174,10 @@ The `sap-odata-core` crate holds all protocol logic. CLI and Tauri are thin wrap
 ## Roadmap
 
 Short term:
-- [ ] Remaining SAP/UI5 annotation overlays: `Common.ValueList` (F4-style value help), `UI.LineItem` (Fiori default-columns auto-`$select`), per-row `UI.Criticality` coloring in the results grid, Fiori-readiness linter
+- [ ] ABAP-CDS "fix hint" per lint finding — surface the suggested CDS annotation (e.g. `@ObjectModel.text.element`, `@Consumption.valueHelpDefinition`) alongside each finding so the linter teaches, not just grades
+- [ ] Lint profiles (list-report / object-page / value-help / analytical / transactional) so a V4 F4 service isn't judged like a list-report
+- [ ] Consistency-rule lint checks (SelectionFields pointing at non-filterable columns, SortOrder referencing non-sortable, ValueList without a writable mapping, ...)
+- [ ] V2 F4 convention scan (`sap:value-list` → guess an `*_VH` entity set → drive the picker)
 - [ ] Auth validation on real federated landscapes (Azure AD + SAP IAS, Okta, ADFS)
 - [ ] Code signing and release pipeline (CI builds for Windows / Linux / macOS, signed Windows artifacts)
 
