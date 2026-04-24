@@ -332,7 +332,11 @@ sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 lint --min-severity miss --json \
   | jq -e 'length == 0'
 ```
 
-Findings carry a `severity` (`pass` / `warn` / `miss`), a `category` (`identity` / `listreport` / `filtering` / `fields` / `capabilities`), a stable `code`, a human-readable `message`, and — for actionable warnings / misses — a `suggested_cds` token (e.g. `@UI.headerInfo`, `@ObjectModel.text.element`, `@Consumption.valueHelpDefinition`) plus a short `why_in_fiori` explanation. The table output inlines these under each message; the JSON output emits them as separate fields.
+Findings carry a `severity` (`pass` / `warn` / `miss`), a `category` (`profile` / `identity` / `listreport` / `filtering` / `fields` / `capabilities`), a stable `code`, a human-readable `message`, and — for actionable warnings / misses — a `suggested_cds` token (e.g. `@UI.headerInfo`, `@ObjectModel.text.element`, `@Consumption.valueHelpDefinition`) plus a short `why_in_fiori` explanation. The table output inlines these under each message; the JSON output emits them as separate fields.
+
+The linter is **profile-aware**: it auto-detects the entity's shape (`list_report` / `object_page` / `value_help` / `analytical` / `transactional`) from the name and declared annotations. The first finding is always a `profile` banner showing the detected shape; subsequent checks skip irrelevant ones (e.g. value-help entities aren't dinged for missing `UI.LineItem`).
+
+In addition to "did you declare X?" checks, the linter runs **consistency rules** that flag contradictions in already-declared annotations: `SelectionFields` referencing a non-filterable column, `SortOrder` referencing a non-sortable one, `UI.Hidden` columns appearing in `SelectionFields`, `Common.ValueList` without a writable (`Out`/`InOut`) parameter, `UI.TextArrangement` on a property with no `Common.Text` to arrange.
 
 ### `annotations`
 

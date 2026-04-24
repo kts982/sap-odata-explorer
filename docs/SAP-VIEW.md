@@ -153,13 +153,22 @@ Still on the roadmap (above the deliberate-gap line — we *will* do these):
 
 ## Fiori-readiness checklist
 
-A "Fiori readiness" panel drops into the describe view below the property/nav tables (SAP View only). It runs the parser's evaluation against what a Fiori list-report / object-page service would normally declare:
+A "Fiori readiness" panel drops into the describe view below the property/nav tables (SAP View only). The linter is **profile-aware** — it auto-detects the entity's shape (list-report / object-page / value-help / analytical / transactional) from the name and declared annotations, and adjusts the checks accordingly. A value-help entity never gets dinged for missing `UI.LineItem` — that's not its job.
 
+Categories:
+
+- **Profile** — banner showing the detected shape (`Evaluated as value_help.`).
 - **Identity** — `UI.HeaderInfo`, `Common.SemanticKey` (warns if the technical key looks UUID-ish and no business key is declared).
-- **List report** — `UI.LineItem`, `UI.PresentationVariant` (RequestAtLeast + SortOrder).
-- **Filtering** — `UI.SelectionFields`, `UI.SelectionVariant`.
+- **List report** — `UI.LineItem`, `UI.PresentationVariant` (RequestAtLeast + SortOrder). Skipped for value-help / object-page / analytical profiles.
+- **Filtering** — `UI.SelectionFields`, `UI.SelectionVariant`. Skipped for value-help / object-page.
 - **Fields** — decimal/amount/quantity properties without `Measures.Unit` or `Measures.ISOCurrency`; code-looking columns (`*ID`, `*Code`) without a `Common.Text` pairing.
 - **Capabilities** — flags services that declare no `Capabilities.*` whatsoever (clients can't pre-flight).
+- **Consistency rules** — contradictions inside the declared annotations:
+  - `SelectionFields` referencing a non-filterable property (server will 400 on `$filter`)
+  - `SortOrder` referencing a non-sortable property
+  - `UI.Hidden` columns appearing in `SelectionFields` (Fiori would both hide and offer to filter on it)
+  - `Common.ValueList` without an `InOut`/`Out` parameter (picker can't write back on selection)
+  - `UI.TextArrangement` on a property with no `Common.Text` to arrange
 
 Each finding has a severity dot (green pass / amber warn / red miss), a short message, and — for actionable warnings / misses — an **ABAP CDS fix hint** plus a one-line "what Fiori does with it" explanation. So `"No UI.SelectionFields"` comes paired with `ABAP CDS: @UI.selectionField` and `"Populates the Fiori filter bar..."`, which means the linter *teaches* rather than just grades.
 

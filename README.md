@@ -174,9 +174,7 @@ The `sap-odata-core` crate holds all protocol logic. CLI and Tauri are thin wrap
 ## Roadmap
 
 Short term:
-- [ ] ABAP-CDS "fix hint" per lint finding — surface the suggested CDS annotation (e.g. `@ObjectModel.text.element`, `@Consumption.valueHelpDefinition`) alongside each finding so the linter teaches, not just grades
-- [ ] Lint profiles (list-report / object-page / value-help / analytical / transactional) so a V4 F4 service isn't judged like a list-report
-- [ ] Consistency-rule lint checks (SelectionFields pointing at non-filterable columns, SortOrder referencing non-sortable, ValueList without a writable mapping, ...)
+- [ ] ABAP-CDS convention warnings (complement to the CDS fix hints already shipped) — flag violations of `@ObjectModel.*` / `@VDM.*` / `@Consumption.*` patterns, e.g. "`text.element` points at a non-text column", "C_* view without VDM.usage.type"
 - [ ] V2 F4 convention scan (`sap:value-list` → guess an `*_VH` entity set → drive the picker)
 - [ ] Auth validation on real federated landscapes (Azure AD + SAP IAS, Okta, ADFS)
 - [ ] Code signing and release pipeline (CI builds for Windows / Linux / macOS, signed Windows artifacts)
