@@ -268,6 +268,41 @@ pub struct Property {
     /// means "no explicit arrangement" — callers default to
     /// `TextFirst` per Fiori convention.
     pub text_arrangement: Option<TextArrangement>,
+    /// `Common.FieldControl` — write/display control signal. Can be a
+    /// fixed enum value (`Mandatory` / `Optional` / `ReadOnly` /
+    /// `Inapplicable` / `Hidden`) or a path to a sibling property whose
+    /// runtime value supplies the control code (1/3/7 = Read-only /
+    /// Optional / Mandatory, per the SAP vocabulary numeric codes).
+    pub field_control: Option<FieldControl>,
+    /// `UI.Hidden` marker — Fiori should never show this property in
+    /// any list/detail UI. We still render it in the describe panel
+    /// (for transparency) but flag it clearly.
+    pub hidden: bool,
+    /// `UI.HiddenFilter` marker — property can be shown but must not be
+    /// offered as a filter control. Signals "server knows about this
+    /// but Fiori hides it from the filter bar".
+    pub hidden_filter: bool,
+    /// V2 `sap:display-format` attribute — presentation hint like
+    /// `Date`, `NonNegative`, `UpperCase`. Stored verbatim (lowercased
+    /// or not — SAP emits mixed case historically). Mainly useful for
+    /// the describe overlay and future results-grid formatting.
+    pub display_format: Option<String>,
+}
+
+/// `Common.FieldControl` value. Fixed numeric codes map to the SAP
+/// vocabulary's enum (7 = Mandatory, 3 = Optional, 1 = ReadOnly,
+/// 0 = Inapplicable, 5 = Hidden); anything else parses as `Path`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "lowercase")]
+pub enum FieldControl {
+    Mandatory,
+    Optional,
+    ReadOnly,
+    Inapplicable,
+    Hidden,
+    /// Dynamic control — path to a sibling property whose runtime
+    /// value (one of the numeric codes above) drives the state.
+    Path(String),
 }
 
 /// `UI.TextArrangement` — how a coded-value column combines with its
@@ -647,6 +682,12 @@ fn parse_entity_types(schema: &roxmltree::Node, version: ODataVersion) -> Vec<En
                     value_list_references: Vec::new(),
                     value_list_fixed: false,
                     text_arrangement: None,
+                    field_control: None,
+                    hidden: false,
+                    hidden_filter: false,
+                    display_format: p
+                        .attribute(("http://www.sap.com/Protocols/SAPData", "display-format"))
+                        .map(String::from),
                 })
                 .collect();
 
@@ -929,6 +970,39 @@ fn apply_v4_typed_annotations(
                                     prop.text_arrangement = Some(ta);
                                 }
                             }
+                        }
+                    }
+                }
+            } else if lower.ends_with(".fieldcontrol") {
+                if let Some((et_name, prop_name)) = target.split_once('/') {
+                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
+                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
+                            if let Some(fc) = parse_field_control(&annot) {
+                                prop.field_control = Some(fc);
+                            }
+                        }
+                    }
+                }
+            } else if lower.ends_with(".hidden") && !lower.ends_with(".hiddenfilter") {
+                // UI.Hidden can be marker-only (`<Annotation .../>`) or
+                // carry a `Bool` / `Path` — Fiori convention treats a
+                // missing value as `true`. Path variants are
+                // runtime-evaluated; we don't resolve them per row, so
+                // a Path here still flips the static marker on.
+                if let Some((et_name, prop_name)) = target.split_once('/') {
+                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
+                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
+                            let explicit = annot.attribute("Bool").map(|v| v == "true");
+                            prop.hidden = explicit.unwrap_or(true);
+                        }
+                    }
+                }
+            } else if lower.ends_with(".hiddenfilter") {
+                if let Some((et_name, prop_name)) = target.split_once('/') {
+                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
+                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
+                            let explicit = annot.attribute("Bool").map(|v| v == "true");
+                            prop.hidden_filter = explicit.unwrap_or(true);
                         }
                     }
                 }
@@ -1617,6 +1691,41 @@ fn parse_property_path_collection(pv: &roxmltree::Node) -> Vec<String> {
         }
     }
     out
+}
+
+/// Extract a `Common.FieldControl` value from an `<Annotation>` node.
+/// Accepts `EnumMember` for the five named states, `Path=` for dynamic
+/// (per-row) control, and the legacy `Int=` form that SAP-generated
+/// services still sometimes emit (7=Mandatory, 3=Optional, 1=ReadOnly,
+/// 0=Inapplicable, 5=Hidden).
+fn parse_field_control(annot: &roxmltree::Node) -> Option<FieldControl> {
+    if let Some(path) = annot.attribute("Path") {
+        return Some(FieldControl::Path(path.to_string()));
+    }
+    if let Some(em) = annot.attribute("EnumMember") {
+        let leaf = em.rsplit('/').next().unwrap_or(em);
+        return match leaf {
+            "Mandatory" => Some(FieldControl::Mandatory),
+            "Optional" => Some(FieldControl::Optional),
+            "ReadOnly" => Some(FieldControl::ReadOnly),
+            "Inapplicable" => Some(FieldControl::Inapplicable),
+            "Hidden" => Some(FieldControl::Hidden),
+            _ => None,
+        };
+    }
+    if let Some(int_str) = annot.attribute("Int") {
+        if let Ok(n) = int_str.parse::<u8>() {
+            return match n {
+                7 => Some(FieldControl::Mandatory),
+                3 => Some(FieldControl::Optional),
+                1 => Some(FieldControl::ReadOnly),
+                0 => Some(FieldControl::Inapplicable),
+                5 => Some(FieldControl::Hidden),
+                _ => None,
+            };
+        }
+    }
+    None
 }
 
 /// Extract a `UI.TextArrangement` value from an `<Annotation>` node.
@@ -2710,6 +2819,57 @@ mod tests {
         let wh = ot.properties.iter().find(|p| p.name == "Warehouse").unwrap();
         // Warehouse had no override → picks up the type default.
         assert_eq!(wh.text_arrangement, Some(TextArrangement::TextFirst));
+    }
+
+    #[test]
+    fn test_v4_field_control_hidden_hidden_filter_and_v2_display_format() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self" xmlns:sap="http://www.sap.com/Protocols/SAPData">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="ChangedAt" Type="Edm.DateTime" sap:display-format="Date"/>
+        <Property Name="Amount" Type="Edm.Decimal" sap:display-format="NonNegative"/>
+        <Property Name="Status" Type="Edm.String"/>
+        <Property Name="InternalCode" Type="Edm.String"/>
+        <Property Name="AuxKey" Type="Edm.String"/>
+        <Property Name="DynControl" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType/Status">
+        <Annotation Term="SAP__common.FieldControl" EnumMember="Common.FieldControlType/Mandatory"/>
+      </Annotations>
+      <Annotations Target="SAP__self.OrderType/InternalCode">
+        <Annotation Term="SAP__UI.Hidden"/>
+      </Annotations>
+      <Annotations Target="SAP__self.OrderType/AuxKey">
+        <Annotation Term="SAP__UI.HiddenFilter"/>
+      </Annotations>
+      <Annotations Target="SAP__self.OrderType/DynControl">
+        <Annotation Term="SAP__common.FieldControl" Path="SomeStatus"/>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let ot = meta.find_entity_type("OrderType").unwrap();
+        let status = ot.properties.iter().find(|p| p.name == "Status").unwrap();
+        assert!(matches!(status.field_control, Some(FieldControl::Mandatory)));
+        let internal = ot.properties.iter().find(|p| p.name == "InternalCode").unwrap();
+        assert!(internal.hidden);
+        let aux = ot.properties.iter().find(|p| p.name == "AuxKey").unwrap();
+        assert!(aux.hidden_filter);
+        let dyn_ctrl = ot.properties.iter().find(|p| p.name == "DynControl").unwrap();
+        match dyn_ctrl.field_control.as_ref() {
+            Some(FieldControl::Path(p)) => assert_eq!(p, "SomeStatus"),
+            other => panic!("expected Path, got {:?}", other),
+        }
+        let changed = ot.properties.iter().find(|p| p.name == "ChangedAt").unwrap();
+        assert_eq!(changed.display_format.as_deref(), Some("Date"));
+        let amount = ot.properties.iter().find(|p| p.name == "Amount").unwrap();
+        assert_eq!(amount.display_format.as_deref(), Some("NonNegative"));
     }
 
     #[test]

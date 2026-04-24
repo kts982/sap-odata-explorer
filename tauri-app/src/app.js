@@ -969,6 +969,37 @@ function propertyFlagHints(p) {
   if (p.required_in_filter === true) {
     badges.push(`<span class="text-[9px] text-ox-amber bg-ox-amberGlow border border-ox-amber/40 rounded-sm px-1 py-px" title="sap:required-in-filter=true — the server requires $filter to constrain this column">req.filter</span>`);
   }
+  // Common.FieldControl — write/display control. Mandatory overlaps
+  // semantically with required_in_filter so we keep the pills distinct
+  // (one is $filter-side, the other is write-side). ReadOnly overlaps
+  // with updatable=false; suppress the pill when we'd double-count.
+  if (p.field_control) {
+    const fc = p.field_control;
+    if (fc.kind === 'mandatory') {
+      badges.push(`<span class="text-[9px] text-ox-amber bg-ox-amberGlow border border-ox-amber/40 rounded-sm px-1 py-px" title="Common.FieldControl=Mandatory — required on write">mandatory</span>`);
+    } else if (fc.kind === 'readonly' && !(p.updatable === false && p.creatable === false)) {
+      badges.push(`<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="Common.FieldControl=ReadOnly">read-only</span>`);
+    } else if (fc.kind === 'inapplicable') {
+      badges.push(`<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="Common.FieldControl=Inapplicable — not relevant for this record">n/a</span>`);
+    } else if (fc.kind === 'hidden') {
+      badges.push(`<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="Common.FieldControl=Hidden">hidden</span>`);
+    } else if (fc.kind === 'path') {
+      badges.push(`<span class="text-[9px] text-ox-blue border border-ox-blue/40 rounded-sm px-1 py-px" title="Common.FieldControl Path — state driven by ${escapeHtml(fc.value)} at runtime">⇨ ${escapeHtml(fc.value)}</span>`);
+    }
+    // `optional` is the default; no pill needed.
+  }
+  // UI.Hidden / UI.HiddenFilter — marker pills.
+  if (p.hidden && (!p.field_control || p.field_control.kind !== 'hidden')) {
+    badges.push(`<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="UI.Hidden — Fiori would not show this property">UI hidden</span>`);
+  }
+  if (p.hidden_filter) {
+    badges.push(`<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="UI.HiddenFilter — shown as a column but suppressed from Fiori's filter bar">no filter UI</span>`);
+  }
+  // V2 sap:display-format — presentation hint. Small-caps pill.
+  if (p.display_format) {
+    const val = p.display_format;
+    badges.push(`<span class="text-[9px] text-ox-green border border-ox-green/40 rounded-sm px-1 py-px" title="sap:display-format=${escapeHtml(val)}">fmt: ${escapeHtml(val)}</span>`);
+  }
   return badges.length ? ' ' + badges.join(' ') : '';
 }
 
@@ -1712,8 +1743,14 @@ function renderDescribe(info) {
     const flagHints = sapViewEnabled ? propertyFlagHints(p) : '';
     const critHint = sapViewEnabled ? criticalityHint(p) : '';
     const vlHint = valueListHint(p);
-    html += `<tr class="hover:bg-ox-amberGlow cursor-pointer transition-colors" data-action="select" data-field="${escapeHtml(p.name)}">`;
-    html += `<td class="py-0.5 pr-3 text-ox-text">${escapeHtml(p.name)}${textHint}${currencyHint}${unitHint}${titleHint}${critHint}${flagHints}${vlHint}</td>`;
+    // Dim the row when SAP View is on and Fiori would hide this
+    // property (UI.Hidden or FieldControl=Hidden). Row stays visible
+    // and clickable — the muted text just makes it visually recede.
+    const hiddenRow = sapViewEnabled && (p.hidden || (p.field_control && p.field_control.kind === 'hidden'));
+    const rowCls = hiddenRow ? 'opacity-60' : '';
+    const nameCls = hiddenRow ? 'text-ox-dim' : 'text-ox-text';
+    html += `<tr class="hover:bg-ox-amberGlow cursor-pointer transition-colors ${rowCls}" data-action="select" data-field="${escapeHtml(p.name)}">`;
+    html += `<td class="py-0.5 pr-3 ${nameCls}">${escapeHtml(p.name)}${textHint}${currencyHint}${unitHint}${titleHint}${critHint}${flagHints}${vlHint}</td>`;
     html += `<td class="py-0.5 pr-3 text-ox-dim">${escapeHtml(p.edm_type.replace('Edm.', ''))}</td>`;
     html += `<td class="py-0.5 pr-3 text-center">${keyMark}</td>`;
     html += `<td class="py-0.5 text-ox-muted">${escapeHtml(p.label || '')}</td>`;
@@ -2186,12 +2223,15 @@ function updateTraceToggleState(open) {
   const chevron = document.getElementById('traceToggleChevron');
   if (!btn || !chevron) return;
   chevron.innerHTML = open ? '&#x25BE;' : '&#x25B4;';
+  // Off = dim green (primed / telemetry standby). On = full green
+  // with a subtle glow. Distinct from SAP View's amber so the two
+  // status-bar toggles read as different kinds of switch at a glance.
   if (open) {
-    btn.classList.add('text-ox-amber', 'border-ox-amber');
-    btn.classList.remove('text-ox-dim', 'border-ox-border');
+    btn.classList.add('text-ox-green', 'border-ox-green', 'bg-ox-greenGlow');
+    btn.classList.remove('text-ox-greenDim', 'border-ox-greenDim/60');
   } else {
-    btn.classList.add('text-ox-dim', 'border-ox-border');
-    btn.classList.remove('text-ox-amber', 'border-ox-amber');
+    btn.classList.add('text-ox-greenDim', 'border-ox-greenDim/60');
+    btn.classList.remove('text-ox-green', 'border-ox-green', 'bg-ox-greenGlow');
   }
 }
 
