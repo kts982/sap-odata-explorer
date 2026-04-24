@@ -7,7 +7,12 @@ use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 
 const MAX_TRACE_ENTRIES: usize = 64;
-const MAX_BODY_PREVIEW_CHARS: usize = 4_000;
+/// Upper bound on the response body we keep per trace entry. Large
+/// enough to capture verbose SAP OData error payloads in full (~tens
+/// of KB is typical, 100+ KB for batch error dumps) without unbounded
+/// growth. The frontend's Inspector shows the first ~4 KB by default
+/// and exposes an "expand" action that reveals up to this cap.
+const MAX_BODY_PREVIEW_CHARS: usize = 256_000;
 const MAX_HEADER_VALUE_CHARS: usize = 240;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

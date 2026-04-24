@@ -2088,11 +2088,30 @@ function renderTraceHeaders(headers) {
   return html;
 }
 
+// First-render length for trace bodies — keeps the inspector snappy on
+// large responses. The "show full" button below the preview reveals the
+// rest (up to the core's MAX_BODY_PREVIEW_CHARS cap — anything beyond
+// that arrives with a `... <truncated>` suffix already in place).
+const TRACE_BODY_PREVIEW_CHARS = 4000;
+
 function renderTraceBody(body, emptyLabel) {
   if (!body) {
     return `<div class="trace-code text-ox-dim">${escapeHtml(emptyLabel)}</div>`;
   }
-  return `<pre class="trace-code">${escapeHtml(body)}</pre>`;
+  if (body.length <= TRACE_BODY_PREVIEW_CHARS) {
+    return `<pre class="trace-code">${escapeHtml(body)}</pre>`;
+  }
+  // Long body — render collapsed, let the user opt in to full render.
+  // `_traceBodyExpanded` is set per-tab when the expand button is clicked.
+  const tab = getActiveTab();
+  const expanded = tab && tab._traceBodyExpanded === true;
+  const shown = expanded ? body : body.slice(0, TRACE_BODY_PREVIEW_CHARS) + '\n…';
+  const sizeKb = (body.length / 1024).toFixed(1);
+  const label = expanded
+    ? `collapse (showing full ${sizeKb} KB)`
+    : `show full response body (${sizeKb} KB)`;
+  return `<pre class="trace-code">${escapeHtml(shown)}</pre>` +
+    `<button type="button" class="mt-2 text-[10px] font-semibold tracking-wide px-2 py-1 rounded-sm text-ox-electric border border-ox-electric/50 hover:bg-ox-electric/10 hover:border-ox-electric transition-colors" data-action="toggle-trace-body">${escapeHtml(label)}</button>`;
 }
 
 function renderTraceList(tab) {
@@ -2939,11 +2958,20 @@ document.addEventListener('DOMContentLoaded', () => {
       const tab = getActiveTab();
       if (!tab) return;
       tab.selectedTraceId = parseInt(el.dataset.traceId, 10);
+      tab._traceBodyExpanded = false;
       renderTraceInspector(tab);
     } else if (action === 'select-trace-subtab') {
       const tab = getActiveTab();
       if (!tab) return;
       tab._traceSubTab = el.dataset.subtab === 'request' ? 'request' : 'response';
+      // Collapse the body expansion when switching sub-tabs — fresh
+      // context means the user probably wants the short view first.
+      tab._traceBodyExpanded = false;
+      renderTraceDetail(tab);
+    } else if (action === 'toggle-trace-body') {
+      const tab = getActiveTab();
+      if (!tab) return;
+      tab._traceBodyExpanded = !tab._traceBodyExpanded;
       renderTraceDetail(tab);
     } else if (action === 'copy-trace-curl') {
       copySelectedTraceAsCurl();
