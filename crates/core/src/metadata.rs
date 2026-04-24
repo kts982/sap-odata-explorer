@@ -998,7 +998,8 @@ fn apply_v4_typed_annotations(
                             // default set later.
                             for nested in children_by_tag(&annot, "Annotation") {
                                 let n_term = nested.attribute("Term").unwrap_or("");
-                                let n_lower = n_term.trim_start_matches("SAP__").to_ascii_lowercase();
+                                let n_lower =
+                                    n_term.trim_start_matches("SAP__").to_ascii_lowercase();
                                 if n_lower.ends_with(".textarrangement") {
                                     if let Some(ta) = parse_text_arrangement(&nested) {
                                         prop.text_arrangement = Some(ta);
@@ -1136,9 +1137,7 @@ fn apply_v4_typed_annotations(
                 // Entity-set–scoped capability restriction.
                 // Target looks like "Container/EntitySetName".
                 if let Some((_, set_name)) = target.split_once('/') {
-                    if let Some(type_ref) =
-                        entity_sets.iter().find(|s| s.name == set_name)
-                    {
+                    if let Some(type_ref) = entity_sets.iter().find(|s| s.name == set_name) {
                         let type_name = extract_type_name(&type_ref.entity_type).to_string();
                         if let Some(et) = entity_types.iter_mut().find(|t| t.name == type_name) {
                             apply_capability_restriction(&lower, &annot, &mut et.properties);
@@ -1153,25 +1152,19 @@ fn apply_v4_typed_annotations(
                 // a nav-path list on the EntityType so the frontend
                 // pre-flight validator can catch queries that will 500.
                 if let Some((_, set_name)) = target.split_once('/') {
-                    if let Some(type_ref) =
-                        entity_sets.iter().find(|s| s.name == set_name)
-                    {
+                    if let Some(type_ref) = entity_sets.iter().find(|s| s.name == set_name) {
                         let type_name = extract_type_name(&type_ref.entity_type).to_string();
                         if let Some(et) = entity_types.iter_mut().find(|t| t.name == type_name) {
                             apply_entity_set_capability(&lower, &annot, et);
                         }
                     }
                 }
-            } else if lower.ends_with(".topsupported")
-                || lower.ends_with(".skipsupported")
-            {
+            } else if lower.ends_with(".topsupported") || lower.ends_with(".skipsupported") {
                 // Standalone `<Annotation ... Bool="false"/>` on an entity
                 // set. Default is `true`, so only `false` is informative
                 // (but we store whatever was declared for transparency).
                 if let Some((_, set_name)) = target.split_once('/') {
-                    if let Some(type_ref) =
-                        entity_sets.iter().find(|s| s.name == set_name)
-                    {
+                    if let Some(type_ref) = entity_sets.iter().find(|s| s.name == set_name) {
                         let type_name = extract_type_name(&type_ref.entity_type).to_string();
                         if let Some(et) = entity_types.iter_mut().find(|t| t.name == type_name) {
                             let val = annot.attribute("Bool").map(|v| v == "true");
@@ -1229,7 +1222,10 @@ fn apply_v4_typed_annotations(
                                     if let Some(text) = s.text() {
                                         let trimmed = text.trim();
                                         if !trimmed.is_empty()
-                                            && !prop.value_list_references.iter().any(|u| u == trimmed)
+                                            && !prop
+                                                .value_list_references
+                                                .iter()
+                                                .any(|u| u == trimmed)
                                         {
                                             prop.value_list_references.push(trimmed.to_string());
                                         }
@@ -1324,7 +1320,8 @@ fn apply_v4_typed_annotations(
                                         Some("Parameters") => {
                                             for coll in children_by_tag(&pv, "Collection") {
                                                 for rec in children_by_tag(&coll, "Record") {
-                                                    if let Some(p) = parse_selection_parameter(&rec) {
+                                                    if let Some(p) = parse_selection_parameter(&rec)
+                                                    {
                                                         variant.parameters.push(p);
                                                     }
                                                 }
@@ -1571,11 +1568,7 @@ fn apply_capability_restriction(
 /// booleans, and `NonExpandableProperties` as a NavigationPropertyPath
 /// collection. Unknown fields are ignored so new Capability sub-terms
 /// don't break the parser.
-fn apply_entity_set_capability(
-    lower_term: &str,
-    annot: &roxmltree::Node,
-    et: &mut EntityType,
-) {
+fn apply_entity_set_capability(lower_term: &str, annot: &roxmltree::Node, et: &mut EntityType) {
     let record = match children_by_tag(annot, "Record").into_iter().next() {
         Some(r) => r,
         None => return,
@@ -1655,7 +1648,13 @@ fn parse_value_list_record(annot: &roxmltree::Node) -> Option<ValueList> {
     if parameters.is_empty() {
         return None;
     }
-    Some(ValueList { qualifier: None, collection_path, label, search_supported, parameters })
+    Some(ValueList {
+        qualifier: None,
+        collection_path,
+        label,
+        search_supported,
+        parameters,
+    })
 }
 
 /// Parse one `<Record>` inside `Common.ValueList.Parameters`. Returns
@@ -1699,7 +1698,12 @@ fn parse_value_list_parameter(record: &roxmltree::Node) -> Option<ValueListParam
         }
     }
     let value_list_property = value_list_property?;
-    Some(ValueListParameter { kind, local_property, value_list_property, constant })
+    Some(ValueListParameter {
+        kind,
+        local_property,
+        value_list_property,
+        constant,
+    })
 }
 
 /// Parse the `Record` inside a `UI.SelectionVariant` annotation into
@@ -1798,7 +1802,10 @@ fn parse_select_option(record: &roxmltree::Node) -> Option<SelectOption> {
     if ranges.is_empty() {
         return None;
     }
-    Some(SelectOption { property_name, ranges })
+    Some(SelectOption {
+        property_name,
+        ranges,
+    })
 }
 
 /// Parse a `<Record Type="UI.SelectionRangeType">` — one range with
@@ -1868,9 +1875,7 @@ fn parse_selection_range(record: &roxmltree::Node) -> Option<SelectionRange> {
 /// record: `RequestAtLeast` (property paths added to `$select`) and
 /// `SortOrder` (default `$orderby` clauses). Empty tuple when the
 /// record is missing or both collections are unset.
-fn parse_presentation_variant(
-    annot: &roxmltree::Node,
-) -> (Vec<String>, Vec<SortOrder>) {
+fn parse_presentation_variant(annot: &roxmltree::Node) -> (Vec<String>, Vec<SortOrder>) {
     let mut request_at_least: Vec<String> = Vec::new();
     let mut sort_order: Vec<SortOrder> = Vec::new();
     let record = match children_by_tag(annot, "Record").into_iter().next() {
@@ -1925,7 +1930,10 @@ fn parse_sort_order_record(record: &roxmltree::Node) -> Option<SortOrder> {
             _ => {}
         }
     }
-    Some(SortOrder { property: property?, descending })
+    Some(SortOrder {
+        property: property?,
+        descending,
+    })
 }
 
 /// Walk a `UI.LineItem` annotation's `<Collection>` of `<Record>`s and
@@ -1957,16 +1965,18 @@ fn parse_line_item_collection(annot: &roxmltree::Node) -> Vec<LineItemField> {
                 Some("Label") => label = pv.attribute("String").map(String::from),
                 Some("Importance") => {
                     if let Some(em) = pv.attribute("EnumMember") {
-                        importance = Some(
-                            em.rsplit('/').next().unwrap_or(em).to_string(),
-                        );
+                        importance = Some(em.rsplit('/').next().unwrap_or(em).to_string());
                     }
                 }
                 _ => {}
             }
         }
         if let Some(vp) = value_path {
-            out.push(LineItemField { value_path: vp, label, importance });
+            out.push(LineItemField {
+                value_path: vp,
+                label,
+                importance,
+            });
         }
     }
     out
@@ -2479,7 +2489,10 @@ mod tests {
         for ann in &meta.annotations {
             assert_eq!(ann.namespace, "Common");
             assert_eq!(ann.term, "SAP__common.Label");
-            assert!(ann.value.is_some(), "String-valued annotations must carry value");
+            assert!(
+                ann.value.is_some(),
+                "String-valued annotations must carry value"
+            );
         }
     }
 
@@ -2685,9 +2698,20 @@ mod tests {
 </edmx:Edmx>"#;
         let meta = parse_metadata(xml).unwrap();
         let ot = meta.find_entity_type("OrderType").unwrap();
-        let amount = ot.properties.iter().find(|p| p.name == "NetAmount").unwrap();
-        assert_eq!(amount.iso_currency_path.as_deref(), Some("TransactionCurrency"));
-        let weight = ot.properties.iter().find(|p| p.name == "NetWeight").unwrap();
+        let amount = ot
+            .properties
+            .iter()
+            .find(|p| p.name == "NetAmount")
+            .unwrap();
+        assert_eq!(
+            amount.iso_currency_path.as_deref(),
+            Some("TransactionCurrency")
+        );
+        let weight = ot
+            .properties
+            .iter()
+            .find(|p| p.name == "NetWeight")
+            .unwrap();
         assert_eq!(weight.unit_path.as_deref(), Some("WeightUnit"));
     }
 
@@ -2747,10 +2771,18 @@ mod tests {
         let st = meta.find_entity_type("StockType").unwrap();
         let qty = st.properties.iter().find(|p| p.name == "Quantity").unwrap();
         assert_eq!(qty.filterable, Some(false));
-        let wh = st.properties.iter().find(|p| p.name == "Warehouse").unwrap();
+        let wh = st
+            .properties
+            .iter()
+            .find(|p| p.name == "Warehouse")
+            .unwrap();
         assert_eq!(wh.required_in_filter, Some(true));
         assert_eq!(wh.updatable, Some(false));
-        let st_type = st.properties.iter().find(|p| p.name == "StorageType").unwrap();
+        let st_type = st
+            .properties
+            .iter()
+            .find(|p| p.name == "StorageType")
+            .unwrap();
         assert_eq!(st_type.sortable, Some(false));
         let id = st.properties.iter().find(|p| p.name == "ID").unwrap();
         assert_eq!(id.updatable, Some(false));
@@ -2865,22 +2897,38 @@ mod tests {
 </edmx:Edmx>"#;
         let meta = parse_metadata(xml).unwrap();
         let ot = meta.find_entity_type("OrderType").unwrap();
-        let wh = ot.properties.iter().find(|p| p.name == "Warehouse").unwrap();
+        let wh = ot
+            .properties
+            .iter()
+            .find(|p| p.name == "Warehouse")
+            .unwrap();
         let vl = wh.value_list.as_ref().expect("value_list should be parsed");
         assert_eq!(vl.collection_path, "WarehouseValueHelp");
         assert_eq!(vl.label.as_deref(), Some("Warehouse F4"));
         assert_eq!(vl.search_supported, Some(true));
         // Unknown Type "Exotic" should have been skipped.
         assert_eq!(vl.parameters.len(), 4);
-        assert!(matches!(vl.parameters[0].kind, ValueListParameterKind::InOut));
-        assert_eq!(vl.parameters[0].local_property.as_deref(), Some("Warehouse"));
+        assert!(matches!(
+            vl.parameters[0].kind,
+            ValueListParameterKind::InOut
+        ));
+        assert_eq!(
+            vl.parameters[0].local_property.as_deref(),
+            Some("Warehouse")
+        );
         assert_eq!(vl.parameters[0].value_list_property, "Warehouse");
         assert!(matches!(vl.parameters[1].kind, ValueListParameterKind::In));
         assert_eq!(vl.parameters[1].local_property.as_deref(), Some("Plant"));
-        assert!(matches!(vl.parameters[2].kind, ValueListParameterKind::DisplayOnly));
+        assert!(matches!(
+            vl.parameters[2].kind,
+            ValueListParameterKind::DisplayOnly
+        ));
         assert!(vl.parameters[2].local_property.is_none());
         assert_eq!(vl.parameters[2].value_list_property, "Description");
-        assert!(matches!(vl.parameters[3].kind, ValueListParameterKind::Constant));
+        assert!(matches!(
+            vl.parameters[3].kind,
+            ValueListParameterKind::Constant
+        ));
         assert_eq!(vl.parameters[3].constant.as_deref(), Some("EN"));
         assert_eq!(vl.parameters[3].value_list_property, "Language");
     }
@@ -2930,7 +2978,11 @@ mod tests {
 </edmx:Edmx>"#;
         let meta = parse_metadata(xml).unwrap();
         let ot = meta.find_entity_type("OrderType").unwrap();
-        let wh = ot.properties.iter().find(|p| p.name == "Warehouse").unwrap();
+        let wh = ot
+            .properties
+            .iter()
+            .find(|p| p.name == "Warehouse")
+            .unwrap();
         // Default (no-qualifier) surfaces on `value_list`.
         let default = wh.value_list.as_ref().expect("default variant expected");
         assert!(default.qualifier.is_none());
@@ -2939,8 +2991,14 @@ mod tests {
         assert_eq!(wh.value_list_variants.len(), 2);
         assert!(wh.value_list_variants[0].qualifier.is_none());
         assert_eq!(wh.value_list_variants[0].collection_path, "WarehouseByKey");
-        assert_eq!(wh.value_list_variants[1].qualifier.as_deref(), Some("ByDescription"));
-        assert_eq!(wh.value_list_variants[1].collection_path, "WarehouseByDescription");
+        assert_eq!(
+            wh.value_list_variants[1].qualifier.as_deref(),
+            Some("ByDescription")
+        );
+        assert_eq!(
+            wh.value_list_variants[1].collection_path,
+            "WarehouseByDescription"
+        );
     }
 
     #[test]
@@ -2975,7 +3033,11 @@ mod tests {
 </edmx:Edmx>"#;
         let meta = parse_metadata(xml).unwrap();
         let ot = meta.find_entity_type("OrderType").unwrap();
-        let wh = ot.properties.iter().find(|p| p.name == "Warehouse").unwrap();
+        let wh = ot
+            .properties
+            .iter()
+            .find(|p| p.name == "Warehouse")
+            .unwrap();
         assert!(wh.value_list.is_none());
     }
 
@@ -3015,8 +3077,7 @@ mod tests {
     </Schema>
   </edmx:DataServices>
 </edmx:Edmx>"#;
-        let vl = parse_value_list_mapping_xml(xml, "EWMWarehouse")
-            .expect("mapping should parse");
+        let vl = parse_value_list_mapping_xml(xml, "EWMWarehouse").expect("mapping should parse");
         assert_eq!(vl.collection_path, "I_EWM_WarehouseNumberVH");
         assert_eq!(vl.label.as_deref(), Some("Warehouse Number"));
         assert_eq!(vl.parameters.len(), 2);
@@ -3059,12 +3120,20 @@ mod tests {
 </edmx:Edmx>"#;
         let meta = parse_metadata(xml).unwrap();
         let st = meta.find_entity_type("StockType").unwrap();
-        let wh = st.properties.iter().find(|p| p.name == "EWMWarehouse").unwrap();
+        let wh = st
+            .properties
+            .iter()
+            .find(|p| p.name == "EWMWarehouse")
+            .unwrap();
         assert!(wh.value_list.is_none());
         assert_eq!(wh.value_list_references.len(), 1);
         assert!(wh.value_list_references[0].contains("i_ewm_warehousenumbervh"));
         assert!(!wh.value_list_fixed);
-        let sdc = st.properties.iter().find(|p| p.name == "StockDocumentCategory").unwrap();
+        let sdc = st
+            .properties
+            .iter()
+            .find(|p| p.name == "StockDocumentCategory")
+            .unwrap();
         assert_eq!(sdc.value_list_references.len(), 1);
         assert!(sdc.value_list_fixed);
     }
@@ -3096,7 +3165,11 @@ mod tests {
 </edmx:Edmx>"#;
         let meta = parse_metadata(xml).unwrap();
         let ot = meta.find_entity_type("OrderType").unwrap();
-        let wh = ot.properties.iter().find(|p| p.name == "Warehouse").unwrap();
+        let wh = ot
+            .properties
+            .iter()
+            .find(|p| p.name == "Warehouse")
+            .unwrap();
         assert!(wh.value_list.is_none());
     }
 
@@ -3170,7 +3243,11 @@ mod tests {
         let prod = ot.properties.iter().find(|p| p.name == "Product").unwrap();
         // Per-property override wins.
         assert_eq!(prod.text_arrangement, Some(TextArrangement::TextLast));
-        let wh = ot.properties.iter().find(|p| p.name == "Warehouse").unwrap();
+        let wh = ot
+            .properties
+            .iter()
+            .find(|p| p.name == "Warehouse")
+            .unwrap();
         // Warehouse had no override → picks up the type default.
         assert_eq!(wh.text_arrangement, Some(TextArrangement::TextFirst));
     }
@@ -3207,11 +3284,23 @@ mod tests {
         let meta = parse_metadata(xml).unwrap();
         let ct = meta.find_entity_type("CustomerType").unwrap();
         assert_eq!(ct.semantic_keys, vec!["CustomerID"]);
-        let id = ct.properties.iter().find(|p| p.name == "CustomerID").unwrap();
+        let id = ct
+            .properties
+            .iter()
+            .find(|p| p.name == "CustomerID")
+            .unwrap();
         assert_eq!(id.semantic_object.as_deref(), Some("Customer"));
-        let tax = ct.properties.iter().find(|p| p.name == "TaxNumber").unwrap();
+        let tax = ct
+            .properties
+            .iter()
+            .find(|p| p.name == "TaxNumber")
+            .unwrap();
         assert!(tax.masked);
-        let uuid = ct.properties.iter().find(|p| p.name == "CustomerUUID").unwrap();
+        let uuid = ct
+            .properties
+            .iter()
+            .find(|p| p.name == "CustomerUUID")
+            .unwrap();
         assert!(uuid.semantic_object.is_none());
         assert!(!uuid.masked);
     }
@@ -3235,7 +3324,11 @@ mod tests {
 </edmx:Edmx>"#;
         let meta = parse_metadata(xml).unwrap();
         let ot = meta.find_entity_type("OrderType").unwrap();
-        let wh = ot.properties.iter().find(|p| p.name == "Warehouse").unwrap();
+        let wh = ot
+            .properties
+            .iter()
+            .find(|p| p.name == "Warehouse")
+            .unwrap();
         assert_eq!(wh.sap_value_list.as_deref(), Some("standard"));
         let cat = ot.properties.iter().find(|p| p.name == "Category").unwrap();
         assert_eq!(cat.sap_value_list.as_deref(), Some("fixed-values"));
@@ -3278,17 +3371,32 @@ mod tests {
         let meta = parse_metadata(xml).unwrap();
         let ot = meta.find_entity_type("OrderType").unwrap();
         let status = ot.properties.iter().find(|p| p.name == "Status").unwrap();
-        assert!(matches!(status.field_control, Some(FieldControl::Mandatory)));
-        let internal = ot.properties.iter().find(|p| p.name == "InternalCode").unwrap();
+        assert!(matches!(
+            status.field_control,
+            Some(FieldControl::Mandatory)
+        ));
+        let internal = ot
+            .properties
+            .iter()
+            .find(|p| p.name == "InternalCode")
+            .unwrap();
         assert!(internal.hidden);
         let aux = ot.properties.iter().find(|p| p.name == "AuxKey").unwrap();
         assert!(aux.hidden_filter);
-        let dyn_ctrl = ot.properties.iter().find(|p| p.name == "DynControl").unwrap();
+        let dyn_ctrl = ot
+            .properties
+            .iter()
+            .find(|p| p.name == "DynControl")
+            .unwrap();
         match dyn_ctrl.field_control.as_ref() {
             Some(FieldControl::Path(p)) => assert_eq!(p, "SomeStatus"),
             other => panic!("expected Path, got {:?}", other),
         }
-        let changed = ot.properties.iter().find(|p| p.name == "ChangedAt").unwrap();
+        let changed = ot
+            .properties
+            .iter()
+            .find(|p| p.name == "ChangedAt")
+            .unwrap();
         assert_eq!(changed.display_format.as_deref(), Some("Date"));
         let amount = ot.properties.iter().find(|p| p.name == "Amount").unwrap();
         assert_eq!(amount.display_format.as_deref(), Some("NonNegative"));
@@ -3474,7 +3582,10 @@ mod tests {
         // Only the one standalone SV should be present — SPV's path
         // references don't spawn a duplicate.
         assert_eq!(ot.selection_variants.len(), 1);
-        assert_eq!(ot.selection_variants[0].qualifier.as_deref(), Some("Pending"));
+        assert_eq!(
+            ot.selection_variants[0].qualifier.as_deref(),
+            Some("Pending")
+        );
     }
 
     #[test]
@@ -3622,7 +3733,10 @@ mod tests {
 </edmx:Edmx>"#;
         let meta = parse_metadata(xml).unwrap();
         let ot = meta.find_entity_type("OrderType").unwrap();
-        assert_eq!(ot.request_at_least, vec!["WarehouseTimeZone", "EWMWarehouse"]);
+        assert_eq!(
+            ot.request_at_least,
+            vec!["WarehouseTimeZone", "EWMWarehouse"]
+        );
         assert_eq!(ot.sort_order.len(), 2);
         assert_eq!(ot.sort_order[0].property, "Product");
         assert!(!ot.sort_order[0].descending);
@@ -3664,7 +3778,11 @@ mod tests {
 </edmx:Edmx>"#;
         let meta = parse_metadata(xml).unwrap();
         let ot = meta.find_entity_type("OrderType").unwrap();
-        assert_eq!(ot.line_item.len(), 2, "unqualified variant should win even when it comes second");
+        assert_eq!(
+            ot.line_item.len(),
+            2,
+            "unqualified variant should win even when it comes second"
+        );
         assert_eq!(ot.line_item[0].value_path, "A");
         assert_eq!(ot.line_item[1].value_path, "B");
     }

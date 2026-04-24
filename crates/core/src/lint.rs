@@ -200,7 +200,10 @@ pub fn evaluate_entity_type(et: &EntityType) -> Vec<LintFinding> {
 /// Variant that accepts an explicit profile — useful for CLI
 /// overrides and tests. The auto-detected profile is not always
 /// right (heuristics are thin when key annotations are missing).
-pub fn evaluate_entity_type_with_profile(et: &EntityType, profile: LintProfile) -> Vec<LintFinding> {
+pub fn evaluate_entity_type_with_profile(
+    et: &EntityType,
+    profile: LintProfile,
+) -> Vec<LintFinding> {
     let mut out = Vec::new();
 
     // Profile banner — always first so the UI can show it up top.
@@ -231,7 +234,8 @@ pub fn evaluate_entity_type_with_profile(et: &EntityType, profile: LintProfile) 
             LintSeverity::Miss,
             LintCategory::Identity,
             "header_info",
-            "No UI.HeaderInfo — Fiori will fall back to the technical type name for titles.".to_string(),
+            "No UI.HeaderInfo — Fiori will fall back to the technical type name for titles."
+                .to_string(),
             "@UI.headerInfo",
             "Drives object-page titles and the list report's singular/plural labels.",
         ));
@@ -302,7 +306,10 @@ pub fn evaluate_entity_type_with_profile(et: &EntityType, profile: LintProfile) 
         out.push(pass(
             LintCategory::Filtering,
             "selection_fields",
-            format!("UI.SelectionFields: {} field(s).", et.selection_fields.len()),
+            format!(
+                "UI.SelectionFields: {} field(s).",
+                et.selection_fields.len()
+            ),
         ));
     } else if !is_value_help && !is_object_page {
         out.push(actionable(
@@ -851,9 +858,11 @@ mod tests {
         let meta = parse_metadata(xml).unwrap();
         let et = meta.find_entity_type("OrderType").unwrap();
         let findings = evaluate_entity_type(et);
-        assert!(findings
-            .iter()
-            .any(|f| f.code == "unit_missing" && f.message.contains("NetAmount")));
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.code == "unit_missing" && f.message.contains("NetAmount"))
+        );
     }
 
     #[test]
@@ -897,14 +906,8 @@ mod tests {
         // Spot-check specific mappings.
         let by_code: std::collections::HashMap<_, _> =
             findings.iter().map(|f| (f.code, f)).collect();
-        assert_eq!(
-            by_code["header_info"].suggested_cds,
-            Some("@UI.headerInfo")
-        );
-        assert_eq!(
-            by_code["line_item"].suggested_cds,
-            Some("@UI.lineItem")
-        );
+        assert_eq!(by_code["header_info"].suggested_cds, Some("@UI.headerInfo"));
+        assert_eq!(by_code["line_item"].suggested_cds, Some("@UI.lineItem"));
         assert_eq!(
             by_code["selection_fields"].suggested_cds,
             Some("@UI.selectionField")
@@ -1018,7 +1021,10 @@ mod tests {
         let lonely = findings
             .iter()
             .find(|f| f.code == "text_arrangement_lonely");
-        assert!(lonely.is_some(), "should flag lonely TextArrangement on Product");
+        assert!(
+            lonely.is_some(),
+            "should flag lonely TextArrangement on Product"
+        );
         assert!(lonely.unwrap().message.contains("Product"));
     }
 

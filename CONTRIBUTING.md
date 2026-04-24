@@ -29,7 +29,12 @@ cargo tauri build
 **Run tests:**
 
 ```bash
-cargo test
+cargo fmt --check
+cargo test --workspace
+
+# Frontend CSS build
+cd tauri-app
+npm run css
 ```
 
 ## Project structure
@@ -49,7 +54,7 @@ All business logic lives in `crates/core`. The CLI and Tauri app are thin shells
 ## Making changes
 
 1. Fork and create a feature branch
-2. Run `cargo test` and make sure all tests pass
+2. Run `cargo fmt --check`, `cargo test --workspace`, and `git diff --check`
 3. For frontend changes: rebuild CSS with `cd tauri-app && npm run css`
 4. For Tauri changes: test the app with `cargo tauri build`
 5. Keep commits focused — one concern per commit
@@ -60,6 +65,15 @@ All business logic lives in `crates/core`. The CLI and Tauri app are thin shells
 - **Rust**: run `cargo fmt` before committing
 - **JS**: no framework, no TypeScript. Keep it simple.
 - **HTML/CSS**: Tailwind utility classes, no inline event handlers (CSP forbids them)
+- **Clippy**: `cargo clippy --workspace --all-targets -- -D warnings` is the desired long-term gate, but the current codebase still has existing style-only lints. Do not introduce new clippy warnings in touched code.
+
+### Release hygiene
+
+- Do not commit local release builds, scratch metadata, traces, customer captures, or credentials.
+- Keep release packages under `dist/` and scratch SAP metadata under `tmp/`; both are ignored.
+- Do not commit `connections.toml`, `.env` files, TLS private keys, or customer certificates.
+- Keep public docs clear that this project is independent from SAP and intended for authorized, human-driven exploration of documented or customer-owned OData services.
+- See [docs/RELEASE-CHECKLIST.md](docs/RELEASE-CHECKLIST.md) before publishing a GitHub release.
 
 ### No inline event handlers
 

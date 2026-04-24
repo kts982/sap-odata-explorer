@@ -21,17 +21,11 @@ mod imp {
     /// the SAP server authenticate to further backends as the user (Kerberos
     /// constrained delegation) — required for reverse-proxy → Gateway → backend
     /// R/3 landscapes, dangerous if the server is untrusted. Off by default.
-    pub fn generate_negotiate_token(
-        target_host: &str,
-        delegate: bool,
-    ) -> Result<String, String> {
+    pub fn generate_negotiate_token(target_host: &str, delegate: bool) -> Result<String, String> {
         unsafe { generate_token_unsafe(target_host, delegate) }
     }
 
-    unsafe fn generate_token_unsafe(
-        target_host: &str,
-        delegate: bool,
-    ) -> Result<String, String> {
+    unsafe fn generate_token_unsafe(target_host: &str, delegate: bool) -> Result<String, String> {
         let spn = format!("HTTP/{}", target_host);
         let spn_wide: Vec<u16> = spn.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -144,10 +138,7 @@ mod imp {
 
 #[cfg(not(windows))]
 mod imp {
-    pub fn generate_negotiate_token(
-        _target_host: &str,
-        _delegate: bool,
-    ) -> Result<String, String> {
+    pub fn generate_negotiate_token(_target_host: &str, _delegate: bool) -> Result<String, String> {
         Err("SSO/SPNEGO is only available on Windows".to_string())
     }
 }

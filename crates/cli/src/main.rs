@@ -462,11 +462,28 @@ async fn main() -> Result<()> {
             }
             Commands::Annotations { namespace, filter } => {
                 let svc = require_service()?;
-                cmd_annotations(&sap_client, &svc, cli.json, namespace.clone(), filter.clone()).await
+                cmd_annotations(
+                    &sap_client,
+                    &svc,
+                    cli.json,
+                    namespace.clone(),
+                    filter.clone(),
+                )
+                .await
             }
-            Commands::Lint { entity, min_severity } => {
+            Commands::Lint {
+                entity,
+                min_severity,
+            } => {
                 let svc = require_service()?;
-                cmd_lint(&sap_client, &svc, cli.json, entity.clone(), min_severity.clone()).await
+                cmd_lint(
+                    &sap_client,
+                    &svc,
+                    cli.json,
+                    entity.clone(),
+                    min_severity.clone(),
+                )
+                .await
             }
         }
     }
@@ -1652,15 +1669,13 @@ async fn cmd_annotations(
     }
 
     let mut table = Table::new();
-    table
-        .load_preset(UTF8_FULL)
-        .set_header(vec![
-            Cell::new("Namespace").fg(Color::Cyan),
-            Cell::new("Term").fg(Color::Cyan),
-            Cell::new("Target").fg(Color::Cyan),
-            Cell::new("Value").fg(Color::Cyan),
-            Cell::new("Qualifier").fg(Color::Cyan),
-        ]);
+    table.load_preset(UTF8_FULL).set_header(vec![
+        Cell::new("Namespace").fg(Color::Cyan),
+        Cell::new("Term").fg(Color::Cyan),
+        Cell::new("Target").fg(Color::Cyan),
+        Cell::new("Value").fg(Color::Cyan),
+        Cell::new("Qualifier").fg(Color::Cyan),
+    ]);
     for a in &filtered {
         table.add_row(vec![
             Cell::new(&a.namespace),
@@ -1692,9 +1707,7 @@ async fn cmd_lint(
         Some("warn") => Some(LintSeverity::Warn),
         Some("miss") => Some(LintSeverity::Miss),
         Some(other) => {
-            anyhow::bail!(
-                "unknown severity '{other}' — expected pass, warn, or miss"
-            );
+            anyhow::bail!("unknown severity '{other}' — expected pass, warn, or miss");
         }
     };
 
@@ -1710,7 +1723,11 @@ async fn cmd_lint(
                 anyhow::bail!("entity type or set '{name}' not found");
             }
         }
-        None => meta.entity_types.iter().map(|et| et.name.as_str()).collect(),
+        None => meta
+            .entity_types
+            .iter()
+            .map(|et| et.name.as_str())
+            .collect(),
     };
 
     #[derive(serde::Serialize)]
@@ -1737,7 +1754,10 @@ async fn cmd_lint(
         // see the banner when they run without --min-severity.
         let has_actionable = findings.iter().any(|f| f.code != "profile");
         if has_actionable {
-            reports.push(Report { entity: *name, findings });
+            reports.push(Report {
+                entity: *name,
+                findings,
+            });
         }
     }
 

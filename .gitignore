@@ -37,6 +37,8 @@ desktop.ini
 
 # Build artifacts
 *.log
+dist/
+tmp/
 
 # User config (local connections)
 connections.toml

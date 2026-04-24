@@ -548,7 +548,10 @@ async fn get_services(
     if result.entries.is_empty() && !result.warnings.is_empty() {
         return Err(CommandError::with_client(
             &client,
-            format!("No services found. Warnings: {}", result.warnings.join("; ")),
+            format!(
+                "No services found. Warnings: {}",
+                result.warnings.join("; ")
+            ),
         ));
     }
 
@@ -823,8 +826,7 @@ fn add_profile(
     // confirms a "store in config file instead" dialog; default false so that
     // a keyring failure surfaces an actionable error rather than silently
     // downgrading credential protection.
-    #[allow(non_snake_case)]
-    allow_plaintext_fallback: Option<bool>,
+    #[allow(non_snake_case)] allow_plaintext_fallback: Option<bool>,
 ) -> Result<String, String> {
     let (mut cfg, _) = config::load_config().map_err(|e| format!("Config error: {e}"))?;
 

@@ -10,6 +10,8 @@ A CLI tool and desktop app for exploring and testing SAP OData services against 
 
 > [!NOTE]
 > Early-stage project. Core workflows work end-to-end on real SAP systems, but packaging, docs, and polish are still evolving.
+>
+> This is an independent project and is not affiliated with, endorsed by, or sponsored by SAP SE.
 
 ## Why
 
@@ -145,6 +147,12 @@ Sessions still expire server-side. When that happens, the CLI tells you to sign 
 - **Browser SSO session cookies** are serialized, compressed, and stored in the OS keyring under the current user account. The risk profile is similar to a browser persisting auth cookies locally.
 - **Sign-out behavior** is explicit: `sap-odata signout <profile>` clears the persisted Browser SSO session; the desktop app's **Sign Out** also clears local webview cookies for SAP and common IdP hosts.
 - **CSP** is enforced in the Tauri app; assets are bundled locally and not loaded from external CDNs.
+
+## Responsible use
+
+Use this tool only with SAP systems and endpoints you are authorized to access. SAP's [API Policy](https://www.sap.com/documents/2026/04/dce9aee4-497f-0010-bca6-c68f7e60039b.html) distinguishes published/documented APIs from internal or private interfaces and describes API controls for availability, limits, security, bulk extraction, and automated use.
+
+`sap-odata-explorer` is intended for human-driven inspection and testing of documented SAP OData services or customer-owned services. It is not intended to bypass SAP API controls, access internal/private SAP APIs, perform large-scale data extraction, or act as an autonomous API-calling agent.
 
 ## How it compares
 

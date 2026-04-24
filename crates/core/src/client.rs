@@ -87,11 +87,9 @@ impl SapClient {
                 // also send session cookies if present, but SAP may need
                 // the Negotiate header for different service paths.
                 let host = extract_host(&self.connection.base_url);
-                let token = crate::sspi::generate_negotiate_token(
-                    &host,
-                    self.connection.sso_delegate,
-                )
-                .map_err(|e| ODataError::AuthFailed(e))?;
+                let token =
+                    crate::sspi::generate_negotiate_token(&host, self.connection.sso_delegate)
+                        .map_err(|e| ODataError::AuthFailed(e))?;
                 Ok(builder.header("Authorization", format!("Negotiate {token}")))
             }
             AuthConfig::Browser => Ok(builder),
