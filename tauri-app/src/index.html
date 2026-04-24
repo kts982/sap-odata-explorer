@@ -594,7 +594,10 @@
       <footer class="bg-ox-panel border-t border-ox-border px-4 py-1 text-[11px] text-ox-text flex items-center gap-4 shrink-0 font-mono">
         <span id="statusText">Ready</span>
         <span id="annotationBadge" class="hidden cursor-help text-[10px] text-ox-blue border border-ox-blue/40 bg-ox-blue/10 rounded-sm px-1.5 py-0.5" title=""></span>
-        <button id="btnTraceToggle" class="ml-auto inline-flex items-center gap-1 border border-ox-border rounded-sm px-1.5 py-0.5 text-ox-dim hover:text-ox-text hover:border-ox-dim transition-colors">
+        <button id="btnSapView" class="ml-auto inline-flex items-center gap-1 border border-ox-border rounded-sm px-1.5 py-0.5 text-ox-dim hover:text-ox-text hover:border-ox-dim transition-colors" title="Toggle SAP-aware rendering (HeaderInfo, Common.Text, etc.)">
+          <span id="sapViewChevron">&#x25B4;</span><span>SAP View</span>
+        </button>
+        <button id="btnTraceToggle" class="inline-flex items-center gap-1 border border-ox-border rounded-sm px-1.5 py-0.5 text-ox-dim hover:text-ox-text hover:border-ox-dim transition-colors">
           <span id="traceToggleChevron">&#x25B4;</span><span>Inspector</span>
         </button>
         <span id="traceSummary" class="text-ox-dim">No trace</span>

@@ -46,6 +46,10 @@ pub struct RawAnnotation {
     /// Literal value when the annotation uses a simple inline form. `None`
     /// for complex `Record`/`Collection` payloads, which are not expanded yet.
     pub value: Option<String>,
+    /// Optional `Qualifier` — the same term can be annotated multiple times
+    /// on the same target with different qualifiers (e.g. `UI.LineItem
+    /// Qualifier="Simplified"`).
+    pub qualifier: Option<String>,
 }
 
 /// Summary of annotation counts grouped by vocabulary namespace. Used by the
@@ -63,6 +67,9 @@ pub struct EntityType {
     pub keys: Vec<String>,
     pub properties: Vec<Property>,
     pub nav_properties: Vec<NavigationProperty>,
+    /// Parsed `UI.HeaderInfo` annotation if the service exposes one (V4).
+    /// Gives the entity's human-readable name and title field.
+    pub header_info: Option<HeaderInfo>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -72,6 +79,23 @@ pub struct Property {
     pub nullable: bool,
     pub max_length: Option<u32>,
     pub label: Option<String>,
+    /// Path of a sibling property that holds this property's
+    /// human-readable description. Source: `Common.Text` (V4) or
+    /// `sap:text` (V2). Example: `MaterialID.text_path = Some("MaterialDescription")`.
+    pub text_path: Option<String>,
+}
+
+/// Parsed `UI.HeaderInfo` record. All fields are optional — services
+/// often populate only a subset.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct HeaderInfo {
+    /// Singular human-readable entity name (e.g. "Warehouse Order").
+    pub type_name: Option<String>,
+    /// Plural form (e.g. "Warehouse Orders").
+    pub type_name_plural: Option<String>,
+    /// Path to the property used as the object's title at runtime
+    /// (e.g. the `OrderNumber` on a `WarehouseOrder`).
+    pub title_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -260,6 +284,7 @@ pub fn parse_metadata(xml: &str) -> Result<ServiceMetadata, crate::error::ODataE
                 annotation_labels.extend(parse_v4_annotation_labels(schema_node));
                 let alias = schema_node.attribute("Alias").unwrap_or("");
                 annotations.extend(parse_v4_annotations(schema_node, alias));
+                apply_v4_typed_annotations(&mut entity_types, schema_node, alias);
             }
             ODataVersion::V2 => {
                 annotations.extend(parse_v2_sap_annotations(schema_node));
@@ -335,6 +360,12 @@ fn parse_entity_types(schema: &roxmltree::Node, version: ODataVersion) -> Vec<En
                     label: p
                         .attribute(("http://www.sap.com/Protocols/SAPData", "label"))
                         .map(String::from),
+                    // V2 `sap:text` — sibling property holding this property's
+                    // description. V4 services get this set later when we
+                    // collect the Common.Text annotations.
+                    text_path: p
+                        .attribute(("http://www.sap.com/Protocols/SAPData", "text"))
+                        .map(String::from),
                 })
                 .collect();
 
@@ -365,6 +396,7 @@ fn parse_entity_types(schema: &roxmltree::Node, version: ODataVersion) -> Vec<En
                 keys,
                 properties,
                 nav_properties,
+                header_info: None,
             }
         })
         .collect()
@@ -487,11 +519,13 @@ fn parse_v4_annotations(schema: &roxmltree::Node, alias: &str) -> Vec<RawAnnotat
                 .or_else(|| annot.attribute("EnumMember"))
                 .or_else(|| annot.attribute("Path"))
                 .map(String::from);
+            let qualifier = annot.attribute("Qualifier").map(String::from);
             out.push(RawAnnotation {
                 term,
                 namespace,
                 target: target.clone(),
                 value,
+                qualifier,
             });
         }
     }
@@ -534,6 +568,79 @@ fn parse_v2_sap_annotations(schema: &roxmltree::Node) -> Vec<RawAnnotation> {
     out
 }
 
+/// Second pass over `<Annotations Target>` blocks that populates typed
+/// accessors on the parsed entity types. Currently handles `UI.HeaderInfo`
+/// and `Common.Text` — the first-tier feature set. Each additional
+/// vocabulary term gets its own branch here, keeping complex Record/
+/// Collection parsing in one place instead of spilling into callers.
+fn apply_v4_typed_annotations(
+    entity_types: &mut [EntityType],
+    schema: &roxmltree::Node,
+    alias: &str,
+) {
+    for annots_node in children_by_tag(schema, "Annotations") {
+        let raw_target = annots_node.attribute("Target").unwrap_or("");
+        let target = strip_alias_prefix(raw_target, alias);
+
+        for annot in children_by_tag(&annots_node, "Annotation") {
+            let term = annot.attribute("Term").unwrap_or("");
+            // Normalize: strip the SAP__ alias prefix and lowercase so the
+            // match works for `UI.HeaderInfo`, `SAP__UI.HeaderInfo`,
+            // `com.sap.vocabularies.UI.v1.HeaderInfo`, etc.
+            let lower = term.trim_start_matches("SAP__").to_ascii_lowercase();
+
+            if lower.ends_with(".headerinfo") && !target.contains('/') {
+                if let Some(et) = entity_types.iter_mut().find(|e| e.name == target) {
+                    if let Some(info) = parse_header_info_record(&annot) {
+                        et.header_info = Some(info);
+                    }
+                }
+            } else if lower.ends_with(".text") {
+                if let Some((et_name, prop_name)) = target.split_once('/') {
+                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
+                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
+                            if prop.text_path.is_none() {
+                                prop.text_path = annot.attribute("Path").map(String::from);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Parse the `Record` inside a `UI.HeaderInfo` annotation. Returns `None`
+/// if the annotation is missing its Record child or has no useful fields.
+fn parse_header_info_record(annot: &roxmltree::Node) -> Option<HeaderInfo> {
+    let record = children_by_tag(annot, "Record").into_iter().next()?;
+    let mut info = HeaderInfo::default();
+    for pv in children_by_tag(&record, "PropertyValue") {
+        match pv.attribute("Property") {
+            Some("TypeName") => info.type_name = pv.attribute("String").map(String::from),
+            Some("TypeNamePlural") => {
+                info.type_name_plural = pv.attribute("String").map(String::from);
+            }
+            Some("Title") => {
+                // Title is itself a Record { Value: Path } (UI.DataField shape).
+                if let Some(title_rec) = children_by_tag(&pv, "Record").into_iter().next() {
+                    for title_pv in children_by_tag(&title_rec, "PropertyValue") {
+                        if title_pv.attribute("Property") == Some("Value") {
+                            info.title_path = title_pv.attribute("Path").map(String::from);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if info.type_name.is_none() && info.type_name_plural.is_none() && info.title_path.is_none() {
+        None
+    } else {
+        Some(info)
+    }
+}
+
 fn push_sap_attrs(out: &mut Vec<RawAnnotation>, node: &roxmltree::Node, target: &str) {
     for attr in node.attributes() {
         if attr.namespace() == Some(SAP_DATA_NS) {
@@ -542,6 +649,7 @@ fn push_sap_attrs(out: &mut Vec<RawAnnotation>, node: &roxmltree::Node, target: 
                 namespace: "SAP".to_string(),
                 target: target.to_string(),
                 value: Some(attr.value().to_string()),
+                qualifier: None,
             });
         }
     }
@@ -884,6 +992,95 @@ mod tests {
             extract_annotation_namespace("Org.OData.Measures.V1.ISOCurrency"),
             "Measures"
         );
+    }
+
+    const TEST_METADATA_V4_TYPED: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="com.example.warehouse" Alias="SAP__self">
+      <EntityType Name="WarehouseOrderType">
+        <Key><PropertyRef Name="OrderNumber"/></Key>
+        <Property Name="OrderNumber" Type="Edm.String" Nullable="false" MaxLength="10"/>
+        <Property Name="MaterialID" Type="Edm.String" MaxLength="18"/>
+        <Property Name="MaterialDescription" Type="Edm.String" MaxLength="40"/>
+      </EntityType>
+      <EntityContainer Name="Container">
+        <EntitySet Name="WarehouseOrder" EntityType="com.example.warehouse.WarehouseOrderType"/>
+      </EntityContainer>
+      <Annotations Target="SAP__self.WarehouseOrderType">
+        <Annotation Term="UI.HeaderInfo">
+          <Record>
+            <PropertyValue Property="TypeName" String="Warehouse Order"/>
+            <PropertyValue Property="TypeNamePlural" String="Warehouse Orders"/>
+            <PropertyValue Property="Title">
+              <Record>
+                <PropertyValue Property="Value" Path="OrderNumber"/>
+              </Record>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+      </Annotations>
+      <Annotations Target="SAP__self.WarehouseOrderType/MaterialID">
+        <Annotation Term="Common.Text" Path="MaterialDescription"/>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+
+    #[test]
+    fn test_v4_parses_header_info_onto_entity_type() {
+        let meta = parse_metadata(TEST_METADATA_V4_TYPED).unwrap();
+        let et = meta.find_entity_type("WarehouseOrderType").unwrap();
+        let info = et
+            .header_info
+            .as_ref()
+            .expect("UI.HeaderInfo should be parsed onto entity type");
+        assert_eq!(info.type_name.as_deref(), Some("Warehouse Order"));
+        assert_eq!(info.type_name_plural.as_deref(), Some("Warehouse Orders"));
+        assert_eq!(info.title_path.as_deref(), Some("OrderNumber"));
+    }
+
+    #[test]
+    fn test_v4_parses_common_text_onto_property() {
+        let meta = parse_metadata(TEST_METADATA_V4_TYPED).unwrap();
+        let et = meta.find_entity_type("WarehouseOrderType").unwrap();
+        let prop = et
+            .properties
+            .iter()
+            .find(|p| p.name == "MaterialID")
+            .unwrap();
+        assert_eq!(prop.text_path.as_deref(), Some("MaterialDescription"));
+
+        // Sibling property has no Common.Text — text_path must stay None.
+        let order = et
+            .properties
+            .iter()
+            .find(|p| p.name == "OrderNumber")
+            .unwrap();
+        assert!(order.text_path.is_none());
+    }
+
+    #[test]
+    fn test_v2_sap_text_lands_on_property() {
+        // Minimal V2 schema with a sap:text attribute — the code path that
+        // picks up older-style text associations.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="1.0" xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx">
+  <edmx:DataServices m:DataServiceVersion="2.0" xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata">
+    <Schema Namespace="ZT" xmlns="http://schemas.microsoft.com/ado/2008/09/edm" xmlns:sap="http://www.sap.com/Protocols/SAPData">
+      <EntityType Name="Mat">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" sap:text="Description"/>
+        <Property Name="Description" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="C"><EntitySet Name="Mats" EntityType="ZT.Mat"/></EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let mat = meta.find_entity_type("Mat").unwrap();
+        let id_prop = mat.properties.iter().find(|p| p.name == "ID").unwrap();
+        assert_eq!(id_prop.text_path.as_deref(), Some("Description"));
     }
 
     #[test]

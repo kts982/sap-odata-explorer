@@ -6,7 +6,7 @@ use sap_odata_core::{
     client::SapClient,
     config,
     diagnostics::HttpTraceEntry,
-    metadata::AnnotationSummary,
+    metadata::{AnnotationSummary, HeaderInfo},
     query::ODataQuery,
 };
 use serde::{Deserialize, Serialize};
@@ -70,6 +70,7 @@ struct EntityTypeInfo {
     keys: Vec<String>,
     properties: Vec<PropertyInfo>,
     nav_properties: Vec<NavPropertyInfo>,
+    header_info: Option<HeaderInfo>,
 }
 
 #[derive(Serialize)]
@@ -80,6 +81,7 @@ struct PropertyInfo {
     max_length: Option<u32>,
     label: Option<String>,
     is_key: bool,
+    text_path: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -618,6 +620,7 @@ async fn describe_entity(
     let data = EntityTypeInfo {
         name: et.name.clone(),
         keys: et.keys.clone(),
+        header_info: et.header_info.clone(),
         properties: et
             .properties
             .iter()
@@ -628,6 +631,7 @@ async fn describe_entity(
                 max_length: p.max_length,
                 label: p.label.clone(),
                 is_key: et.keys.contains(&p.name),
+                text_path: p.text_path.clone(),
             })
             .collect(),
         nav_properties: nav_targets

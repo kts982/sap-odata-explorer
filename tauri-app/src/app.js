@@ -260,6 +260,12 @@ let lastSearchQuery   = null;
 let expandedDataStore = {};
 let lastResultRows    = null; // raw result rows for copy operations
 
+// Global SAP-view preference: when enabled, describe panel and results
+// surface typed annotation hints (HeaderInfo, Common.Text, etc.) on top
+// of the raw EDM data. Persisted so the preference survives app restarts.
+let sapViewEnabled = false;
+try { sapViewEnabled = localStorage.getItem('ox_sap_view_enabled') === '1'; } catch { /* ignore */ }
+
 function getProfileMeta(profileName) {
   return profileName ? (profileMap.get(profileName) || null) : null;
 }
@@ -930,7 +936,27 @@ async function selectEntity(entitySetName, element) {
 function renderDescribe(info) {
   const panel = document.getElementById('describePanel');
   panel.classList.remove('hidden');
-  document.getElementById('entityTitle').textContent = `${info.name}`;
+
+  // Cache so the SAP-view toggle can re-render without another fetch.
+  const tab = getActiveTab();
+  if (tab) tab._lastDescribeInfo = info;
+
+  // Title: technical name always; in SAP view, append the HeaderInfo
+  // singular/plural so the entity reads as "WarehouseOrderType · Warehouse Order / Warehouse Orders".
+  const titleEl = document.getElementById('entityTitle');
+  titleEl.textContent = info.name;
+  if (sapViewEnabled && info.header_info) {
+    const hi = info.header_info;
+    const parts = [];
+    if (hi.type_name) parts.push(hi.type_name);
+    if (hi.type_name_plural && hi.type_name_plural !== hi.type_name) parts.push(hi.type_name_plural);
+    if (parts.length) {
+      titleEl.innerHTML =
+        `${escapeHtml(info.name)}` +
+        `<span class="text-ox-dim ml-2">·</span>` +
+        `<span class="text-ox-blue ml-2">${escapeHtml(parts.join(' / '))}</span>`;
+    }
+  }
 
   let html = '<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">';
 
@@ -943,8 +969,17 @@ function renderDescribe(info) {
   html += '</tr></thead><tbody>';
   for (const p of info.properties) {
     const keyMark = p.is_key ? '<span class="text-ox-amber">&#9679;</span>' : '';
+    // SAP view: surface the text-companion property ("↦ TextProp") next to
+    // the property name. The arrow hints that this column has an associated
+    // description field that Fiori renders together with it.
+    const textHint = sapViewEnabled && p.text_path
+      ? ` <span class="text-ox-blue text-[10px]" title="Common.Text → ${escapeHtml(p.text_path)}">&#x21A6; ${escapeHtml(p.text_path)}</span>`
+      : '';
+    const titleHint = sapViewEnabled && info.header_info && info.header_info.title_path === p.name
+      ? ' <span class="text-ox-amber text-[10px]" title="Used as UI.HeaderInfo.Title">title</span>'
+      : '';
     html += `<tr class="hover:bg-ox-amberGlow cursor-pointer transition-colors" data-action="select" data-field="${escapeHtml(p.name)}">`;
-    html += `<td class="py-0.5 pr-3 text-ox-text">${escapeHtml(p.name)}</td>`;
+    html += `<td class="py-0.5 pr-3 text-ox-text">${escapeHtml(p.name)}${textHint}${titleHint}</td>`;
     html += `<td class="py-0.5 pr-3 text-ox-dim">${escapeHtml(p.edm_type.replace('Edm.', ''))}</td>`;
     html += `<td class="py-0.5 pr-3 text-center">${keyMark}</td>`;
     html += `<td class="py-0.5 text-ox-muted">${escapeHtml(p.label || '')}</td>`;
@@ -1406,6 +1441,31 @@ function updateTraceToggleState(open) {
   } else {
     btn.classList.add('text-ox-dim', 'border-ox-border');
     btn.classList.remove('text-ox-amber', 'border-ox-amber');
+  }
+}
+
+function updateSapViewToggleState() {
+  const btn = document.getElementById('btnSapView');
+  const chev = document.getElementById('sapViewChevron');
+  if (!btn || !chev) return;
+  chev.innerHTML = sapViewEnabled ? '&#x25BE;' : '&#x25B4;';
+  if (sapViewEnabled) {
+    btn.classList.add('text-ox-amber', 'border-ox-amber');
+    btn.classList.remove('text-ox-dim', 'border-ox-border');
+  } else {
+    btn.classList.add('text-ox-dim', 'border-ox-border');
+    btn.classList.remove('text-ox-amber', 'border-ox-amber');
+  }
+}
+
+function toggleSapView() {
+  sapViewEnabled = !sapViewEnabled;
+  try { localStorage.setItem('ox_sap_view_enabled', sapViewEnabled ? '1' : '0'); } catch { /* ignore */ }
+  updateSapViewToggleState();
+  // Re-render describe panel in place if the active tab has one up.
+  const tab = getActiveTab();
+  if (tab && tab._lastDescribeInfo) {
+    renderDescribe(tab._lastDescribeInfo);
   }
 }
 
@@ -1930,6 +1990,8 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btnCopyUrl').addEventListener('click', copyODataUrl);
   document.getElementById('btnTraceToggle').addEventListener('click', toggleTraceInspector);
   document.getElementById('btnTraceClose').addEventListener('click', hideTraceInspector);
+  document.getElementById('btnSapView').addEventListener('click', toggleSapView);
+  updateSapViewToggleState();
   document.getElementById('btnHistoryToggle').addEventListener('click', () => {
     const panel = document.getElementById('historyPanel');
     const tab = getActiveTab();
