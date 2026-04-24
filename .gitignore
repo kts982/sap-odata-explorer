@@ -21,6 +21,7 @@ tauri-app/src/style.css
 
 # Private dev notes
 .dev/
+.claude/
 
 # OS
 .DS_Store

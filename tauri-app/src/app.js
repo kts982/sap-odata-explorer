@@ -27,6 +27,10 @@ function createTab(opts = {}) {
     queryHistory: [],
     // last query params (for "history" re-use)
     lastParams: null,
+    httpTraceEntries: [],
+    selectedTraceId: null,
+    _traceVisible: false,
+    _traceSubTab: 'response',
   };
 }
 
@@ -124,6 +128,7 @@ function saveCurrentTabState() {
   tab._queryBarHidden = document.getElementById('queryBar').classList.contains('hidden');
   tab._queryEntitySet = document.getElementById('queryEntitySet').textContent;
   tab._historyVisible = !document.getElementById('historyPanel').classList.contains('hidden');
+  tab._traceVisible = !document.getElementById('traceInspectorPanel').classList.contains('hidden');
   tab._sidebarTitle = document.getElementById('sidebarTitle').textContent;
   tab._sidebarCount = document.getElementById('sidebarCount').textContent;
   tab._sidebarHtml = document.getElementById('entityList').innerHTML;
@@ -206,6 +211,15 @@ function restoreTabUI() {
     document.getElementById('historyPanel').classList.add('hidden');
   }
 
+  renderTraceSummary(tab);
+  if (tab._traceVisible) {
+    renderTraceInspector(tab);
+    document.getElementById('traceInspectorPanel').classList.remove('hidden');
+  } else {
+    document.getElementById('traceInspectorPanel').classList.add('hidden');
+  }
+  updateTraceToggleState(tab._traceVisible);
+
   // Stats bar
   if (tab._statsVisible) {
     document.getElementById('statRows').textContent = tab._statRows || '';
@@ -281,6 +295,7 @@ async function signOutCurrentProfile() {
   }
   try {
     const msg = await invoke('sign_out_profile', { profileName: currentProfile });
+    clearTraceState(getActiveTab());
     setStatus(msg);
   } catch (e) {
     setStatus('Sign out failed: ' + e);
@@ -299,6 +314,7 @@ async function removeCurrentProfile() {
   try {
     const msg = await invoke('remove_profile', { name });
     setStatus(msg);
+    clearTraceState(getActiveTab());
     // Reset UI state
     currentProfile = null;
     cachedServices = null;
@@ -363,13 +379,43 @@ function hideSpinner() {
 async function timedInvoke(cmd, args) {
   showSpinner();
   const start = performance.now();
+  const originTabId = activeTabId;
   try {
     const result = await invoke(cmd, args);
-    const elapsed = Math.round(performance.now() - start);
-    setTime(elapsed);
+    setTime(Math.round(performance.now() - start));
+    // Commands that touch the network return { data, trace }. Legacy commands
+    // still return their value directly.
+    if (result && typeof result === 'object' && 'data' in result && Array.isArray(result.trace)) {
+      applyTraceToTab(originTabId, result.trace);
+      return result.data;
+    }
     return result;
+  } catch (err) {
+    // Network commands serialize errors as { message, trace } — apply the trace
+    // and re-throw the plain message so callers keep the string-based API.
+    if (err && typeof err === 'object' && 'message' in err && Array.isArray(err.trace)) {
+      applyTraceToTab(originTabId, err.trace);
+      throw err.message;
+    }
+    throw err;
   } finally {
     hideSpinner();
+  }
+}
+
+function applyTraceToTab(tabId, trace) {
+  const tab = getTab(tabId);
+  if (!tab) return;
+  tab.httpTraceEntries = Array.isArray(trace) ? trace : [];
+  if (!tab.httpTraceEntries.some(entry => entry.id === tab.selectedTraceId)) {
+    tab.selectedTraceId = null;
+  }
+  ensureTraceSelection(tab);
+  if (tab.id === activeTabId) {
+    renderTraceSummary(tab);
+    if (tab._traceVisible) {
+      renderTraceInspector(tab);
+    }
   }
 }
 
@@ -404,28 +450,44 @@ function favKey(profileName) {
   return `ox_favorites_${profileName}`;
 }
 
+// Favorites used to be an array of technical_name strings. They are now full
+// service objects { technical_name, title, description, service_url, version }.
+// Any legacy string entry is normalized to a stub here; once the user re-stars
+// or the catalog is fetched, it gets upgraded to the full shape on save.
 function getFavorites(profileName) {
+  let raw;
   try {
-    return JSON.parse(localStorage.getItem(favKey(profileName)) || '[]');
+    raw = JSON.parse(localStorage.getItem(favKey(profileName)) || '[]');
   } catch { return []; }
+  if (!Array.isArray(raw)) return [];
+  return raw.map(entry => {
+    if (typeof entry === 'string') {
+      return { technical_name: entry, title: entry, description: '', service_url: '', version: '' };
+    }
+    return entry;
+  });
 }
 
 function saveFavorites(profileName, list) {
   localStorage.setItem(favKey(profileName), JSON.stringify(list));
 }
 
-function isFavorite(profileName, svcName) {
-  return getFavorites(profileName).includes(svcName);
+function favIndex(favs, svcName) {
+  return favs.findIndex(f => f.technical_name === svcName);
 }
 
-function toggleFavorite(svcName, starEl) {
+function isFavorite(profileName, svcName) {
+  return favIndex(getFavorites(profileName), svcName) !== -1;
+}
+
+function toggleFavorite(svc, starEl) {
   const tab = getActiveTab();
   const profile = tab ? tab.profile : currentProfile;
   if (!profile) return;
   const favs = getFavorites(profile);
-  const idx = favs.indexOf(svcName);
+  const idx = favIndex(favs, svc.technical_name);
   if (idx === -1) {
-    favs.push(svcName);
+    favs.push(svc);
     starEl.textContent = '★';
     starEl.classList.add('starred');
   } else {
@@ -439,6 +501,9 @@ function toggleFavorite(svcName, starEl) {
   if (tab2 && tab2.cachedServices) {
     const filtered = filterServices(tab2.cachedServices, tab2.lastSearchQuery || '');
     renderServiceList(filtered, false);
+  } else {
+    // No catalog loaded — we're in the favorites-only view, re-render it.
+    renderFavoritesOnlySidebar(profile);
   }
 }
 
@@ -487,6 +552,9 @@ document.getElementById('profileSelect').addEventListener('change', (e) => {
   tab._statsVisible = false;
   tab._resultsHtml = undefined;
   tab._historyVisible = false;
+  tab.httpTraceEntries = [];
+  tab.selectedTraceId = null;
+  tab._traceVisible = false;
 
   // Sync globals
   currentProfile = profile;
@@ -502,14 +570,24 @@ document.getElementById('profileSelect').addEventListener('change', (e) => {
   document.getElementById('describePanel').classList.add('hidden');
   document.getElementById('statsBar').classList.add('hidden');
   document.getElementById('historyPanel').classList.add('hidden');
+  document.getElementById('traceInspectorPanel').classList.add('hidden');
+  updateTraceToggleState(false);
   document.getElementById('serviceInput').value = '';
   document.getElementById('sidebarTitle').textContent = 'Services';
   document.getElementById('sidebarCount').textContent = '';
   updateServicePathBar(null);
   resetResultsArea();
+  renderTraceSummary(tab);
   updateProfileAuthUi(profile);
 
-  if (profile) setStatus(`Connected to ${profile}`);
+  if (profile) {
+    setStatus(`Connected to ${profile}`);
+    // If this profile has favorites stored locally, render them immediately
+    // from localStorage — no catalog fetch. Search still populates the full list.
+    if (getFavorites(profile).length > 0) {
+      renderFavoritesOnlySidebar(profile);
+    }
+  }
 });
 
 function resetResultsArea() {
@@ -585,6 +663,52 @@ function filterServices(services, query) {
   );
 }
 
+function makeSvcItem(svc, starred) {
+  const div = document.createElement('div');
+  div.className = 'sidebar-item px-3 py-2 cursor-pointer';
+  div.dataset.action = 'pick-service';
+  div.dataset.svc = JSON.stringify(svc);
+  const badgeClass = svc.version === 'V4' ? 'badge-v4' : 'badge-v2';
+  div.innerHTML = `
+    <div class="flex items-center gap-1.5">
+      <span class="text-[9px] px-1 py-px rounded font-mono ${badgeClass}">${escapeHtml(svc.version || '')}</span>
+      <span class="text-[13px] text-ox-text truncate font-mono flex-1">${escapeHtml(svc.technical_name)}</span>
+      <span class="svc-star${starred ? ' starred' : ''}" data-action="toggle-favorite" data-svc-name="${escapeHtml(svc.technical_name)}">${starred ? '★' : '☆'}</span>
+    </div>
+    <div class="text-[11px] text-ox-muted truncate mt-0.5 pl-7">${escapeHtml(svc.title || svc.description || '')}</div>
+  `;
+  return div;
+}
+
+// Zero-network sidebar render for when a profile is selected and has favorites
+// stored locally. Uses only the data captured in getFavorites — no catalog fetch.
+function renderFavoritesOnlySidebar(profile) {
+  const favs = getFavorites(profile);
+  const list = document.getElementById('entityList');
+  document.getElementById('sidebarTitle').textContent = 'Services';
+  document.getElementById('sidebarCount').textContent = String(favs.length);
+  list.innerHTML = '';
+  if (favs.length === 0) return;
+
+  const hdr = document.createElement('div');
+  hdr.className = 'px-3 py-1 text-[9px] uppercase tracking-widest text-ox-amber font-medium border-b border-ox-border/40';
+  hdr.textContent = 'Favorites';
+  list.appendChild(hdr);
+  for (const svc of favs) list.appendChild(makeSvcItem(svc, true));
+
+  const footer = document.createElement('div');
+  footer.className = 'px-3 py-3 text-[10px] text-ox-dim text-center';
+  footer.innerHTML = 'Click <span class="text-ox-text">Search</span> to browse all services';
+  list.appendChild(footer);
+
+  const tab = getActiveTab();
+  if (tab) {
+    tab._sidebarTitle = 'Services';
+    tab._sidebarCount = String(favs.length);
+    tab._sidebarHtml = list.outerHTML;
+  }
+}
+
 function renderServiceList(services, saveState = true) {
   const tab = getActiveTab();
   const profile = tab ? tab.profile : currentProfile;
@@ -607,26 +731,16 @@ function renderServiceList(services, saveState = true) {
   }
 
   const favs = profile ? getFavorites(profile) : [];
-  const favorites = services.filter(s => favs.includes(s.technical_name));
-  const rest = services.filter(s => !favs.includes(s.technical_name));
+  const favNames = new Set(favs.map(f => f.technical_name));
+  const favorites = services.filter(s => favNames.has(s.technical_name));
+  const rest = services.filter(s => !favNames.has(s.technical_name));
 
-  function makeSvcItem(svc) {
-    const div = document.createElement('div');
-    div.className = 'sidebar-item px-3 py-2 cursor-pointer';
-    div.dataset.action = 'pick-service';
-    div.dataset.svc = JSON.stringify(svc);
-    const badgeClass = svc.version === 'V4' ? 'badge-v4' : 'badge-v2';
-    const starred = favs.includes(svc.technical_name);
-    div.innerHTML = `
-      <div class="flex items-center gap-1.5">
-        <span class="text-[9px] px-1 py-px rounded font-mono ${badgeClass}">${svc.version}</span>
-        <span class="text-[13px] text-ox-text truncate font-mono flex-1">${escapeHtml(svc.technical_name)}</span>
-        <span class="svc-star${starred ? ' starred' : ''}" data-action="toggle-favorite" data-svc-name="${escapeHtml(svc.technical_name)}">${starred ? '★' : '☆'}</span>
-      </div>
-      <div class="text-[11px] text-ox-muted truncate mt-0.5 pl-7">${escapeHtml(svc.title || svc.description)}</div>
-    `;
-    // Click handling via document-level delegation (data-action attributes)
-    return div;
+  // Upgrade any legacy string-only favorites to full objects now that we have
+  // the catalog data. Idempotent: re-saving stable objects is a no-op for the UI.
+  if (profile && favorites.length > 0) {
+    const byName = new Map(favorites.map(s => [s.technical_name, s]));
+    const upgraded = favs.map(f => byName.get(f.technical_name) || f);
+    saveFavorites(profile, upgraded);
   }
 
   if (favorites.length > 0) {
@@ -634,14 +748,14 @@ function renderServiceList(services, saveState = true) {
     hdr.className = 'px-3 py-1 text-[9px] uppercase tracking-widest text-ox-amber font-medium border-b border-ox-border/40';
     hdr.textContent = 'Favorites';
     list.appendChild(hdr);
-    for (const svc of favorites) list.appendChild(makeSvcItem(svc));
+    for (const svc of favorites) list.appendChild(makeSvcItem(svc, true));
 
     const hdr2 = document.createElement('div');
     hdr2.className = 'px-3 py-1 text-[9px] uppercase tracking-widest text-ox-dim font-medium border-b border-ox-border/40 mt-1';
     hdr2.textContent = 'All Services';
     list.appendChild(hdr2);
   }
-  for (const svc of rest) list.appendChild(makeSvcItem(svc));
+  for (const svc of rest) list.appendChild(makeSvcItem(svc, false));
 
   if (saveState) {
     document.getElementById('queryBar').classList.add('hidden');
@@ -1050,6 +1164,297 @@ function replayHistory(idx) {
 }
 
 // ══════════════════════════════════════════════════════════════
+// ── HTTP INSPECTOR ──
+// ══════════════════════════════════════════════════════════════
+
+function clearTraceState(tab = getActiveTab()) {
+  if (!tab) return;
+  tab.httpTraceEntries = [];
+  tab.selectedTraceId = null;
+  tab._traceVisible = false;
+  if (tab.id === activeTabId) {
+    document.getElementById('traceInspectorPanel').classList.add('hidden');
+    renderTraceSummary(tab);
+  }
+}
+
+function ensureTraceSelection(tab) {
+  if (!tab) return null;
+  if (
+    tab.selectedTraceId &&
+    tab.httpTraceEntries.some(entry => entry.id === tab.selectedTraceId)
+  ) {
+    return tab.selectedTraceId;
+  }
+  tab.selectedTraceId = tab.httpTraceEntries.length
+    ? tab.httpTraceEntries[tab.httpTraceEntries.length - 1].id
+    : null;
+  return tab.selectedTraceId;
+}
+
+function getSelectedTraceEntry(tab = getActiveTab()) {
+  if (!tab) return null;
+  const selectedId = ensureTraceSelection(tab);
+  if (!selectedId) return null;
+  return tab.httpTraceEntries.find(entry => entry.id === selectedId) || null;
+}
+
+function renderTraceSummary(tab = getActiveTab()) {
+  const count = tab?.httpTraceEntries?.length || 0;
+  document.getElementById('traceSummary').textContent = count
+    ? `${count} request${count === 1 ? '' : 's'}`
+    : 'No trace';
+  document.getElementById('traceCount').textContent = count
+    ? `${count} request${count === 1 ? '' : 's'}`
+    : 'No requests';
+}
+
+function traceStatusClass(entry) {
+  if (entry.error) return 'err';
+  if (!entry.status) return '';
+  if (entry.status >= 500) return 'err';
+  if (entry.status >= 400) return 'warn';
+  if (entry.status >= 300) return 'warn';
+  return 'ok';
+}
+
+function traceStatusLabel(entry) {
+  if (entry.status) return String(entry.status);
+  if (entry.error) return 'ERR';
+  return 'OPEN';
+}
+
+function compactTraceUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.host}${parsed.pathname}${parsed.search}`;
+  } catch {
+    return url;
+  }
+}
+
+function traceOutcomeLabel(entry) {
+  if (entry.error) return entry.error;
+  if (entry.redirect_location) return `redirect → ${entry.redirect_location}`;
+  return entry.response_body_preview ? 'response captured' : 'headers captured';
+}
+
+function renderTraceHeaders(headers) {
+  if (!headers || headers.length === 0) {
+    return '<div class="trace-code text-ox-dim">No headers captured.</div>';
+  }
+
+  let html = '<div class="trace-header-grid">';
+  for (const header of headers) {
+    html += `<div class="trace-header-name">${escapeHtml(header.name)}</div>`;
+    html += `<div class="trace-header-value">${escapeHtml(header.value)}</div>`;
+  }
+  html += '</div>';
+  return html;
+}
+
+function renderTraceBody(body, emptyLabel) {
+  if (!body) {
+    return `<div class="trace-code text-ox-dim">${escapeHtml(emptyLabel)}</div>`;
+  }
+  return `<pre class="trace-code">${escapeHtml(body)}</pre>`;
+}
+
+function renderTraceList(tab) {
+  const list = document.getElementById('traceList');
+  if (!tab || tab.httpTraceEntries.length === 0) {
+    list.innerHTML = '<div class="px-4 py-3 text-[11px] text-ox-dim font-mono">No traced requests yet.</div>';
+    return;
+  }
+
+  const selectedId = ensureTraceSelection(tab);
+  let html = '';
+  for (const entry of [...tab.httpTraceEntries].reverse()) {
+    const active = entry.id === selectedId ? ' active' : '';
+    const statusClass = traceStatusClass(entry);
+    const statusCls = statusClass ? ` ${statusClass}` : '';
+    html += `<div class="trace-row${active}" data-action="select-trace" data-trace-id="${entry.id}">`;
+    html += '<div class="trace-meta">';
+    html += `<span class="trace-pill">${escapeHtml(entry.method)}</span>`;
+    html += `<span class="trace-pill${statusCls}">${escapeHtml(traceStatusLabel(entry))}</span>`;
+    html += `<span>${entry.duration_ms}ms</span>`;
+    html += '</div>';
+    html += `<div class="trace-url">${escapeHtml(compactTraceUrl(entry.url))}</div>`;
+    html += `<div class="trace-meta">${escapeHtml(traceOutcomeLabel(entry))}</div>`;
+    html += '</div>';
+  }
+  list.innerHTML = html;
+}
+
+function renderTraceDetail(tab) {
+  const detail = document.getElementById('traceDetail');
+  const entry = getSelectedTraceEntry(tab);
+  if (!entry) {
+    detail.innerHTML = '<div class="px-4 py-4 text-[11px] text-ox-dim font-mono">Select a traced request to inspect it.</div>';
+    return;
+  }
+
+  const activeSubTab = tab?._traceSubTab === 'request' ? 'request' : 'response';
+  const statusClass = traceStatusClass(entry);
+  const statusCls = statusClass ? ` ${statusClass}` : '';
+
+  let html = '<div class="trace-section">';
+  html += '<div class="flex items-center gap-2 mb-2">';
+  html += `<span class="trace-pill">${escapeHtml(entry.method)}</span>`;
+  html += `<span class="trace-pill${statusCls}">${escapeHtml(traceStatusLabel(entry))}</span>`;
+  html += `<span class="trace-meta">${entry.duration_ms}ms</span>`;
+  html += '</div>';
+  html += `<div class="trace-url">${escapeHtml(entry.url)}</div>`;
+  html += '</div>';
+
+  html += '<div class="trace-subtabs">';
+  html += `<div class="trace-subtab${activeSubTab === 'request' ? ' active' : ''}" data-action="select-trace-subtab" data-subtab="request">Request</div>`;
+  html += `<div class="trace-subtab${activeSubTab === 'response' ? ' active' : ''}" data-action="select-trace-subtab" data-subtab="response">Response</div>`;
+  html += '<div class="trace-subtab-actions">';
+  if (activeSubTab === 'request') {
+    html += '<button data-action="copy-trace-curl">copy as curl</button>';
+    const disabled = entry.request_body_preview ? '' : ' disabled';
+    html += `<button data-action="copy-trace-request-body"${disabled}>copy body</button>`;
+  } else {
+    const disabled = entry.response_body_preview ? '' : ' disabled';
+    html += `<button data-action="copy-trace-response-body"${disabled}>copy body</button>`;
+  }
+  html += '</div>';
+  html += '</div>';
+
+  if (activeSubTab === 'request') {
+    html += '<div class="trace-section">';
+    html += '<div class="trace-section-title">Headers</div>';
+    html += renderTraceHeaders(entry.request_headers);
+    html += '</div>';
+
+    html += '<div class="trace-section">';
+    html += '<div class="trace-section-title">Body</div>';
+    html += renderTraceBody(entry.request_body_preview, 'No request body captured.');
+    html += '</div>';
+  } else {
+    html += '<div class="trace-section">';
+    html += '<div class="trace-section-title">Headers</div>';
+    html += renderTraceHeaders(entry.response_headers);
+    html += '</div>';
+
+    html += '<div class="trace-section">';
+    html += '<div class="trace-section-title">Body Preview</div>';
+    html += renderTraceBody(entry.response_body_preview, 'No response body preview captured.');
+    html += '</div>';
+
+    if (entry.redirect_location) {
+      html += '<div class="trace-section">';
+      html += '<div class="trace-section-title">Redirect</div>';
+      html += `<div class="trace-code">${escapeHtml(entry.redirect_location)}</div>`;
+      html += '</div>';
+    }
+
+    if (entry.error) {
+      html += '<div class="trace-section">';
+      html += '<div class="trace-section-title">Error</div>';
+      html += `<pre class="trace-code">${escapeHtml(entry.error)}</pre>`;
+      html += '</div>';
+    }
+  }
+
+  detail.innerHTML = html;
+}
+
+function renderTraceInspector(tab = getActiveTab()) {
+  renderTraceSummary(tab);
+  renderTraceList(tab);
+  renderTraceDetail(tab);
+}
+
+function showTraceInspector() {
+  const tab = getActiveTab();
+  if (!tab) return;
+  tab._traceVisible = true;
+  renderTraceInspector(tab);
+  document.getElementById('traceInspectorPanel').classList.remove('hidden');
+  updateTraceToggleState(true);
+}
+
+function hideTraceInspector() {
+  const tab = getActiveTab();
+  if (tab) tab._traceVisible = false;
+  document.getElementById('traceInspectorPanel').classList.add('hidden');
+  updateTraceToggleState(false);
+}
+
+function updateTraceToggleState(open) {
+  const btn = document.getElementById('btnTraceToggle');
+  const chevron = document.getElementById('traceToggleChevron');
+  if (!btn || !chevron) return;
+  chevron.innerHTML = open ? '&#x25BE;' : '&#x25B4;';
+  if (open) {
+    btn.classList.add('text-ox-amber', 'border-ox-amber');
+    btn.classList.remove('text-ox-dim', 'border-ox-border');
+  } else {
+    btn.classList.add('text-ox-dim', 'border-ox-border');
+    btn.classList.remove('text-ox-amber', 'border-ox-amber');
+  }
+}
+
+function toggleTraceInspector() {
+  const panel = document.getElementById('traceInspectorPanel');
+  if (panel.classList.contains('hidden')) {
+    showTraceInspector();
+  } else {
+    hideTraceInspector();
+  }
+}
+
+// POSIX-shell single-quote escape. The resulting curl command runs in bash /
+// zsh / git-bash, but cmd.exe and PowerShell use different quoting rules —
+// paste into those shells and the quotes will leak through literally.
+function shellQuoteForCurl(value) {
+  return "'" + String(value).replace(/'/g, `'\"'\"'`) + "'";
+}
+
+function traceToCurl(entry) {
+  const parts = [
+    `curl -X ${shellQuoteForCurl(entry.method)}`,
+    `--url ${shellQuoteForCurl(entry.url)}`,
+  ];
+  for (const header of entry.request_headers || []) {
+    parts.push(`-H ${shellQuoteForCurl(`${header.name}: ${header.value}`)}`);
+  }
+  if (entry.request_body_preview) {
+    parts.push(`--data-raw ${shellQuoteForCurl(entry.request_body_preview)}`);
+  }
+  return parts.join(' ');
+}
+
+async function copySelectedTraceAsCurl() {
+  const entry = getSelectedTraceEntry(getActiveTab());
+  if (!entry) {
+    setStatus('No trace selected');
+    return;
+  }
+  await copyToClipboard(traceToCurl(entry), 'curl command');
+}
+
+async function copySelectedTraceRequestBody() {
+  const entry = getSelectedTraceEntry(getActiveTab());
+  if (!entry || !entry.request_body_preview) {
+    setStatus('No request body to copy');
+    return;
+  }
+  await copyToClipboard(entry.request_body_preview, 'request body');
+}
+
+async function copySelectedTraceResponseBody() {
+  const entry = getSelectedTraceEntry(getActiveTab());
+  if (!entry || !entry.response_body_preview) {
+    setStatus('No response body to copy');
+    return;
+  }
+  await copyToClipboard(entry.response_body_preview, 'response body');
+}
+
+// ══════════════════════════════════════════════════════════════
 // ── RESULTS RENDERING ──
 // ══════════════════════════════════════════════════════════════
 
@@ -1400,7 +1805,7 @@ async function testProfileModal() {
   }
 
   try {
-    const msg = await invoke('test_connection', {
+    const msg = await timedInvoke('test_connection', {
       baseUrl: url, client, language, authMode, username: user, password: pass,
     });
     okEl.textContent = msg;
@@ -1484,6 +1889,8 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btnRun').addEventListener('click', () => executeQuery(false));
   document.getElementById('btnJson').addEventListener('click', () => executeQuery(true));
   document.getElementById('btnCopyUrl').addEventListener('click', copyODataUrl);
+  document.getElementById('btnTraceToggle').addEventListener('click', toggleTraceInspector);
+  document.getElementById('btnTraceClose').addEventListener('click', hideTraceInspector);
   document.getElementById('btnHistoryToggle').addEventListener('click', () => {
     const panel = document.getElementById('historyPanel');
     const tab = getActiveTab();
@@ -1556,6 +1963,22 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (action === 'clear-history') {
       const tab = getActiveTab();
       if (tab) { tab.queryHistory = []; renderHistoryPanel(tab); }
+    } else if (action === 'select-trace') {
+      const tab = getActiveTab();
+      if (!tab) return;
+      tab.selectedTraceId = parseInt(el.dataset.traceId, 10);
+      renderTraceInspector(tab);
+    } else if (action === 'select-trace-subtab') {
+      const tab = getActiveTab();
+      if (!tab) return;
+      tab._traceSubTab = el.dataset.subtab === 'request' ? 'request' : 'response';
+      renderTraceDetail(tab);
+    } else if (action === 'copy-trace-curl') {
+      copySelectedTraceAsCurl();
+    } else if (action === 'copy-trace-request-body') {
+      copySelectedTraceRequestBody();
+    } else if (action === 'copy-trace-response-body') {
+      copySelectedTraceResponseBody();
     } else if (action === 'back-to-services') {
       document.getElementById('serviceInput').value = '';
       const tab = getActiveTab();
@@ -1572,7 +1995,13 @@ document.addEventListener('DOMContentLoaded', () => {
       selectEntity(el.dataset.entityName, el);
     } else if (action === 'toggle-favorite') {
       e.stopPropagation();
-      toggleFavorite(el.dataset.svcName, el);
+      // Pull the full service object from the parent sidebar item so we store
+      // {technical_name, title, version, ...} — not just the name.
+      const parent = el.closest('[data-svc]');
+      let svc;
+      try { svc = parent ? JSON.parse(parent.dataset.svc) : { technical_name: el.dataset.svcName }; }
+      catch { svc = { technical_name: el.dataset.svcName }; }
+      toggleFavorite(svc, el);
     }
   });
 });

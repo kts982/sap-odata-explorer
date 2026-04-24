@@ -2,6 +2,7 @@ pub mod auth;
 pub mod catalog;
 pub mod client;
 pub mod config;
+pub mod diagnostics;
 pub mod error;
 pub mod metadata;
 pub mod query;

@@ -68,7 +68,9 @@ mod test_backend {
     }
 
     pub fn set(key: &str, value: &str) -> anyhow::Result<()> {
-        with_store(|m| { m.insert(key.to_string(), value.to_string()); });
+        with_store(|m| {
+            m.insert(key.to_string(), value.to_string());
+        });
         Ok(())
     }
 
@@ -77,7 +79,9 @@ mod test_backend {
     }
 
     pub fn del(key: &str) -> anyhow::Result<()> {
-        with_store(|m| { m.remove(key); });
+        with_store(|m| {
+            m.remove(key);
+        });
         Ok(())
     }
 }
@@ -121,14 +125,14 @@ pub struct PersistedSession {
 /// These are substring matches: both `login.microsoftonline.com` and
 /// `login.microsoftonline.com/<tenant-id>` match `microsoftonline.com`.
 const IDP_HOST_PATTERNS: &[&str] = &[
-    "microsoftonline.com",  // Azure AD (modern login)
-    "login.microsoft.com",  // Azure AD (legacy/entra)
-    "login.windows.net",    // Azure AD (legacy ADFS-integrated)
-    "ondemand.com",         // SAP BTP, SAP IAS on cloud
+    "microsoftonline.com", // Azure AD (modern login)
+    "login.microsoft.com", // Azure AD (legacy/entra)
+    "login.windows.net",   // Azure AD (legacy ADFS-integrated)
+    "ondemand.com",        // SAP BTP, SAP IAS on cloud
     "okta.com",
     "auth0.com",
-    "accounts.sap.com",     // SAP IAS
-    "adfs",                 // on-premise ADFS (matches e.g. adfs.corp.example)
+    "accounts.sap.com", // SAP IAS
+    "adfs",             // on-premise ADFS (matches e.g. adfs.corp.example)
 ];
 
 /// Returns true if `host` looks like a federated IdP that could silently
@@ -211,8 +215,8 @@ pub fn load(profile_name: &str) -> anyhow::Result<Option<PersistedSession>> {
         .decode(&encoded)
         .map_err(|e| anyhow::anyhow!("corrupt session blob: {e}"))?;
     let json = gzip_decompress(&compressed)?;
-    let session: PersistedSession = serde_json::from_slice(&json)
-        .map_err(|e| anyhow::anyhow!("corrupt session data: {e}"))?;
+    let session: PersistedSession =
+        serde_json::from_slice(&json).map_err(|e| anyhow::anyhow!("corrupt session data: {e}"))?;
 
     Ok(Some(session))
 }
@@ -288,9 +292,18 @@ mod tests {
     #[test]
     fn fingerprint_differs_across_connections() {
         let base = connection_fingerprint("https://sap.corp", "100", "EN");
-        assert_ne!(base, connection_fingerprint("https://other.corp", "100", "EN"));
-        assert_ne!(base, connection_fingerprint("https://sap.corp", "200", "EN"));
-        assert_ne!(base, connection_fingerprint("https://sap.corp", "100", "DE"));
+        assert_ne!(
+            base,
+            connection_fingerprint("https://other.corp", "100", "EN")
+        );
+        assert_ne!(
+            base,
+            connection_fingerprint("https://sap.corp", "200", "EN")
+        );
+        assert_ne!(
+            base,
+            connection_fingerprint("https://sap.corp", "100", "DE")
+        );
     }
 
     #[test]
@@ -321,7 +334,7 @@ mod tests {
 
     #[test]
     fn load_for_connection_returns_session_when_fingerprint_matches() {
-        let profile ="load_matches";
+        let profile = "load_matches";
         let fp = connection_fingerprint("https://sap.corp", "100", "EN");
         save(profile, "https://sap.corp/", &fp, &["X=1".to_string()]).unwrap();
 
@@ -334,9 +347,15 @@ mod tests {
 
     #[test]
     fn load_for_connection_clears_on_fingerprint_mismatch() {
-        let profile ="load_mismatch";
+        let profile = "load_mismatch";
         let stored_fp = connection_fingerprint("https://sap.corp", "100", "EN");
-        save(profile, "https://sap.corp/", &stored_fp, &["X=1".to_string()]).unwrap();
+        save(
+            profile,
+            "https://sap.corp/",
+            &stored_fp,
+            &["X=1".to_string()],
+        )
+        .unwrap();
 
         let expected_fp = connection_fingerprint("https://other.corp", "100", "EN");
         let loaded = load_for_connection(profile, &expected_fp).unwrap();
@@ -352,13 +371,16 @@ mod tests {
 
     #[test]
     fn load_for_connection_clears_legacy_empty_fingerprint() {
-        let profile ="load_legacy";
+        let profile = "load_legacy";
         // Simulate a pre-fingerprint session by writing an empty fingerprint.
         save(profile, "https://sap.corp/", "", &["X=1".to_string()]).unwrap();
 
         let expected_fp = connection_fingerprint("https://sap.corp", "100", "EN");
         let loaded = load_for_connection(profile, &expected_fp).unwrap();
-        assert!(loaded.is_none(), "empty fingerprint must be treated as stale");
+        assert!(
+            loaded.is_none(),
+            "empty fingerprint must be treated as stale"
+        );
         assert!(
             load(profile).unwrap().is_none(),
             "legacy session must be cleared on load"
@@ -367,14 +389,14 @@ mod tests {
 
     #[test]
     fn load_for_connection_returns_none_when_absent() {
-        let profile ="load_absent";
+        let profile = "load_absent";
         let fp = connection_fingerprint("https://sap.corp", "100", "EN");
         assert!(load_for_connection(profile, &fp).unwrap().is_none());
     }
 
     #[test]
     fn clear_is_idempotent() {
-        let profile ="clear_idempotent";
+        let profile = "clear_idempotent";
         // Second call must also succeed (NoEntry treated as success).
         clear(profile).expect("clear on absent entry must not error");
         clear(profile).expect("clear must still succeed when nothing is stored");
@@ -382,7 +404,7 @@ mod tests {
 
     #[test]
     fn save_then_load_roundtrips_cookies_and_fingerprint() {
-        let profile ="save_load_rt";
+        let profile = "save_load_rt";
         let fp = connection_fingerprint("https://sap.corp", "200", "DE");
         let cookies = vec![
             "MYSAPSSO2=abc; Path=/".to_string(),

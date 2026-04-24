@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
-    "css": "npx tailwindcss -i src/input.css -o src/style.css --minify",
+    "css": "node scripts/build-css.cjs",
     "dev": "npm run css && npx serve src -l 1420",
     "tauri": "tauri"
   },

@@ -86,7 +86,11 @@ async fn fetch_v2_catalog(client: &SapClient) -> Result<Vec<CatalogEntry>, OData
 
     let url_path = format!("{V2_CATALOG_PATH}/ServiceCollection?$format=json");
     let json_text = client.get_raw(V2_CATALOG_PATH, &url_path).await?;
-    debug!("V2 catalog raw response ({} bytes): {}", json_text.len(), &json_text[..json_text.len().min(500)]);
+    debug!(
+        "V2 catalog raw response ({} bytes): {}",
+        json_text.len(),
+        &json_text[..json_text.len().min(500)]
+    );
     let data: serde_json::Value = serde_json::from_str(&json_text)
         .map_err(|e| ODataError::MetadataParse(format!("V2 catalog parse error: {e}")))?;
 
@@ -206,10 +210,7 @@ pub async fn resolve_v4_service_url(
 
 /// Resolve a service name to its full URL path by searching both V2 and V4 catalogs.
 /// Returns the service URL if found.
-pub async fn resolve_service_by_name(
-    client: &SapClient,
-    name: &str,
-) -> Result<String, ODataError> {
+pub async fn resolve_service_by_name(client: &SapClient, name: &str) -> Result<String, ODataError> {
     let name_lower = name.to_lowercase();
     let mut errors = Vec::new();
 
@@ -287,9 +288,7 @@ fn extract_path_from_url(url: &str) -> String {
 
 /// Check if a V4 service URL is the actual service (not a common/metadata helper).
 fn is_real_v4_service_url(url: &str) -> bool {
-    !url.is_empty()
-        && !url.contains("/iwbep/common/")
-        && !url.contains("/iwbep/tea_")
+    !url.is_empty() && !url.contains("/iwbep/common/") && !url.contains("/iwbep/tea_")
 }
 
 fn str_field(value: &serde_json::Value, field: &str) -> String {

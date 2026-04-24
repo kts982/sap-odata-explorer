@@ -78,9 +78,7 @@ pub fn find_config_dir() -> Option<ConfigDir> {
     }
 
     // Fall back to OS config directory
-    if let Some(proj_dirs) =
-        directories::ProjectDirs::from("", "", "sap-odata-explorer")
-    {
+    if let Some(proj_dirs) = directories::ProjectDirs::from("", "", "sap-odata-explorer") {
         let config_dir = proj_dirs.config_dir().to_path_buf();
         debug!("Using config dir at {}", config_dir.display());
         return Some(ConfigDir {
@@ -126,10 +124,13 @@ pub fn load_config() -> anyhow::Result<(ConfigFile, ConfigDir)> {
     let config_dir = match find_config_dir() {
         Some(dir) => dir,
         None => {
-            return Ok((ConfigFile::default(), ConfigDir {
-                path: PathBuf::new(),
-                is_portable: false,
-            }));
+            return Ok((
+                ConfigFile::default(),
+                ConfigDir {
+                    path: PathBuf::new(),
+                    is_portable: false,
+                },
+            ));
         }
     };
 
@@ -140,7 +141,11 @@ pub fn load_config() -> anyhow::Result<(ConfigFile, ConfigDir)> {
 
     let content = std::fs::read_to_string(&config_path)?;
     let config: ConfigFile = toml::from_str(&content)?;
-    debug!("Loaded {} connection(s) from {}", config.connections.len(), config_path.display());
+    debug!(
+        "Loaded {} connection(s) from {}",
+        config.connections.len(),
+        config_path.display()
+    );
 
     Ok((config, config_dir))
 }
@@ -174,11 +179,8 @@ pub fn clear_session_if_connection_changed(
     let should_clear = match old_profile {
         None => false, // brand-new profile — nothing to clear
         Some(old) => {
-            let old_fp = crate::session::connection_fingerprint(
-                &old.base_url,
-                &old.client,
-                &old.language,
-            );
+            let old_fp =
+                crate::session::connection_fingerprint(&old.base_url, &old.client, &old.language);
             old_fp != new_fp
         }
     };

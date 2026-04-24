@@ -5,6 +5,7 @@ use sap_odata_core::{
     catalog,
     client::SapClient,
     config,
+    diagnostics::HttpTraceEntry,
     query::ODataQuery,
 };
 use serde::{Deserialize, Serialize};
@@ -13,7 +14,10 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tauri::{Manager, Url, WebviewUrl, WindowEvent, webview::{Cookie, WebviewWindowBuilder}};
+use tauri::{
+    Manager, Url, WebviewUrl, WindowEvent,
+    webview::{Cookie, WebviewWindowBuilder},
+};
 
 // ── Types for frontend communication ──
 
@@ -99,6 +103,39 @@ struct AppState {
     browser_sessions: Mutex<HashMap<String, BrowserSession>>,
 }
 
+/// Successful command result bundled with the HTTP trace captured while it ran.
+#[derive(Serialize)]
+struct CommandOk<T: Serialize> {
+    data: T,
+    trace: Vec<HttpTraceEntry>,
+}
+
+/// Error result that still carries the trace — failures are exactly when the
+/// inspector matters most.
+#[derive(Serialize)]
+struct CommandError {
+    message: String,
+    trace: Vec<HttpTraceEntry>,
+}
+
+impl CommandError {
+    fn msg(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            trace: Vec::new(),
+        }
+    }
+
+    fn with_client(client: &SapClient, message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            trace: client.diagnostics_snapshot(),
+        }
+    }
+}
+
+type CmdResult<T> = std::result::Result<CommandOk<T>, CommandError>;
+
 fn auth_mode_for_profile(profile: &config::ConnectionProfile) -> &'static str {
     if profile.browser_sso {
         "browser"
@@ -151,7 +188,7 @@ const IDP_PROBE_URLS: &[&str] = &[
     "https://login.windows.net/",
     "https://login.okta.com/",
     "https://login.auth0.com/",
-    "https://accounts.sap.com/",   // SAP IAS
+    "https://accounts.sap.com/", // SAP IAS
 ];
 
 fn is_browser_auth_complete(url: &Url, expected: &Url) -> bool {
@@ -206,7 +243,11 @@ fn client_from_profile(profile_name: &str, state: &AppState) -> Result<SapClient
     let client = SapClient::new(connection.clone()).map_err(|e| format!("Client error: {e}"))?;
 
     if matches!(connection.auth, AuthConfig::Browser) {
-        let key = browser_session_key(&connection.base_url, &connection.client, &connection.language);
+        let key = browser_session_key(
+            &connection.base_url,
+            &connection.client,
+            &connection.language,
+        );
         if let Some(session) = state.browser_sessions.lock().unwrap().get(&key).cloned() {
             client
                 .import_cookie_strings(&session.request_url, &session.cookies)
@@ -243,9 +284,10 @@ async fn browser_sign_in_for_connection(
     language: String,
     insecure_tls: bool,
     profile_name: Option<String>,
-) -> Result<String, String> {
+) -> CmdResult<String> {
     let request_url = build_browser_probe_url(&base_url, &client, &language);
-    let request_url_parsed = Url::parse(&request_url).map_err(|e| format!("Invalid sign-in URL: {e}"))?;
+    let request_url_parsed = Url::parse(&request_url)
+        .map_err(|e| CommandError::msg(format!("Invalid sign-in URL: {e}")))?;
     let label = "browser-auth";
 
     if let Some(existing) = app.get_webview_window(label) {
@@ -290,12 +332,15 @@ async fn browser_sign_in_for_connection(
         }
     })
     .build()
-    .map_err(|e| format!("Failed to open sign-in window: {e}"))?;
+    .map_err(|e| CommandError::msg(format!("Failed to open sign-in window: {e}")))?;
 
     auth_window.on_window_event({
         let tx = tx.clone();
         move |event| {
-            if matches!(event, WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed) {
+            if matches!(
+                event,
+                WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed
+            ) {
                 if let Some(tx) = tx.lock().unwrap().take() {
                     let _ = tx.send(Err("Sign-in cancelled".to_string()));
                 }
@@ -305,8 +350,8 @@ async fn browser_sign_in_for_connection(
 
     let outcome = rx
         .await
-        .map_err(|_| "Sign-in window closed unexpectedly".to_string())?;
-    outcome?;
+        .map_err(|_| CommandError::msg("Sign-in window closed unexpectedly"))?;
+    outcome.map_err(CommandError::msg)?;
 
     // Wait for cookies to be fully written by the webview
     tokio::time::sleep(Duration::from_millis(1000)).await;
@@ -331,12 +376,12 @@ async fn browser_sign_in_for_connection(
     let cookie_strings = all_cookies;
     if cookie_strings.is_empty() {
         let _ = auth_window.close();
-        return Err(format!(
+        return Err(CommandError::msg(format!(
             "Sign-in finished, but no SAP session cookies were found.\n\
              Tried URLs: {} and {}\n\
              The SAP system may set cookies on a different domain or path.",
             base_url_parsed, request_url_parsed
-        ));
+        )));
     }
 
     let key = browser_session_key(&base_url, &client, &language);
@@ -350,9 +395,8 @@ async fn browser_sign_in_for_connection(
 
     // Persist to OS keyring if we know the profile name (so the CLI can reuse it).
     if let Some(ref pname) = profile_name {
-        let fingerprint = sap_odata_core::session::connection_fingerprint(
-            &base_url, &client, &language,
-        );
+        let fingerprint =
+            sap_odata_core::session::connection_fingerprint(&base_url, &client, &language);
         match sap_odata_core::session::save(pname, &request_url, &fingerprint, &cookie_strings) {
             Ok(()) => {}
             Err(e) => {
@@ -370,20 +414,24 @@ async fn browser_sign_in_for_connection(
         auth: AuthConfig::Browser,
         insecure_tls,
     })
-    .map_err(|e| format!("Client error: {e}"))?;
+    .map_err(|e| CommandError::msg(format!("Client error: {e}")))?;
 
     if let Some(session) = state.browser_sessions.lock().unwrap().get(&key).cloned() {
         sap_client
             .import_cookie_strings(&session.request_url, &session.cookies)
-            .map_err(|e| format!("Cookie import error: {e}"))?;
+            .map_err(|e| CommandError::msg(format!("Cookie import error: {e}")))?;
     }
 
-    sap_client
-        .ensure_session(browser_probe_path())
-        .await
-        .map_err(|e| format!("Browser sign-in succeeded, but SAP session validation failed: {e}"))?;
-
-    Ok("Browser sign-in successful".to_string())
+    match sap_client.ensure_session(browser_probe_path()).await {
+        Ok(()) => Ok(CommandOk {
+            data: "Browser sign-in successful".to_string(),
+            trace: sap_client.diagnostics_snapshot(),
+        }),
+        Err(e) => Err(CommandError::with_client(
+            &sap_client,
+            format!("Browser sign-in succeeded, but SAP session validation failed: {e}"),
+        )),
+    }
 }
 
 // ── Tauri commands ──
@@ -436,18 +484,21 @@ async fn get_services(
     profile_name: String,
     search: Option<String>,
     v4_only: bool,
-) -> Result<Vec<ServiceInfo>, String> {
-    let client = client_from_profile(&profile_name, &state)?;
+) -> CmdResult<Vec<ServiceInfo>> {
+    let client = client_from_profile(&profile_name, &state).map_err(CommandError::msg)?;
     let result = catalog::fetch_service_catalog(&client)
         .await
-        .map_err(|e| format!("Catalog error: {e}"))?;
+        .map_err(|e| CommandError::with_client(&client, format!("Catalog error: {e}")))?;
 
-    // Surface warnings as part of the error if no entries found
     if result.entries.is_empty() && !result.warnings.is_empty() {
-        return Err(format!("No services found. Warnings: {}", result.warnings.join("; ")));
+        return Err(CommandError::with_client(
+            &client,
+            format!("No services found. Warnings: {}", result.warnings.join("; ")),
+        ));
     }
 
-    Ok(result.entries
+    let data = result
+        .entries
         .iter()
         .filter(|e| {
             if v4_only && !e.is_v4 {
@@ -465,7 +516,11 @@ async fn get_services(
             service_url: e.service_url.clone(),
             version: e.version_label().to_string(),
         })
-        .collect())
+        .collect();
+    Ok(CommandOk {
+        data,
+        trace: client.diagnostics_snapshot(),
+    })
 }
 
 #[tauri::command]
@@ -473,16 +528,25 @@ async fn resolve_service(
     state: tauri::State<'_, AppState>,
     profile_name: String,
     service: String,
-) -> Result<String, String> {
-    // Try alias first
+) -> CmdResult<String> {
+    // Aliases bypass the network entirely, so no trace to report.
     if let Ok(path) = resolve_service_for_profile(&profile_name, &service) {
-        return Ok(path);
+        return Ok(CommandOk {
+            data: path,
+            trace: Vec::new(),
+        });
     }
-    // Try catalog
-    let client = client_from_profile(&profile_name, &state)?;
-    catalog::resolve_service_by_name(&client, &service)
-        .await
-        .map_err(|e| format!("Resolution error: {e}"))
+    let client = client_from_profile(&profile_name, &state).map_err(CommandError::msg)?;
+    match catalog::resolve_service_by_name(&client, &service).await {
+        Ok(path) => Ok(CommandOk {
+            data: path,
+            trace: client.diagnostics_snapshot(),
+        }),
+        Err(e) => Err(CommandError::with_client(
+            &client,
+            format!("Resolution error: {e}"),
+        )),
+    }
 }
 
 #[tauri::command]
@@ -490,14 +554,14 @@ async fn get_entities(
     state: tauri::State<'_, AppState>,
     profile_name: String,
     service_path: String,
-) -> Result<Vec<EntitySetInfo>, String> {
-    let client = client_from_profile(&profile_name, &state)?;
+) -> CmdResult<Vec<EntitySetInfo>> {
+    let client = client_from_profile(&profile_name, &state).map_err(CommandError::msg)?;
     let meta = client
         .fetch_metadata(&service_path)
         .await
-        .map_err(|e| format!("Metadata error: {e}"))?;
+        .map_err(|e| CommandError::with_client(&client, format!("Metadata error: {e}")))?;
 
-    Ok(meta
+    let data = meta
         .entity_sets
         .iter()
         .map(|es| {
@@ -511,7 +575,11 @@ async fn get_entities(
                 keys,
             }
         })
-        .collect())
+        .collect();
+    Ok(CommandOk {
+        data,
+        trace: client.diagnostics_snapshot(),
+    })
 }
 
 #[tauri::command]
@@ -520,20 +588,20 @@ async fn describe_entity(
     profile_name: String,
     service_path: String,
     entity_set: String,
-) -> Result<EntityTypeInfo, String> {
-    let client = client_from_profile(&profile_name, &state)?;
+) -> CmdResult<EntityTypeInfo> {
+    let client = client_from_profile(&profile_name, &state).map_err(CommandError::msg)?;
     let meta = client
         .fetch_metadata(&service_path)
         .await
-        .map_err(|e| format!("Metadata error: {e}"))?;
+        .map_err(|e| CommandError::with_client(&client, format!("Metadata error: {e}")))?;
 
-    let et = meta
-        .entity_type_for_set(&entity_set)
-        .ok_or_else(|| format!("Entity set '{}' not found", entity_set))?;
+    let et = meta.entity_type_for_set(&entity_set).ok_or_else(|| {
+        CommandError::with_client(&client, format!("Entity set '{}' not found", entity_set))
+    })?;
 
     let nav_targets = meta.nav_targets(et);
 
-    Ok(EntityTypeInfo {
+    let data = EntityTypeInfo {
         name: et.name.clone(),
         keys: et.keys.clone(),
         properties: et
@@ -556,6 +624,10 @@ async fn describe_entity(
                 multiplicity: mult.clone(),
             })
             .collect(),
+    };
+    Ok(CommandOk {
+        data,
+        trace: client.diagnostics_snapshot(),
     })
 }
 
@@ -565,13 +637,13 @@ async fn run_query(
     profile_name: String,
     service_path: String,
     params: QueryParams,
-) -> Result<serde_json::Value, String> {
-    let client = client_from_profile(&profile_name, &state)?;
+) -> CmdResult<serde_json::Value> {
+    let client = client_from_profile(&profile_name, &state).map_err(CommandError::msg)?;
 
     let meta = client
         .fetch_metadata(&service_path)
         .await
-        .map_err(|e| format!("Metadata error: {e}"))?;
+        .map_err(|e| CommandError::with_client(&client, format!("Metadata error: {e}")))?;
 
     let mut q = ODataQuery::new(&params.entity_set)
         .format("json")
@@ -605,10 +677,16 @@ async fn run_query(
         q = q.count();
     }
 
-    client
-        .query_json(&service_path, &q)
-        .await
-        .map_err(|e| format!("Query error: {e}"))
+    match client.query_json(&service_path, &q).await {
+        Ok(value) => Ok(CommandOk {
+            data: value,
+            trace: client.diagnostics_snapshot(),
+        }),
+        Err(e) => Err(CommandError::with_client(
+            &client,
+            format!("Query error: {e}"),
+        )),
+    }
 }
 
 #[tauri::command]
@@ -654,7 +732,11 @@ fn add_profile(
         base_url,
         client,
         language,
-        username: if browser_sso { String::new() } else { username.clone() },
+        username: if browser_sso {
+            String::new()
+        } else {
+            username.clone()
+        },
         password: None,
         sso,
         browser_sso,
@@ -672,8 +754,7 @@ fn add_profile(
                 cfg.connections.insert(name.clone(), profile_with_pw);
                 let dir = config::get_or_create_config_dir()
                     .map_err(|e| format!("Config dir error: {e}"))?;
-                config::save_config(&cfg, &dir.path)
-                    .map_err(|e| format!("Save error: {e}"))?;
+                config::save_config(&cfg, &dir.path).map_err(|e| format!("Save error: {e}"))?;
                 let base = format!("Profile '{}' saved (password in config file)", name);
                 return Ok(match fp_warning {
                     Some(w) => format!("{base}. Warning: {w}"),
@@ -684,10 +765,8 @@ fn add_profile(
     }
 
     cfg.connections.insert(name.clone(), profile);
-    let dir = config::get_or_create_config_dir()
-        .map_err(|e| format!("Config dir error: {e}"))?;
-    config::save_config(&cfg, &dir.path)
-        .map_err(|e| format!("Save error: {e}"))?;
+    let dir = config::get_or_create_config_dir().map_err(|e| format!("Config dir error: {e}"))?;
+    config::save_config(&cfg, &dir.path).map_err(|e| format!("Save error: {e}"))?;
     let mode = match auth_mode.as_str() {
         "sso" => " with Windows SSO",
         "browser" => " with browser SSO",
@@ -701,13 +780,12 @@ fn add_profile(
 }
 
 #[tauri::command]
-fn remove_profile(
-    state: tauri::State<'_, AppState>,
-    name: String,
-) -> Result<String, String> {
+fn remove_profile(state: tauri::State<'_, AppState>, name: String) -> Result<String, String> {
     let (mut cfg, config_dir) = config::load_config().map_err(|e| format!("Config error: {e}"))?;
 
-    let profile = cfg.connections.remove(&name)
+    let profile = cfg
+        .connections
+        .remove(&name)
         .ok_or_else(|| format!("Profile '{}' not found", name))?;
 
     let mut warnings: Vec<String> = Vec::new();
@@ -722,8 +800,7 @@ fn remove_profile(
     if let Err(e) = sap_odata_core::session::clear(&name) {
         warnings.push(format!("Browser SSO session — {e}"));
     }
-    config::save_config(&cfg, &config_dir.path)
-        .map_err(|e| format!("Save error: {e}"))?;
+    config::save_config(&cfg, &config_dir.path).map_err(|e| format!("Save error: {e}"))?;
     if warnings.is_empty() {
         Ok(format!("Profile '{}' removed", name))
     } else {
@@ -745,15 +822,10 @@ async fn test_connection(
     auth_mode: String,
     username: String,
     password: String,
-) -> Result<String, String> {
+) -> CmdResult<String> {
     if auth_mode == "browser" {
         return browser_sign_in_for_connection(
-            app,
-            &state,
-            base_url,
-            client,
-            language,
-            false,
+            app, &state, base_url, client, language, false,
             None, // pre-save test — no profile name yet
         )
         .await;
@@ -773,13 +845,21 @@ async fn test_connection(
         insecure_tls: false,
     };
 
-    let sap_client = SapClient::new(connection)
-        .map_err(|e| format!("Client error: {e}"))?;
-    sap_client
+    let sap_client =
+        SapClient::new(connection).map_err(|e| CommandError::msg(format!("Client error: {e}")))?;
+    match sap_client
         .ensure_session("/sap/opu/odata/IWFND/CATALOGSERVICE;v=2")
         .await
-        .map_err(|e| format!("Connection failed: {e}"))?;
-    Ok("Connection successful".to_string())
+    {
+        Ok(()) => Ok(CommandOk {
+            data: "Connection successful".to_string(),
+            trace: sap_client.diagnostics_snapshot(),
+        }),
+        Err(e) => Err(CommandError::with_client(
+            &sap_client,
+            format!("Connection failed: {e}"),
+        )),
+    }
 }
 
 #[tauri::command]
@@ -787,15 +867,19 @@ async fn browser_sign_in_profile(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     profile_name: String,
-) -> Result<String, String> {
-    let (cfg, _) = config::load_config().map_err(|e| format!("Config error: {e}"))?;
+) -> CmdResult<String> {
+    let (cfg, _) =
+        config::load_config().map_err(|e| CommandError::msg(format!("Config error: {e}")))?;
     let profile = cfg
         .connections
         .get(&profile_name)
-        .ok_or_else(|| format!("Profile '{}' not found", profile_name))?;
+        .ok_or_else(|| CommandError::msg(format!("Profile '{}' not found", profile_name)))?;
 
     if !profile.browser_sso {
-        return Err(format!("Profile '{}' is not configured for browser SSO", profile_name));
+        return Err(CommandError::msg(format!(
+            "Profile '{}' is not configured for browser SSO",
+            profile_name
+        )));
     }
 
     browser_sign_in_for_connection(
@@ -955,7 +1039,6 @@ mod tests {
             "Expires must round-trip to the same instant"
         );
     }
-
 }
 
 fn main() {

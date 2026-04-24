@@ -8,11 +8,9 @@ mod imp {
     use base64::Engine;
     use tracing::debug;
     use windows::Win32::Security::Authentication::Identity::{
-        AcquireCredentialsHandleW, DeleteSecurityContext, FreeContextBuffer,
-        FreeCredentialsHandle, InitializeSecurityContextW,
-        ISC_REQ_DELEGATE, ISC_REQ_MUTUAL_AUTH, ISC_REQ_ALLOCATE_MEMORY,
-        SECPKG_CRED_OUTBOUND, SecBufferDesc, SecBuffer,
-        SECBUFFER_TOKEN, SECBUFFER_VERSION,
+        AcquireCredentialsHandleW, DeleteSecurityContext, FreeContextBuffer, FreeCredentialsHandle,
+        ISC_REQ_ALLOCATE_MEMORY, ISC_REQ_DELEGATE, ISC_REQ_MUTUAL_AUTH, InitializeSecurityContextW,
+        SECBUFFER_TOKEN, SECBUFFER_VERSION, SECPKG_CRED_OUTBOUND, SecBuffer, SecBufferDesc,
     };
     use windows::Win32::Security::Credentials::SecHandle;
 
@@ -99,8 +97,7 @@ mod imp {
             return Err(format!(
                 "InitializeSecurityContext failed: 0x{:08x}. \
                  SPN '{}' may not be registered, or domain trust not set up.",
-                hresult.0 as u32,
-                spn
+                hresult.0 as u32, spn
             ));
         }
 
@@ -116,7 +113,10 @@ mod imp {
         };
 
         let token_b64 = base64::engine::general_purpose::STANDARD.encode(token_bytes);
-        debug!("SSPI: Negotiate token generated ({} bytes)", out_buffer.cbBuffer);
+        debug!(
+            "SSPI: Negotiate token generated ({} bytes)",
+            out_buffer.cbBuffer
+        );
 
         // Free SSPI resources
         unsafe {

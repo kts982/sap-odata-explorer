@@ -20,6 +20,9 @@ pub enum ODataError {
     #[error("service not found: {0}")]
     ServiceNotFound(String),
 
+    #[error("response parse error: {0}")]
+    ResponseParse(String),
+
     #[error("invalid URL: {0}")]
     InvalidUrl(#[from] url::ParseError),
 }

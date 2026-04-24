@@ -1,10 +1,11 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
+use comfy_table::{Cell, Color, Table, presets::UTF8_FULL};
 use sap_odata_core::{
     auth::{AuthConfig, SapConnection},
     client::SapClient,
     config::{self, ConnectionProfile},
+    diagnostics::HttpTraceEntry,
     metadata::ODataVersion,
     query::ODataQuery,
 };
@@ -275,7 +276,11 @@ enum AliasAction {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let log_level = if cli.verbose { "sap_odata=debug" } else { "sap_odata=warn" };
+    let log_level = if cli.verbose {
+        "sap_odata=debug"
+    } else {
+        "sap_odata=warn"
+    };
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
@@ -321,75 +326,160 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Resolve service path: alias → catalog lookup → raw path
-    let resolved_service = resolve_service_path(&cli, &sap_client).await?;
+    let result = async {
+        // Resolve service path: alias -> catalog lookup -> raw path
+        let resolved_service = resolve_service_path(&cli, &sap_client).await?;
 
-    let require_service = || -> Result<String> {
-        resolved_service
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("--service / -s is required for this command"))
-    };
+        let require_service = || -> Result<String> {
+            resolved_service
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("--service / -s is required for this command"))
+        };
 
-    match &cli.command {
-        Commands::Profile { .. } | Commands::Alias { .. } | Commands::Setup | Commands::Signout { .. } => unreachable!(),
-        Commands::Services { filter, v2, v4, top } => {
-            cmd_services(&sap_client, filter.as_deref(), *v2, *v4, *top, cli.json).await
+        match &cli.command {
+            Commands::Profile { .. }
+            | Commands::Alias { .. }
+            | Commands::Setup
+            | Commands::Signout { .. } => unreachable!(),
+            Commands::Services {
+                filter,
+                v2,
+                v4,
+                top,
+            } => cmd_services(&sap_client, filter.as_deref(), *v2, *v4, *top, cli.json).await,
+            Commands::Entities => {
+                let svc = require_service()?;
+                cmd_entities(&sap_client, &svc, cli.json).await
+            }
+            Commands::Describe { entity_set } => {
+                let svc = require_service()?;
+                cmd_describe(&sap_client, &svc, entity_set, cli.json).await
+            }
+            Commands::Functions => {
+                let svc = require_service()?;
+                cmd_functions(&sap_client, &svc, cli.json).await
+            }
+            Commands::Build {
+                entity_set,
+                select,
+                filter,
+                expand,
+                orderby,
+                top,
+                skip,
+                key,
+                count,
+            } => {
+                let svc = require_service()?;
+                let query = build_query(
+                    entity_set,
+                    select.clone(),
+                    filter.clone(),
+                    expand.clone(),
+                    orderby.clone(),
+                    *top,
+                    *skip,
+                    key.clone(),
+                    *count,
+                    None,
+                );
+                let full_url = format!("{}/{}", svc.trim_end_matches('/'), query.build());
+                println!("{full_url}");
+                Ok(())
+            }
+            Commands::Run {
+                entity_set,
+                select,
+                filter,
+                expand,
+                orderby,
+                top,
+                skip,
+                key,
+                count,
+            } => {
+                let svc = require_service()?;
+                let meta = sap_client
+                    .fetch_metadata(&svc)
+                    .await
+                    .context("failed to fetch metadata")?;
+                let query = build_query(
+                    entity_set,
+                    select.clone(),
+                    filter.clone(),
+                    expand.clone(),
+                    orderby.clone(),
+                    *top,
+                    *skip,
+                    key.clone(),
+                    *count,
+                    Some(meta.version),
+                );
+                cmd_run(&sap_client, &svc, &query, cli.json).await
+            }
+            Commands::Metadata => {
+                let svc = require_service()?;
+                cmd_metadata(&sap_client, &svc).await
+            }
         }
-        Commands::Entities => {
-            let svc = require_service()?;
-            cmd_entities(&sap_client, &svc, cli.json).await
+    }
+    .await;
+
+    if cli.verbose {
+        emit_http_trace(&sap_client);
+    }
+
+    result
+}
+
+fn emit_http_trace(client: &SapClient) {
+    let trace = client.diagnostics_snapshot();
+    if trace.is_empty() {
+        return;
+    }
+
+    eprintln!();
+    eprintln!("HTTP trace ({} exchange(s)):", trace.len());
+    for entry in &trace {
+        emit_http_trace_entry(entry);
+    }
+}
+
+fn emit_http_trace_entry(entry: &HttpTraceEntry) {
+    let status = entry
+        .status
+        .map(|status| status.to_string())
+        .unwrap_or_else(|| "ERR".to_string());
+
+    eprintln!();
+    eprintln!("[{}] {} {}", entry.id, entry.method, entry.url);
+    eprintln!("  status: {status}    time: {}ms", entry.duration_ms);
+
+    if let Some(location) = &entry.redirect_location {
+        eprintln!("  redirect: {location}");
+    }
+    if let Some(error) = &entry.error {
+        eprintln!("  transport error: {error}");
+    }
+
+    if !entry.request_headers.is_empty() {
+        eprintln!("  request headers:");
+        for header in &entry.request_headers {
+            eprintln!("    {}: {}", header.name, header.value);
         }
-        Commands::Describe { entity_set } => {
-            let svc = require_service()?;
-            cmd_describe(&sap_client, &svc, entity_set, cli.json).await
+    }
+
+    if !entry.response_headers.is_empty() {
+        eprintln!("  response headers:");
+        for header in &entry.response_headers {
+            eprintln!("    {}: {}", header.name, header.value);
         }
-        Commands::Functions => {
-            let svc = require_service()?;
-            cmd_functions(&sap_client, &svc, cli.json).await
-        }
-        Commands::Build {
-            entity_set,
-            select,
-            filter,
-            expand,
-            orderby,
-            top,
-            skip,
-            key,
-            count,
-        } => {
-            let svc = require_service()?;
-            let query = build_query(entity_set, select.clone(), filter.clone(), expand.clone(), orderby.clone(), *top, *skip, key.clone(), *count, None);
-            let full_url = format!(
-                "{}/{}",
-                svc.trim_end_matches('/'),
-                query.build()
-            );
-            println!("{full_url}");
-            Ok(())
-        }
-        Commands::Run {
-            entity_set,
-            select,
-            filter,
-            expand,
-            orderby,
-            top,
-            skip,
-            key,
-            count,
-        } => {
-            let svc = require_service()?;
-            let meta = sap_client
-                .fetch_metadata(&svc)
-                .await
-                .context("failed to fetch metadata")?;
-            let query = build_query(entity_set, select.clone(), filter.clone(), expand.clone(), orderby.clone(), *top, *skip, key.clone(), *count, Some(meta.version));
-            cmd_run(&sap_client, &svc, &query, cli.json).await
-        }
-        Commands::Metadata => {
-            let svc = require_service()?;
-            cmd_metadata(&sap_client, &svc).await
+    }
+
+    if let Some(body) = entry.response_body_preview.as_deref() {
+        eprintln!("  response preview:");
+        for line in body.lines() {
+            eprintln!("    {line}");
         }
     }
 }
@@ -400,10 +490,12 @@ fn resolve_connection(cli: &Cli) -> Result<SapConnection> {
     // If a profile is specified, load it as the base
     let (profile_conn, profile_name) = if let Some(ref name) = cli.profile {
         let (cfg, _) = config::load_config().context("failed to load config")?;
-        let profile = cfg
-            .connections
-            .get(name)
-            .ok_or_else(|| anyhow::anyhow!("profile '{}' not found. Run 'sap-odata profile list' to see available profiles.", name))?;
+        let profile = cfg.connections.get(name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "profile '{}' not found. Run 'sap-odata profile list' to see available profiles.",
+                name
+            )
+        })?;
         let conn = config::resolve_connection(name, profile)
             .with_context(|| format!("failed to resolve profile '{name}'"))?;
         (Some(conn), Some(name.clone()))
@@ -412,18 +504,30 @@ fn resolve_connection(cli: &Cli) -> Result<SapConnection> {
     };
 
     // Build final connection, CLI/env overriding profile
-    let base_url = cli.url.clone()
+    let base_url = cli
+        .url
+        .clone()
         .or_else(|| profile_conn.as_ref().map(|c| c.base_url.clone()))
-        .ok_or_else(|| anyhow::anyhow!(
-            "no SAP URL specified. Use --url, SAP_BASE_URL env, or --profile.{}",
-            if profile_name.is_none() { " Run 'sap-odata profile list' to see saved profiles." } else { "" }
-        ))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no SAP URL specified. Use --url, SAP_BASE_URL env, or --profile.{}",
+                if profile_name.is_none() {
+                    " Run 'sap-odata profile list' to see saved profiles."
+                } else {
+                    ""
+                }
+            )
+        })?;
 
-    let client = cli.client.clone()
+    let client = cli
+        .client
+        .clone()
         .or_else(|| profile_conn.as_ref().map(|c| c.client.clone()))
         .unwrap_or_else(|| "100".to_string());
 
-    let language = cli.language.clone()
+    let language = cli
+        .language
+        .clone()
         .or_else(|| profile_conn.as_ref().map(|c| c.language.clone()))
         .unwrap_or_else(|| "EN".to_string());
 
@@ -448,19 +552,33 @@ fn resolve_connection(cli: &Cli) -> Result<SapConnection> {
         });
     }
 
-    let username = cli.user.clone()
-        .or_else(|| profile_conn.as_ref().and_then(|c| match &c.auth {
-            AuthConfig::Basic { username, .. } => Some(username.clone()),
-            AuthConfig::Sso | AuthConfig::Browser => None,
-        }))
-        .ok_or_else(|| anyhow::anyhow!("no username specified. Use --user, SAP_USER env, --profile, or --sso."))?;
+    let username = cli
+        .user
+        .clone()
+        .or_else(|| {
+            profile_conn.as_ref().and_then(|c| match &c.auth {
+                AuthConfig::Basic { username, .. } => Some(username.clone()),
+                AuthConfig::Sso | AuthConfig::Browser => None,
+            })
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!("no username specified. Use --user, SAP_USER env, --profile, or --sso.")
+        })?;
 
-    let password = cli.password.clone()
-        .or_else(|| profile_conn.as_ref().and_then(|c| match &c.auth {
-            AuthConfig::Basic { password, .. } => Some(password.clone()),
-            AuthConfig::Sso | AuthConfig::Browser => None,
-        }))
-        .ok_or_else(|| anyhow::anyhow!("no password specified. Use --password, SAP_PASSWORD env, --profile, or --sso."))?;
+    let password = cli
+        .password
+        .clone()
+        .or_else(|| {
+            profile_conn.as_ref().and_then(|c| match &c.auth {
+                AuthConfig::Basic { password, .. } => Some(password.clone()),
+                AuthConfig::Sso | AuthConfig::Browser => None,
+            })
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no password specified. Use --password, SAP_PASSWORD env, --profile, or --sso."
+            )
+        })?;
 
     Ok(SapConnection {
         base_url,
@@ -506,12 +624,11 @@ async fn resolve_service_path(cli: &Cli, sap_client: &SapClient) -> Result<Optio
             println!("  Resolved '{}' -> {}", raw, path);
             Ok(Some(path))
         }
-        Err(e) => {
-            Err(anyhow::anyhow!(
-                "could not resolve service '{}': {}. Use a full path starting with / or add an alias.",
-                raw, e
-            ))
-        }
+        Err(e) => Err(anyhow::anyhow!(
+            "could not resolve service '{}': {}. Use a full path starting with / or add an alias.",
+            raw,
+            e
+        )),
     }
 }
 
@@ -536,7 +653,10 @@ fn cmd_alias_list(profile_name: &str) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("profile '{}' not found", profile_name))?;
 
     if profile.aliases.is_empty() {
-        println!("No aliases for profile '{}'. Use 'sap-odata -p {} alias add <name> <path>' to create one.", profile_name, profile_name);
+        println!(
+            "No aliases for profile '{}'. Use 'sap-odata -p {} alias add <name> <path>' to create one.",
+            profile_name, profile_name
+        );
         return Ok(());
     }
 
@@ -562,9 +682,14 @@ fn cmd_alias_add(profile_name: &str, alias_name: &str, service_path: &str) -> Re
         .get_mut(profile_name)
         .ok_or_else(|| anyhow::anyhow!("profile '{}' not found", profile_name))?;
 
-    profile.aliases.insert(alias_name.to_string(), service_path.to_string());
+    profile
+        .aliases
+        .insert(alias_name.to_string(), service_path.to_string());
     config::save_config(&cfg, &config_dir.path)?;
-    println!("  Alias '{}' -> {} saved for profile '{}'.", alias_name, service_path, profile_name);
+    println!(
+        "  Alias '{}' -> {} saved for profile '{}'.",
+        alias_name, service_path, profile_name
+    );
     Ok(())
 }
 
@@ -576,11 +701,18 @@ fn cmd_alias_remove(profile_name: &str, alias_name: &str) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("profile '{}' not found", profile_name))?;
 
     if profile.aliases.remove(alias_name).is_none() {
-        anyhow::bail!("alias '{}' not found in profile '{}'", alias_name, profile_name);
+        anyhow::bail!(
+            "alias '{}' not found in profile '{}'",
+            alias_name,
+            profile_name
+        );
     }
 
     config::save_config(&cfg, &config_dir.path)?;
-    println!("  Alias '{}' removed from profile '{}'.", alias_name, profile_name);
+    println!(
+        "  Alias '{}' removed from profile '{}'.",
+        alias_name, profile_name
+    );
     Ok(())
 }
 
@@ -591,7 +723,7 @@ fn cmd_alias_remove(profile_name: &str, alias_name: &str) -> Result<()> {
 // ══════════════════════════════════════════════════════════════
 
 async fn cmd_setup_wizard() -> Result<()> {
-    use dialoguer::{theme::ColorfulTheme, Confirm, Input, Password, Select};
+    use dialoguer::{Confirm, Input, Password, Select, theme::ColorfulTheme};
 
     let theme = ColorfulTheme::default();
 
@@ -665,7 +797,9 @@ async fn cmd_setup_wizard() -> Result<()> {
         1 => (String::new(), String::new(), true, false),
         2 => {
             println!();
-            println!("  Browser SSO needs a one-time sign-in from the desktop app or VS Code extension.");
+            println!(
+                "  Browser SSO needs a one-time sign-in from the desktop app or VS Code extension."
+            );
             println!("  After signing in there once, this CLI profile will work too —");
             println!("  cookies are stored securely in the OS keyring.");
             println!();
@@ -801,7 +935,9 @@ async fn handle_profile_command(action: &ProfileAction) -> Result<()> {
             sso,
             plaintext,
             portable,
-        } => cmd_profile_add(name, url, client, language, user, password, *sso, *plaintext, *portable),
+        } => cmd_profile_add(
+            name, url, client, language, user, password, *sso, *plaintext, *portable,
+        ),
         ProfileAction::Remove { name } => cmd_profile_remove(name),
         ProfileAction::Test { name } => cmd_profile_test(name).await,
         ProfileAction::Where => cmd_profile_where(),
@@ -841,13 +977,21 @@ fn cmd_profile_list() -> Result<()> {
             Cell::new(name),
             Cell::new(&profile.base_url),
             Cell::new(&profile.client),
-            Cell::new(if profile.sso { "(SSO)" } else { &profile.username }),
+            Cell::new(if profile.sso {
+                "(SSO)"
+            } else {
+                &profile.username
+            }),
             Cell::new(auth_info),
         ]);
     }
 
     println!("{table}");
-    let mode = if config_dir.is_portable { "portable" } else { "user" };
+    let mode = if config_dir.is_portable {
+        "portable"
+    } else {
+        "user"
+    };
     println!("\n  Config: {} ({})\n", config_dir.path.display(), mode);
 
     Ok(())
@@ -917,7 +1061,11 @@ fn cmd_profile_add(
         } else {
             config::save_config(&cfg, &config_dir.path)?
         };
-        println!("  Profile '{}' saved with SSO to {}", name, save_path.display());
+        println!(
+            "  Profile '{}' saved with SSO to {}",
+            name,
+            save_path.display()
+        );
         return Ok(());
     }
 
@@ -988,9 +1136,15 @@ fn cmd_profile_remove(name: &str) -> Result<()> {
     config::save_config(&cfg, &config_dir.path)?;
 
     if warnings.is_empty() {
-        println!("  Profile '{}' removed (credentials and session cleared).", name);
+        println!(
+            "  Profile '{}' removed (credentials and session cleared).",
+            name
+        );
     } else {
-        println!("  Profile '{}' removed from config, but these items could NOT be cleared:", name);
+        println!(
+            "  Profile '{}' removed from config, but these items could NOT be cleared:",
+            name
+        );
         for w in &warnings {
             println!("    - {w}");
         }
@@ -1009,7 +1163,10 @@ async fn cmd_profile_test(name: &str) -> Result<()> {
     let connection = config::resolve_connection(name, profile)
         .with_context(|| format!("failed to resolve profile '{name}'"))?;
 
-    println!("  Testing connection to {} (client {})...", connection.base_url, connection.client);
+    println!(
+        "  Testing connection to {} (client {})...",
+        connection.base_url, connection.client
+    );
 
     let client = SapClient::new(connection).context("failed to create SAP client")?;
 
@@ -1033,7 +1190,11 @@ fn cmd_profile_where() -> Result<()> {
             // Show where it would be created
             let dir = config::get_or_create_config_dir()?;
             let mode = if dir.is_portable { "portable" } else { "user" };
-            println!("  Config directory: {} ({}, will be created on first use)", dir.path.display(), mode);
+            println!(
+                "  Config directory: {} ({}, will be created on first use)",
+                dir.path.display(),
+                mode
+            );
         }
     }
     Ok(())
@@ -1106,7 +1267,8 @@ async fn cmd_services(
         eprintln!("  Warning: {w}");
     }
 
-    let mut filtered: Vec<_> = result.entries
+    let mut filtered: Vec<_> = result
+        .entries
         .iter()
         .filter(|e| {
             if v2_only && e.is_v4 {
@@ -1197,9 +1359,7 @@ async fn cmd_entities(client: &SapClient, service: &str, json: bool) -> Result<(
 
         for (i, es) in meta.entity_sets.iter().enumerate() {
             let et = meta.entity_type_for_set(&es.name);
-            let keys = et
-                .map(|t| t.keys.join(", "))
-                .unwrap_or_default();
+            let keys = et.map(|t| t.keys.join(", ")).unwrap_or_default();
             table.add_row(vec![
                 Cell::new(i + 1),
                 Cell::new(&es.name),
@@ -1254,11 +1414,7 @@ async fn cmd_describe(
             Cell::new(&p.edm_type),
             Cell::new(is_key),
             Cell::new(if p.nullable { "yes" } else { "no" }),
-            Cell::new(
-                p.max_length
-                    .map(|l| l.to_string())
-                    .unwrap_or_default(),
-            ),
+            Cell::new(p.max_length.map(|l| l.to_string()).unwrap_or_default()),
             Cell::new(p.label.as_deref().unwrap_or("")),
         ]);
     }
@@ -1275,19 +1431,31 @@ async fn cmd_describe(
             Cell::new("Multiplicity").fg(Color::DarkCyan),
         ]);
         for (name, target, mult) in &nav_targets {
-            nav_table.add_row(vec![
-                Cell::new(name),
-                Cell::new(target),
-                Cell::new(mult),
-            ]);
+            nav_table.add_row(vec![Cell::new(name), Cell::new(target), Cell::new(mult)]);
         }
         println!("{nav_table}");
     }
 
     println!("\n  Example query:");
-    let select_fields: Vec<&str> = et.properties.iter().take(3).map(|p| p.name.as_str()).collect();
-    println!("  sap-odata ... run {entity_set} --select {} --top 10\n", select_fields.join(","));
-    println!("  URL: {}/{}\n", service, ODataQuery::new(entity_set).select(&select_fields).top(10).format("json").build());
+    let select_fields: Vec<&str> = et
+        .properties
+        .iter()
+        .take(3)
+        .map(|p| p.name.as_str())
+        .collect();
+    println!(
+        "  sap-odata ... run {entity_set} --select {} --top 10\n",
+        select_fields.join(",")
+    );
+    println!(
+        "  URL: {}/{}\n",
+        service,
+        ODataQuery::new(entity_set)
+            .select(&select_fields)
+            .top(10)
+            .format("json")
+            .build()
+    );
 
     Ok(())
 }
@@ -1394,7 +1562,10 @@ fn extract_results(data: &serde_json::Value) -> Option<serde_json::Value> {
 fn print_results_table(rows: &[serde_json::Value]) {
     let Some(first) = rows.first() else { return };
     let Some(obj) = first.as_object() else {
-        println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&rows).unwrap_or_default()
+        );
         return;
     };
 
@@ -1403,7 +1574,10 @@ fn print_results_table(rows: &[serde_json::Value]) {
         .filter(|k| {
             !k.starts_with('@')
                 && *k != "__metadata"
-                && !matches!(obj.get(*k), Some(serde_json::Value::Object(_) | serde_json::Value::Array(_)))
+                && !matches!(
+                    obj.get(*k),
+                    Some(serde_json::Value::Object(_) | serde_json::Value::Array(_))
+                )
         })
         .collect();
 

@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use serde::Serialize;
+use std::collections::HashMap;
 
 /// Detected OData protocol version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -177,7 +177,9 @@ pub fn parse_metadata(xml: &str) -> Result<ServiceMetadata, crate::error::ODataE
         .collect();
 
     if schema_nodes.is_empty() {
-        return Err(crate::error::ODataError::MetadataParse("no Schema element found".into()));
+        return Err(crate::error::ODataError::MetadataParse(
+            "no Schema element found".into(),
+        ));
     }
 
     // Use the first schema's namespace as the primary
@@ -330,7 +332,10 @@ fn parse_entity_container(
     schema: &roxmltree::Node,
     version: ODataVersion,
 ) -> (Vec<EntitySet>, Vec<FunctionImport>) {
-    let container = match children_by_tag(schema, "EntityContainer").into_iter().next() {
+    let container = match children_by_tag(schema, "EntityContainer")
+        .into_iter()
+        .next()
+    {
         Some(c) => c,
         None => return (vec![], vec![]),
     };
@@ -661,9 +666,17 @@ mod tests {
     fn test_v4_annotation_labels() {
         let meta = parse_metadata(TEST_METADATA_V4).unwrap();
         let st = meta.find_entity_type("WarehouseStorageTypeType").unwrap();
-        let wh_prop = st.properties.iter().find(|p| p.name == "EWMWarehouse").unwrap();
+        let wh_prop = st
+            .properties
+            .iter()
+            .find(|p| p.name == "EWMWarehouse")
+            .unwrap();
         assert_eq!(wh_prop.label.as_deref(), Some("Warehouse Number"));
-        let st_prop = st.properties.iter().find(|p| p.name == "EWMStorageType").unwrap();
+        let st_prop = st
+            .properties
+            .iter()
+            .find(|p| p.name == "EWMStorageType")
+            .unwrap();
         assert_eq!(st_prop.label.as_deref(), Some("Storage Type"));
     }
 }
