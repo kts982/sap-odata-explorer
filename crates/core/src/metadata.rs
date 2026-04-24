@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Detected OData protocol version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -17,6 +17,44 @@ pub struct ServiceMetadata {
     pub associations: Vec<Association>,
     pub entity_sets: Vec<EntitySet>,
     pub function_imports: Vec<FunctionImport>,
+    /// Raw annotations captured from `$metadata`. Flat list — each entry
+    /// points at the thing it was attached to via `target`. V2 SAP inline
+    /// attributes (`sap:*`) and V4 `<Annotations>` blocks both land here.
+    /// Complex record/collection values are not expanded yet; `value` is
+    /// populated only for the common simple-valued forms
+    /// (`String=`, `Bool=`, `Int=`, `EnumMember=`).
+    pub annotations: Vec<RawAnnotation>,
+}
+
+/// A single annotation captured during `$metadata` parsing. The first slice
+/// of the annotation feature only needs counts + grouping; richer typed
+/// accessors will layer on top of this without re-parsing.
+#[derive(Debug, Clone, Serialize)]
+pub struct RawAnnotation {
+    /// Fully-qualified term name: `Common.Label`, `UI.LineItem`, or `sap:label`
+    /// for V2 SAP inline attributes.
+    pub term: String,
+    /// Display-friendly vocabulary name derived from the term: `Common`, `UI`,
+    /// `Capabilities`, `Measures`, `SAP`, ...
+    pub namespace: String,
+    /// What the annotation is attached to. For V4: the `Target` on the
+    /// enclosing `<Annotations>` block with the schema alias stripped
+    /// (e.g. `EntityType/PropertyName`). For V2: a synthetic path built
+    /// from the containing element (`EntityType/PropertyName`,
+    /// `EntityContainer/EntitySetName`, etc.).
+    pub target: String,
+    /// Literal value when the annotation uses a simple inline form. `None`
+    /// for complex `Record`/`Collection` payloads, which are not expanded yet.
+    pub value: Option<String>,
+}
+
+/// Summary of annotation counts grouped by vocabulary namespace. Used by the
+/// desktop app's footer badge and its hover summary.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct AnnotationSummary {
+    pub total: usize,
+    /// Namespace → count. BTreeMap keeps display order deterministic.
+    pub by_namespace: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -141,6 +179,19 @@ impl ServiceMetadata {
             })
             .collect()
     }
+
+    /// Count annotations grouped by vocabulary namespace. Cheap to call —
+    /// it's an O(N) pass over the already-parsed `annotations` field.
+    pub fn annotation_summary(&self) -> AnnotationSummary {
+        let mut by_namespace: BTreeMap<String, usize> = BTreeMap::new();
+        for ann in &self.annotations {
+            *by_namespace.entry(ann.namespace.clone()).or_insert(0) += 1;
+        }
+        AnnotationSummary {
+            total: self.annotations.len(),
+            by_namespace,
+        }
+    }
 }
 
 /// Extract the simple type name from a qualified name (e.g., "Namespace.TypeName" → "TypeName").
@@ -193,6 +244,7 @@ pub fn parse_metadata(xml: &str) -> Result<ServiceMetadata, crate::error::ODataE
     let mut entity_sets = Vec::new();
     let mut function_imports = Vec::new();
     let mut annotation_labels = HashMap::new();
+    let mut annotations = Vec::new();
 
     // Merge data from all schemas
     for schema_node in &schema_nodes {
@@ -203,8 +255,15 @@ pub fn parse_metadata(xml: &str) -> Result<ServiceMetadata, crate::error::ODataE
         entity_sets.extend(sets);
         function_imports.extend(funcs);
 
-        if version == ODataVersion::V4 {
-            annotation_labels.extend(parse_v4_annotation_labels(schema_node));
+        match version {
+            ODataVersion::V4 => {
+                annotation_labels.extend(parse_v4_annotation_labels(schema_node));
+                let alias = schema_node.attribute("Alias").unwrap_or("");
+                annotations.extend(parse_v4_annotations(schema_node, alias));
+            }
+            ODataVersion::V2 => {
+                annotations.extend(parse_v2_sap_annotations(schema_node));
+            }
         }
     }
 
@@ -220,6 +279,7 @@ pub fn parse_metadata(xml: &str) -> Result<ServiceMetadata, crate::error::ODataE
         associations,
         entity_sets,
         function_imports,
+        annotations,
     })
 }
 
@@ -397,6 +457,118 @@ fn parse_function_import(fi: &roxmltree::Node, version: ODataVersion) -> Functio
         http_method,
         return_type: fi.attribute("ReturnType").map(String::from),
         parameters,
+    }
+}
+
+// ── Annotation collection (thin slice: raw terms only, no typed views yet) ──
+
+const SAP_DATA_NS: &str = "http://www.sap.com/Protocols/SAPData";
+
+/// Collect V4 annotations from `<Annotations Target="...">` blocks at the
+/// schema level. Inline `<Annotation>` children directly under `<Property>`
+/// or `<EntityType>` aren't handled in this first slice — SAP services
+/// typically put everything under explicit `<Annotations>` blocks.
+fn parse_v4_annotations(schema: &roxmltree::Node, alias: &str) -> Vec<RawAnnotation> {
+    let mut out = Vec::new();
+    for annots_node in children_by_tag(schema, "Annotations") {
+        let raw_target = annots_node.attribute("Target").unwrap_or("");
+        let target = strip_alias_prefix(raw_target, alias).to_string();
+        for annot in children_by_tag(&annots_node, "Annotation") {
+            let term = match annot.attribute("Term") {
+                Some(t) if !t.is_empty() => t.to_string(),
+                _ => continue,
+            };
+            let namespace = extract_annotation_namespace(&term);
+            let value = annot
+                .attribute("String")
+                .or_else(|| annot.attribute("Bool"))
+                .or_else(|| annot.attribute("Int"))
+                .or_else(|| annot.attribute("Decimal"))
+                .or_else(|| annot.attribute("EnumMember"))
+                .or_else(|| annot.attribute("Path"))
+                .map(String::from);
+            out.push(RawAnnotation {
+                term,
+                namespace,
+                target: target.clone(),
+                value,
+            });
+        }
+    }
+    out
+}
+
+/// Collect V2 SAP inline annotations — attributes in the SAP data-service
+/// namespace (`sap:label`, `sap:filterable`, `sap:creatable`, etc.) on
+/// entity types, properties, navigation properties, entity container,
+/// entity sets, and function imports.
+fn parse_v2_sap_annotations(schema: &roxmltree::Node) -> Vec<RawAnnotation> {
+    let mut out = Vec::new();
+
+    for et in children_by_tag(schema, "EntityType") {
+        let et_name = et.attribute("Name").unwrap_or("").to_string();
+        push_sap_attrs(&mut out, &et, &et_name);
+        for prop in children_by_tag(&et, "Property") {
+            let name = prop.attribute("Name").unwrap_or("");
+            push_sap_attrs(&mut out, &prop, &format!("{et_name}/{name}"));
+        }
+        for np in children_by_tag(&et, "NavigationProperty") {
+            let name = np.attribute("Name").unwrap_or("");
+            push_sap_attrs(&mut out, &np, &format!("{et_name}/{name}"));
+        }
+    }
+
+    for container in children_by_tag(schema, "EntityContainer") {
+        let cn = container.attribute("Name").unwrap_or("").to_string();
+        push_sap_attrs(&mut out, &container, &cn);
+        for es in children_by_tag(&container, "EntitySet") {
+            let n = es.attribute("Name").unwrap_or("");
+            push_sap_attrs(&mut out, &es, &format!("{cn}/{n}"));
+        }
+        for fi in children_by_tag(&container, "FunctionImport") {
+            let n = fi.attribute("Name").unwrap_or("");
+            push_sap_attrs(&mut out, &fi, &format!("{cn}/{n}"));
+        }
+    }
+
+    out
+}
+
+fn push_sap_attrs(out: &mut Vec<RawAnnotation>, node: &roxmltree::Node, target: &str) {
+    for attr in node.attributes() {
+        if attr.namespace() == Some(SAP_DATA_NS) {
+            out.push(RawAnnotation {
+                term: format!("sap:{}", attr.name()),
+                namespace: "SAP".to_string(),
+                target: target.to_string(),
+                value: Some(attr.value().to_string()),
+            });
+        }
+    }
+}
+
+/// Derive a display-friendly vocabulary name from an annotation term.
+/// Examples: `Common.Label` → "Common", `SAP__common.Label` → "Common",
+/// `UI.LineItem` → "UI", `Org.OData.Measures.V1.ISOCurrency` → "Measures".
+fn extract_annotation_namespace(term: &str) -> String {
+    let t = term.strip_prefix("SAP__").unwrap_or(term);
+    let t = t.strip_prefix("Org.OData.").unwrap_or(t);
+    // Strip the last dot-segment, which is the term name itself.
+    let ns = match t.rsplit_once('.') {
+        Some((ns, _)) => ns,
+        None => return capitalize_first(t),
+    };
+    // The first segment of what remains is the vocabulary name
+    // (version segments like `V1` sit after it and can be ignored for grouping).
+    let primary = ns.split('.').next().unwrap_or(ns);
+    capitalize_first(primary)
+}
+
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+        None => String::new(),
     }
 }
 
@@ -660,6 +832,58 @@ mod tests {
         assert_eq!(targets[0].0, "_Warehouse");
         assert_eq!(targets[0].1, "WarehouseType");
         assert_eq!(targets[0].2, "1"); // Not a collection = single
+    }
+
+    #[test]
+    fn test_v2_captures_sap_annotations() {
+        // The V2 fixture has one sap:label on Property — plus whatever test
+        // authoring evolves. We just assert we find at least that one and
+        // that the SAP namespace is used.
+        let meta = parse_metadata(TEST_METADATA_V2).unwrap();
+        assert!(
+            !meta.annotations.is_empty(),
+            "V2 sap:* attributes must surface as RawAnnotation"
+        );
+        let has_label = meta
+            .annotations
+            .iter()
+            .any(|a| a.term == "sap:label" && a.namespace == "SAP");
+        assert!(has_label, "expected at least one sap:label annotation");
+    }
+
+    #[test]
+    fn test_v4_captures_common_label_annotations() {
+        let meta = parse_metadata(TEST_METADATA_V4).unwrap();
+        // Fixture has three Common.Label annotations in explicit <Annotations> blocks.
+        assert_eq!(meta.annotations.len(), 3);
+        for ann in &meta.annotations {
+            assert_eq!(ann.namespace, "Common");
+            assert_eq!(ann.term, "SAP__common.Label");
+            assert!(ann.value.is_some(), "String-valued annotations must carry value");
+        }
+    }
+
+    #[test]
+    fn annotation_summary_groups_by_namespace() {
+        let meta = parse_metadata(TEST_METADATA_V4).unwrap();
+        let summary = meta.annotation_summary();
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.by_namespace.get("Common").copied(), Some(3));
+    }
+
+    #[test]
+    fn extract_annotation_namespace_handles_common_shapes() {
+        assert_eq!(extract_annotation_namespace("Common.Label"), "Common");
+        assert_eq!(extract_annotation_namespace("SAP__common.Label"), "Common");
+        assert_eq!(extract_annotation_namespace("UI.LineItem"), "UI");
+        assert_eq!(
+            extract_annotation_namespace("Capabilities.FilterRestrictions"),
+            "Capabilities"
+        );
+        assert_eq!(
+            extract_annotation_namespace("Org.OData.Measures.V1.ISOCurrency"),
+            "Measures"
+        );
     }
 
     #[test]

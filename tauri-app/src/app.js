@@ -31,6 +31,7 @@ function createTab(opts = {}) {
     selectedTraceId: null,
     _traceVisible: false,
     _traceSubTab: 'response',
+    annotationSummary: null,
   };
 }
 
@@ -219,6 +220,8 @@ function restoreTabUI() {
     document.getElementById('traceInspectorPanel').classList.add('hidden');
   }
   updateTraceToggleState(tab._traceVisible);
+
+  renderAnnotationBadge(tab.annotationSummary);
 
   // Stats bar
   if (tab._statsVisible) {
@@ -555,6 +558,7 @@ document.getElementById('profileSelect').addEventListener('change', (e) => {
   tab.httpTraceEntries = [];
   tab.selectedTraceId = null;
   tab._traceVisible = false;
+  tab.annotationSummary = null;
 
   // Sync globals
   currentProfile = profile;
@@ -572,6 +576,7 @@ document.getElementById('profileSelect').addEventListener('change', (e) => {
   document.getElementById('historyPanel').classList.add('hidden');
   document.getElementById('traceInspectorPanel').classList.add('hidden');
   updateTraceToggleState(false);
+  renderAnnotationBadge(null);
   document.getElementById('serviceInput').value = '';
   document.getElementById('sidebarTitle').textContent = 'Services';
   document.getElementById('sidebarCount').textContent = '';
@@ -815,14 +820,21 @@ async function resolveAndLoadService(input, versionHint) {
     updateServicePathBar(tab);
 
     setStatus(`Loading entities...`);
-    const entities = await timedInvoke('get_entities', {
+    const response = await timedInvoke('get_entities', {
       profileName: currentProfile,
       servicePath: currentServicePath,
     });
 
+    const entities = response.entity_sets || [];
+    const summary = response.annotation_summary || { total: 0, by_namespace: {} };
+
     entitySets = entities;
-    if (tab) tab.entitySets = entities;
+    if (tab) {
+      tab.entitySets = entities;
+      tab.annotationSummary = summary;
+    }
     renderEntityList(entities);
+    renderAnnotationBadge(summary);
     setStatus(`${entities.length} entity set(s)`);
     resetResultsArea();
     if (tab) tab._resultsHtml = undefined;
@@ -1411,6 +1423,33 @@ function toggleTraceInspector() {
 // paste into those shells and the quotes will leak through literally.
 function shellQuoteForCurl(value) {
   return "'" + String(value).replace(/'/g, `'\"'\"'`) + "'";
+}
+
+// ══════════════════════════════════════════════════════════════
+// ── ANNOTATION BADGE (footer) ──
+// ══════════════════════════════════════════════════════════════
+// Small status-bar badge showing the raw annotation count for the
+// currently loaded service, with a hover breakdown by vocabulary
+// namespace. The thin slice — the typed feature views (criticality,
+// Text arrangement, Fiori-readiness, etc.) will layer on top.
+
+function renderAnnotationBadge(summary) {
+  const el = document.getElementById('annotationBadge');
+  if (!el) return;
+  const total = summary && typeof summary.total === 'number' ? summary.total : 0;
+  if (total === 0) {
+    el.classList.add('hidden');
+    el.textContent = '';
+    el.title = '';
+    return;
+  }
+  el.classList.remove('hidden');
+  el.textContent = `${total} annotation${total === 1 ? '' : 's'}`;
+  const byNs = summary.by_namespace || {};
+  const lines = Object.entries(byNs)
+    .sort(([, a], [, b]) => b - a)
+    .map(([ns, count]) => `${ns}: ${count}`);
+  el.title = lines.length ? lines.join('\n') : `${total} annotations`;
 }
 
 function traceToCurl(entry) {

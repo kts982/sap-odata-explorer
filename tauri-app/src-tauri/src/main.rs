@@ -6,6 +6,7 @@ use sap_odata_core::{
     client::SapClient,
     config,
     diagnostics::HttpTraceEntry,
+    metadata::AnnotationSummary,
     query::ODataQuery,
 };
 use serde::{Deserialize, Serialize};
@@ -52,6 +53,15 @@ struct EntitySetInfo {
     name: String,
     entity_type: String,
     keys: Vec<String>,
+}
+
+/// Shape returned by `get_entities`. Bundles the entity-set list with the
+/// service-wide annotation summary so the frontend can render the footer
+/// badge without a second metadata fetch.
+#[derive(Serialize)]
+struct EntityListResponse {
+    entity_sets: Vec<EntitySetInfo>,
+    annotation_summary: AnnotationSummary,
 }
 
 #[derive(Serialize)]
@@ -554,14 +564,14 @@ async fn get_entities(
     state: tauri::State<'_, AppState>,
     profile_name: String,
     service_path: String,
-) -> CmdResult<Vec<EntitySetInfo>> {
+) -> CmdResult<EntityListResponse> {
     let client = client_from_profile(&profile_name, &state).map_err(CommandError::msg)?;
     let meta = client
         .fetch_metadata(&service_path)
         .await
         .map_err(|e| CommandError::with_client(&client, format!("Metadata error: {e}")))?;
 
-    let data = meta
+    let entity_sets = meta
         .entity_sets
         .iter()
         .map(|es| {
@@ -576,8 +586,12 @@ async fn get_entities(
             }
         })
         .collect();
+    let annotation_summary = meta.annotation_summary();
     Ok(CommandOk {
-        data,
+        data: EntityListResponse {
+            entity_sets,
+            annotation_summary,
+        },
         trace: client.diagnostics_snapshot(),
     })
 }
