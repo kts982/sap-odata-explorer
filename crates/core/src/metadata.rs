@@ -306,6 +306,12 @@ pub struct Property {
     /// or not — SAP emits mixed case historically). Mainly useful for
     /// the describe overlay and future results-grid formatting.
     pub display_format: Option<String>,
+    /// V2 `sap:value-list` attribute — marker that the property has a
+    /// value help in this service (typical values: `"standard"` or
+    /// `"fixed-values"`). V2 doesn't carry a mapping record inside
+    /// `$metadata` (unlike V4's `Common.ValueList`), so this is hint-
+    /// only: there's no picker target to open. Stored verbatim.
+    pub sap_value_list: Option<String>,
 }
 
 /// `Common.FieldControl` value. Fixed numeric codes map to the SAP
@@ -711,6 +717,9 @@ fn parse_entity_types(schema: &roxmltree::Node, version: ODataVersion) -> Vec<En
                     hidden_filter: false,
                     display_format: p
                         .attribute(("http://www.sap.com/Protocols/SAPData", "display-format"))
+                        .map(String::from),
+                    sap_value_list: p
+                        .attribute(("http://www.sap.com/Protocols/SAPData", "value-list"))
                         .map(String::from),
                 })
                 .collect();
@@ -3093,6 +3102,33 @@ mod tests {
         let wh = ot.properties.iter().find(|p| p.name == "Warehouse").unwrap();
         // Warehouse had no override → picks up the type default.
         assert_eq!(wh.text_arrangement, Some(TextArrangement::TextFirst));
+    }
+
+    #[test]
+    fn test_v2_sap_value_list_marker() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx" Version="1.0">
+  <edmx:DataServices xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata" m:DataServiceVersion="2.0">
+    <Schema xmlns="http://schemas.microsoft.com/ado/2008/09/edm" Namespace="n" xmlns:sap="http://www.sap.com/Protocols/SAPData">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="Warehouse" Type="Edm.String" sap:value-list="standard"/>
+        <Property Name="Category" Type="Edm.String" sap:value-list="fixed-values"/>
+        <Property Name="Plain" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let ot = meta.find_entity_type("OrderType").unwrap();
+        let wh = ot.properties.iter().find(|p| p.name == "Warehouse").unwrap();
+        assert_eq!(wh.sap_value_list.as_deref(), Some("standard"));
+        let cat = ot.properties.iter().find(|p| p.name == "Category").unwrap();
+        assert_eq!(cat.sap_value_list.as_deref(), Some("fixed-values"));
+        let plain = ot.properties.iter().find(|p| p.name == "Plain").unwrap();
+        assert!(plain.sap_value_list.is_none());
     }
 
     #[test]

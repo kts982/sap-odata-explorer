@@ -1177,7 +1177,15 @@ async function openValueListPicker(propertyName) {
     setStatus('This property has fixed values but no ValueList mapping in this service.');
     return;
   }
-  if (inlineVariants.length === 0 && refs.length === 0) return;
+  if (inlineVariants.length === 0 && refs.length === 0) {
+    // V2 sap:value-list marker without a V4 mapping — surface the hint
+    // rather than open an empty modal.
+    if (prop.sap_value_list) {
+      const flavour = prop.sap_value_list === 'fixed-values' ? 'fixed-values' : 'standard';
+      setStatus(`V2 sap:value-list="${flavour}" — no mapping record in $metadata. Open the service in Fiori for a runtime-resolved picker.`);
+    }
+    return;
+  }
   _vlActiveProperty = prop;
   _vlVariants = [];
   for (const vl of inlineVariants) {
@@ -1683,10 +1691,11 @@ function valueListHint(p) {
   const refs = Array.isArray(p.value_list_references) ? p.value_list_references : [];
   const hasRefs = refs.length > 0;
   const fixed = p.value_list_fixed === true;
-  if (!hasInline && !hasRefs && !fixed) return '';
-  // Inline > references > fixed-only for richness — pick class + tooltip
-  // accordingly. Fixed-only gets the mutest variant since it's just a
-  // hint with no picker target.
+  const v2 = p.sap_value_list;
+  if (!hasInline && !hasRefs && !fixed && !v2) return '';
+  // Inline > references > fixed > V2 marker — pick class + tooltip
+  // accordingly. The lowest-capability variants (fixed, V2) get the
+  // mutest style since they're hints without a picker target.
   let cls;
   let tip;
   let kind;
@@ -1701,11 +1710,20 @@ function valueListHint(p) {
     // Dashed border signals "external reference, resolution required".
     cls = 'text-ox-electric border border-dashed border-ox-electric/60 hover:bg-ox-electric/10 hover:border-ox-electric';
     kind = 'refs';
-  } else {
+  } else if (fixed) {
     // Fixed-values only — no mapping, just a Fiori "dropdown-worthy" hint.
     tip = 'Common.ValueListWithFixedValues — property has a fixed value set but no ValueList mapping in this service.';
     cls = 'text-ox-dim border border-ox-dim/50 cursor-help';
     kind = 'fixed';
+  } else {
+    // V2 sap:value-list marker — no mapping record in the metadata, so
+    // no picker target. Still worth surfacing because Fiori lights up
+    // a value help on this property at runtime via naming convention
+    // or a sibling nav prop; the user just can't drive it from here.
+    const flavour = v2 === 'fixed-values' ? 'fixed-values' : 'standard';
+    tip = `sap:value-list="${flavour}" — V2 service declares a value help, but V2 metadata doesn't carry the mapping. Fiori resolves it by convention at runtime; no picker available here.`;
+    cls = 'text-ox-dim border border-ox-dim/50 cursor-help';
+    kind = 'v2';
   }
   return ` <button type="button" class="text-[9px] font-semibold tracking-wide px-1 py-px rounded-sm ${cls} transition-colors align-middle" data-action="value-list" data-prop="${escapeHtml(p.name)}" data-kind="${kind}" title="${escapeHtml(tip)}">&#x21D2; F4</button>`;
 }

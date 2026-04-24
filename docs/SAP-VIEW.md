@@ -79,6 +79,7 @@ Clicking the `⇒ F4` marker on a property opens a picker modal that fetches the
 - **Inline `Common.ValueList`** — mapping lives on the service itself. Solid cyan marker.
 - **`Common.ValueListReferences`** (S/4HANA pattern) — mapping lives in a separate F4 service. Dashed cyan marker. On open, the desktop resolves the relative URL against the current service path (preserving SAP matrix parameters like `;ps='...';va='...'`), fetches the referenced `$metadata`, and parses its `Common.ValueListMapping`. Results are cached per reference URL so reopens are instant.
 - **`Common.ValueListWithFixedValues`** (marker-only) — muted gray marker. Clicking surfaces a status-bar hint; no picker (there's no mapping to drive).
+- **V2 `sap:value-list="standard"` / `"fixed-values"`** — muted gray marker on V2 services that advertise a value help. V2 metadata doesn't carry the mapping (Fiori resolves by naming convention at runtime), so the picker isn't driveable from here — clicking surfaces a status-bar hint explaining the limitation.
 
 Picker behavior:
 
@@ -126,7 +127,7 @@ Compact status table. "Status" reflects what `SAP View` actually uses; parser-on
 | `UI.HiddenFilter` | `no filter UI` pill | ✅ |
 | `V2 sap:display-format` | Describe pill + results-grid formatting | ✅ |
 | `V2 sap:filterable` / `sortable` / `creatable` / `updatable` / `required-in-filter` | Same pills as V4 Capabilities.* | ✅ |
-| V2 `sap:value-list` marker (standard / fixed-values) | Not handled yet (V2 lacks mapping record) | ❌ |
+| V2 `sap:value-list` marker (standard / fixed-values) | Muted F4 badge; click surfaces a "no mapping" hint (picker deferred until V2 convention-scan lands) | ✅ |
 | `Common.SemanticKey` / `Common.SemanticObject` / `Common.Masked` | Not handled yet | ❌ |
 
 ## Deliberate gaps

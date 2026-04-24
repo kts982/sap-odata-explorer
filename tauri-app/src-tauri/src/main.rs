@@ -113,6 +113,7 @@ struct PropertyInfo {
     hidden: bool,
     hidden_filter: bool,
     display_format: Option<String>,
+    sap_value_list: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -696,6 +697,7 @@ async fn describe_entity(
                 hidden: p.hidden,
                 hidden_filter: p.hidden_filter,
                 display_format: p.display_format.clone(),
+                sap_value_list: p.sap_value_list.clone(),
             })
             .collect(),
         nav_properties: nav_targets
