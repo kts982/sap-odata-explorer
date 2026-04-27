@@ -97,10 +97,14 @@ fn headers_for_diagnostics(headers: &HeaderMap, kind: HeaderKind) -> Vec<HttpHea
 }
 
 fn redact_header(name: &str, value: &str, kind: HeaderKind) -> String {
+    // X-CSRF-Token is session-equivalent for SAP — leaking one in a
+    // copy-as-curl export is as bad as leaking the cookie.
     let sensitive = match (kind, name.to_ascii_lowercase().as_str()) {
         (HeaderKind::Request, "authorization") => true,
         (HeaderKind::Request, "cookie") => true,
+        (HeaderKind::Request, "x-csrf-token") => true,
         (HeaderKind::Response, "set-cookie") => true,
+        (HeaderKind::Response, "x-csrf-token") => true,
         _ => false,
     };
 
@@ -178,5 +182,153 @@ mod tests {
             preview.as_deref(),
             Some("<HTML body omitted from diagnostics>")
         );
+    }
+
+    #[test]
+    fn request_redacts_x_csrf_token() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-csrf-token", HeaderValue::from_static("ABC123XYZ"));
+        let rendered = request_headers_for_diagnostics(&headers);
+        assert_eq!(rendered[0].value, "<redacted>");
+    }
+
+    #[test]
+    fn response_redacts_x_csrf_token() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-csrf-token", HeaderValue::from_static("ABC123XYZ"));
+        let rendered = response_headers_for_diagnostics(&headers);
+        assert_eq!(rendered[0].value, "<redacted>");
+    }
+
+    #[test]
+    fn header_redaction_is_case_insensitive() {
+        // SAP servers send X-CSRF-Token, X-Csrf-Token, x-csrf-token in the wild.
+        // reqwest normalises to lowercase but verify our match is case-insensitive
+        // independent of that, so a future change in the HTTP layer doesn't quietly
+        // open a leak.
+        for name in ["AUTHORIZATION", "Authorization", "authorization"] {
+            let v = redact_header(name, "Bearer secret", HeaderKind::Request);
+            assert_eq!(v, "<redacted>", "request header {name}");
+        }
+        for name in ["X-CSRF-TOKEN", "X-Csrf-Token", "x-csrf-token"] {
+            let v = redact_header(name, "abc", HeaderKind::Request);
+            assert_eq!(v, "<redacted>", "request header {name}");
+        }
+    }
+
+    #[test]
+    fn cookie_with_multiple_values_is_fully_redacted() {
+        // Make sure we replace the entire Cookie header value, not just one cookie.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            COOKIE,
+            HeaderValue::from_static("sap-usercontext=sap-client=100; MYSAPSSO2=secret; foo=bar"),
+        );
+        let rendered = request_headers_for_diagnostics(&headers);
+        assert_eq!(rendered[0].value, "<redacted>");
+        assert!(!rendered[0].value.contains("MYSAPSSO2"));
+        assert!(!rendered[0].value.contains("secret"));
+    }
+
+    #[test]
+    fn various_auth_schemes_all_redacted() {
+        for scheme in [
+            "Basic dXNlcjpwYXNz",
+            "Bearer eyJhbGc",
+            "Negotiate YIIH",
+            "Kerberos abc",
+        ] {
+            let v = redact_header("authorization", scheme, HeaderKind::Request);
+            assert_eq!(v, "<redacted>", "scheme {scheme}");
+            assert!(!v.contains(scheme), "leaked: {scheme}");
+        }
+    }
+
+    #[test]
+    fn non_sensitive_headers_pass_through_unchanged() {
+        // Negative test — make sure the redactor isn't over-eager.
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert("accept", HeaderValue::from_static("application/json"));
+        headers.insert("sap-client", HeaderValue::from_static("100"));
+        headers.insert(
+            "x-requested-with",
+            HeaderValue::from_static("XMLHttpRequest"),
+        );
+
+        let rendered = request_headers_for_diagnostics(&headers);
+        let by_name: std::collections::HashMap<_, _> = rendered
+            .iter()
+            .map(|h| (h.name.as_str(), h.value.as_str()))
+            .collect();
+        assert_eq!(by_name["content-type"], "application/json");
+        assert_eq!(by_name["accept"], "application/json");
+        assert_eq!(by_name["sap-client"], "100");
+        assert_eq!(by_name["x-requested-with"], "XMLHttpRequest");
+    }
+
+    #[test]
+    fn full_trace_entry_does_not_leak_sensitive_substrings() {
+        // End-to-end: build a realistic request/response with every credential
+        // surface populated, render through the diagnostics pipeline, then scan
+        // every rendered field for the secrets. Catches accidental new leak
+        // paths if the structure of HttpTraceEntry ever grows fields that bypass
+        // redaction.
+        const SECRETS: &[&str] = &[
+            "Bearer-token-must-not-leak-1234",
+            "MYSAPSSO2=secret-cookie-must-not-leak",
+            "csrf-token-must-not-leak-5678",
+            "set-cookie-must-not-leak-9012",
+        ];
+
+        let mut req = HeaderMap::new();
+        req.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer Bearer-token-must-not-leak-1234"),
+        );
+        req.insert(
+            COOKIE,
+            HeaderValue::from_static("MYSAPSSO2=secret-cookie-must-not-leak; foo=bar"),
+        );
+        req.insert(
+            "x-csrf-token",
+            HeaderValue::from_static("csrf-token-must-not-leak-5678"),
+        );
+
+        let mut resp = HeaderMap::new();
+        resp.insert(
+            SET_COOKIE,
+            HeaderValue::from_static("MYSAPSSO2=set-cookie-must-not-leak-9012; HttpOnly"),
+        );
+        resp.insert(
+            "x-csrf-token",
+            HeaderValue::from_static("csrf-token-must-not-leak-5678"),
+        );
+        resp.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+        let entry = HttpTraceEntry {
+            id: 1,
+            method: "GET".to_string(),
+            url: "https://example/sap/opu/odata4/foo".to_string(),
+            request_headers: request_headers_for_diagnostics(&req),
+            request_body_preview: None,
+            status: Some(200),
+            response_headers: response_headers_for_diagnostics(&resp),
+            response_body_preview: body_preview_for_diagnostics(
+                Some("application/json"),
+                "{\"d\":{\"results\":[]}}",
+            ),
+            duration_ms: 42,
+            redirect_location: None,
+            error: None,
+        };
+
+        let serialised = serde_json::to_string(&entry).expect("serialise trace entry");
+        for secret in SECRETS {
+            assert!(
+                !serialised.contains(secret),
+                "secret leaked through diagnostics pipeline: {secret}\nrendered: {serialised}"
+            );
+        }
     }
 }
