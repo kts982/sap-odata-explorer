@@ -9,8 +9,8 @@ use tracing::{debug, instrument};
 
 use crate::auth::{AuthConfig, SapConnection};
 use crate::diagnostics::{
-    DiagnosticsStore, HttpTraceEntry, request_headers_for_diagnostics,
-    response_headers_for_diagnostics,
+    DiagnosticsStore, HttpTraceEntry, extract_sensitive_request_values,
+    request_headers_for_diagnostics, response_headers_for_diagnostics,
 };
 use crate::error::ODataError;
 use crate::metadata::{self, ServiceMetadata};
@@ -391,6 +391,11 @@ impl SapClient {
     ) -> Result<(Response, u64), ODataError> {
         let method = request.method().to_string();
         let url = request.url().to_string();
+        // Capture raw sensitive values BEFORE the redactor runs and BEFORE
+        // self.http.execute(request) consumes the request. These get stored
+        // on the trace entry (skip-serialised) so the body preview can
+        // defensively redact any echoes of them.
+        let sensitive_values = extract_sensitive_request_values(request.headers());
         let request_headers = request_headers_for_diagnostics(request.headers());
         let started = Instant::now();
 
@@ -414,6 +419,7 @@ impl SapClient {
                     duration_ms,
                     redirect_location,
                     error: None,
+                    sensitive_values,
                 });
                 Ok((resp, trace_id))
             }
@@ -431,6 +437,7 @@ impl SapClient {
                     duration_ms,
                     redirect_location: None,
                     error: Some(err.to_string()),
+                    sensitive_values,
                 });
                 Err(err.into())
             }
