@@ -1,5 +1,9 @@
 // ── Tauri invoke wrapper ──
-const { invoke } = window.__TAURI__.core;
+// Vendored copy of @tauri-apps/api/core (see scripts/vendor-tauri.cjs).
+// Direct relative import avoids needing an importmap under our locked-down
+// `script-src 'self'` CSP. Re-run `npm run vendor:tauri` after bumping
+// @tauri-apps/api in package.json.
+import { invoke } from './vendor/tauri-core.js';
 
 // ══════════════════════════════════════════════════════════════
 // ── TAB SYSTEM ──

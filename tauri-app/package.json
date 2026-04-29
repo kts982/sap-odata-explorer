@@ -4,11 +4,13 @@
   "version": "0.1.0",
   "scripts": {
     "css": "node scripts/build-css.cjs",
+    "vendor:tauri": "node scripts/vendor-tauri.cjs",
     "dev": "npm run css && npx serve src -l 1420",
     "tauri": "tauri"
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4.2.2",
+    "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/cli": "^2",
     "tailwindcss": "^4.2.2"
   }
