@@ -3522,16 +3522,24 @@ function escapeHtml(str) {
 // with `raw(...)` to opt-in to passing through pre-escaped HTML.
 //
 // Convention: any backtick template literal that ends up assigned to
-// innerHTML MUST be tagged with safeHtml. CI greps for `\.innerHTML\s*=\s*\`
+// innerHTML MUST be tagged with safeHtml. CI lints for `\.innerHTML\s*=\s*\`
 // to fail the build on bare template literals; the only allowed forms are:
 //   el.innerHTML = '<static>...';            // single/double-quoted string
 //   el.innerHTML = safeHtml`<tpl>${x}</tpl>`; // tagged template
 //   el.innerHTML = preBuiltSafeHtmlString;   // assigned variable (build with safeHtml)
+//
+// The raw-HTML opt-out marker is a private Symbol rather than a regular
+// property: JSON cannot synthesise Symbol-keyed properties, so an
+// untrusted server payload (e.g. `{"__rawHtml": true, ...}`) cannot
+// forge a marker and bypass escaping. Only code with a reference to
+// RAW_HTML_MARKER — i.e. callers of `raw()` — can produce a tagged value.
+const RAW_HTML_MARKER = Symbol('safeHtmlRaw');
+
 function safeHtml(strings, ...values) {
   let out = strings[0];
   for (let i = 0; i < values.length; i++) {
     const v = values[i];
-    if (v && typeof v === 'object' && v.__rawHtml === true) {
+    if (v && typeof v === 'object' && v[RAW_HTML_MARKER] === true) {
       out += v.value;
     } else {
       out += escapeHtml(v == null ? '' : String(v));
@@ -3546,7 +3554,10 @@ function safeHtml(strings, ...values) {
 // built via safeHtml itself, or a static literal known not to contain
 // untrusted data).
 function raw(htmlString) {
-  return { __rawHtml: true, value: htmlString == null ? '' : String(htmlString) };
+  return {
+    [RAW_HTML_MARKER]: true,
+    value: htmlString == null ? '' : String(htmlString),
+  };
 }
 
 // ══════════════════════════════════════════════════════════════
