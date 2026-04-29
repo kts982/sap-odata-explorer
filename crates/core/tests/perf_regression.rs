@@ -57,8 +57,10 @@ fn generate_large_metadata(n: usize) -> String {
     }
 
     // Container with one entity set per type.
-    out.push_str(r#"      <EntityContainer Name="DefaultContainer">
-"#);
+    out.push_str(
+        r#"      <EntityContainer Name="DefaultContainer">
+"#,
+    );
     for i in 0..n {
         out.push_str(&format!(
             r#"        <EntitySet Name="Entity{i}Set" EntityType="PerfService.Entity{i}"/>
@@ -129,9 +131,7 @@ async fn parses_large_metadata_within_budget() {
 
     let xml = generate_large_metadata(ENTITY_COUNT);
     let size_kb = xml.len() / 1024;
-    eprintln!(
-        "perf: generated metadata = {size_kb} KB ({ENTITY_COUNT} entity types)"
-    );
+    eprintln!("perf: generated metadata = {size_kb} KB ({ENTITY_COUNT} entity types)");
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))

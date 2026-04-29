@@ -148,7 +148,10 @@ async fn parses_sap_filterable_sortable_creatable_updatable() {
     let md = property(so, "MaterialDescription");
     assert_eq!(md.creatable, Some(false));
     assert_eq!(md.updatable, Some(false));
-    assert_eq!(md.filterable, None, "sap:filterable not set → leave as None");
+    assert_eq!(
+        md.filterable, None,
+        "sap:filterable not set → leave as None"
+    );
     assert_eq!(md.sortable, None, "sap:sortable not set → leave as None");
 
     // DocumentDate has both filterable and sortable explicitly true.

@@ -182,7 +182,10 @@ async fn parses_ui_criticality_path_and_field_control_mandatory() {
         other => panic!("expected Criticality::Path, got {:?}", other),
     }
 
-    assert!(matches!(status.field_control, Some(FieldControl::Mandatory)));
+    assert!(matches!(
+        status.field_control,
+        Some(FieldControl::Mandatory)
+    ));
 }
 
 #[tokio::test]
@@ -264,11 +267,7 @@ async fn raw_annotations_flat_list_populated() {
     // annotations list. Lets the inspector show "what's actually declared"
     // even when a term hasn't been hoisted to a typed accessor yet.
     let meta = warehouse_metadata().await;
-    let terms: Vec<&str> = meta
-        .annotations
-        .iter()
-        .map(|a| a.term.as_str())
-        .collect();
+    let terms: Vec<&str> = meta.annotations.iter().map(|a| a.term.as_str()).collect();
     for expected in [
         "UI.HeaderInfo",
         "UI.LineItem",

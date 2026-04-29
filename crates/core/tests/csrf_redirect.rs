@@ -22,10 +22,7 @@ async fn fetch_csrf_token_returns_token_from_response_header() {
     Mock::given(method("HEAD"))
         .and(path(SERVICE_PATH))
         .and(header("X-CSRF-Token", "Fetch"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("x-csrf-token", "abc123-token"),
-        )
+        .respond_with(ResponseTemplate::new(200).insert_header("x-csrf-token", "abc123-token"))
         .mount(&server)
         .await;
 
@@ -47,9 +44,7 @@ async fn fetch_csrf_token_uses_head_method_with_fetch_header() {
     Mock::given(method("HEAD"))
         .and(path(SERVICE_PATH))
         .and(header("X-CSRF-Token", "Fetch"))
-        .respond_with(
-            ResponseTemplate::new(200).insert_header("x-csrf-token", "tok"),
-        )
+        .respond_with(ResponseTemplate::new(200).insert_header("x-csrf-token", "tok"))
         .expect(1)
         .named("HEAD with X-CSRF-Token: Fetch")
         .mount(&server)
@@ -101,9 +96,7 @@ async fn ensure_session_captures_token_from_initial_get() {
     Mock::given(method("GET"))
         .and(path(SERVICE_PATH))
         .and(header("X-CSRF-Token", "Fetch"))
-        .respond_with(
-            ResponseTemplate::new(200).insert_header("x-csrf-token", "session-tok"),
-        )
+        .respond_with(ResponseTemplate::new(200).insert_header("x-csrf-token", "session-tok"))
         .expect(1)
         .named("session GET with token")
         .mount(&server)
@@ -151,9 +144,7 @@ async fn ensure_session_ignores_required_token_value() {
 
     Mock::given(method("GET"))
         .and(path(SERVICE_PATH))
-        .respond_with(
-            ResponseTemplate::new(200).insert_header("x-csrf-token", "Required"),
-        )
+        .respond_with(ResponseTemplate::new(200).insert_header("x-csrf-token", "Required"))
         .mount(&server)
         .await;
 
@@ -163,9 +154,7 @@ async fn ensure_session_ignores_required_token_value() {
     Mock::given(method("HEAD"))
         .and(path(SERVICE_PATH))
         .and(header("X-CSRF-Token", "Fetch"))
-        .respond_with(
-            ResponseTemplate::new(200).insert_header("x-csrf-token", "real-token"),
-        )
+        .respond_with(ResponseTemplate::new(200).insert_header("x-csrf-token", "real-token"))
         .expect(1)
         .named("CSRF HEAD must still fire after Required")
         .mount(&server)
@@ -210,17 +199,13 @@ async fn browser_session_with_saml_path_redirect_returns_auth_failed() {
 
     Mock::given(method("GET"))
         .and(path(SERVICE_PATH))
-        .respond_with(
-            ResponseTemplate::new(302).insert_header("Location", "/sap/saml2/login"),
-        )
+        .respond_with(ResponseTemplate::new(302).insert_header("Location", "/sap/saml2/login"))
         .mount(&server)
         .await;
 
     Mock::given(method("GET"))
         .and(path("/sap/saml2/login"))
-        .respond_with(
-            ResponseTemplate::new(302).insert_header("Location", "/sap/saml2/login"),
-        )
+        .respond_with(ResponseTemplate::new(302).insert_header("Location", "/sap/saml2/login"))
         .mount(&server)
         .await;
 

@@ -48,12 +48,13 @@ async fn fetch_metadata_parses_minimal_v4() {
     assert!(matches!(metadata.version, ODataVersion::V4));
     assert_eq!(metadata.schema_namespace, "TestService");
     assert!(
+        metadata.entity_types.iter().any(|e| e.name == "TestEntity"),
+        "expected TestEntity in {:?}",
         metadata
             .entity_types
             .iter()
-            .any(|e| e.name == "TestEntity"),
-        "expected TestEntity in {:?}",
-        metadata.entity_types.iter().map(|e| &e.name).collect::<Vec<_>>()
+            .map(|e| &e.name)
+            .collect::<Vec<_>>()
     );
     assert!(
         metadata
@@ -61,6 +62,10 @@ async fn fetch_metadata_parses_minimal_v4() {
             .iter()
             .any(|s| s.name == "TestEntities"),
         "expected TestEntities entity set in {:?}",
-        metadata.entity_sets.iter().map(|s| &s.name).collect::<Vec<_>>()
+        metadata
+            .entity_sets
+            .iter()
+            .map(|s| &s.name)
+            .collect::<Vec<_>>()
     );
 }

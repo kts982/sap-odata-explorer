@@ -58,8 +58,7 @@ pub fn browser_connection(server: &MockServer) -> SapConnection {
 /// Convenience: build a `SapClient` configured for browser SSO, pointed at
 /// the mock server.
 pub fn browser_client(server: &MockServer) -> SapClient {
-    SapClient::new(browser_connection(server))
-        .expect("SapClient should build from test connection")
+    SapClient::new(browser_connection(server)).expect("SapClient should build from test connection")
 }
 
 /// Mount the two mocks needed to make `fetch_metadata(service_path)` succeed:
@@ -96,7 +95,10 @@ pub async fn mount_metadata(server: &MockServer, service_path: &str, xml_body: &
 ///
 /// `service_path` should be a leading-slash absolute path (e.g.
 /// `/sap/opu/odata4/test/SrvD`).
-pub async fn fetch_parsed_metadata(service_path: &str, xml_fixture: &'static str) -> ServiceMetadata {
+pub async fn fetch_parsed_metadata(
+    service_path: &str,
+    xml_fixture: &'static str,
+) -> ServiceMetadata {
     let server = MockServer::start().await;
     mount_metadata(&server, service_path, xml_fixture).await;
     let client = basic_client(&server);
