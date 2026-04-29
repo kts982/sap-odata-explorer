@@ -77,7 +77,7 @@ All business logic lives in `crates/core`. The CLI and Tauri app are thin shells
 
 ### No inline event handlers
 
-The Tauri app runs under a strict CSP that blocks `onclick="..."` in HTML. Use `addEventListener` in `app.js` or `data-action` attributes with the document-level event delegation handler.
+The Tauri app's CSP sets `script-src 'self'` (no `'unsafe-inline'`), which blocks inline scripts and inline event-handler attributes such as `onclick="..."` from executing. Use `addEventListener` in `app.js`, or `data-action` attributes routed through the document-level event-delegation handler.
 
 ## What's welcome
 
