@@ -22,3 +22,11 @@ flate2.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
+
+[dev-dependencies]
+# In-process HTTP mock server for integration tests. Each `MockServer::start()`
+# binds a fresh local port, so tests are isolated by construction. Used by
+# `tests/` to exercise the request-path code (auth, CSRF roundtrip, redirects,
+# error envelopes) without hitting a real SAP system.
+wiremock = "0.6"
+tokio = { workspace = true }
