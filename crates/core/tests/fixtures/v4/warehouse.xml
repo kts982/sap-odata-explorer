@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Kitchen-sink V4 fixture covering the annotation surface the parser
+  exposes today. Mirrors the patterns seen on real SAP services like
+  UI_PHYSSTOCKPROD_1: HeaderInfo + LineItem + SelectionFields +
+  SelectionVariant + PresentationVariant on the entity, plus per-property
+  Common.Text / Measures.* / Common.FieldControl / UI.Criticality /
+  UI.Hidden / Common.ValueListReferences, plus entity-set-level
+  Capabilities.* (FilterRestrictions / SortRestrictions /
+  SearchRestrictions / CountRestrictions).
+
+  Tests in v4_annotations.rs assert on each parsed shape; if the parser
+  starts dropping or mistransforming any of these, those tests fail.
+-->
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" Version="4.0">
+  <edmx:DataServices>
+    <Schema xmlns="http://docs.oasis-open.org/odata/ns/edm" Namespace="WarehouseService">
+
+      <EntityType Name="Warehouse">
+        <Key>
+          <PropertyRef Name="WarehouseId"/>
+        </Key>
+        <Property Name="WarehouseId" Type="Edm.String" Nullable="false" MaxLength="10"/>
+        <Property Name="WarehouseName" Type="Edm.String" MaxLength="40"/>
+        <Property Name="ShippingCountry" Type="Edm.String" MaxLength="3"/>
+        <Property Name="LastChangedAt" Type="Edm.DateTimeOffset"/>
+        <Property Name="StatusCode" Type="Edm.Int32"/>
+        <Property Name="UnitOfMeasure" Type="Edm.String" MaxLength="3"/>
+        <Property Name="Quantity" Type="Edm.Decimal"/>
+        <Property Name="Currency" Type="Edm.String" MaxLength="5"/>
+        <Property Name="Amount" Type="Edm.Decimal"/>
+      </EntityType>
+
+      <EntityContainer Name="DefaultContainer">
+        <EntitySet Name="Warehouses" EntityType="WarehouseService.Warehouse"/>
+      </EntityContainer>
+
+      <!-- ═══ Entity-type-level annotations ═══ -->
+      <Annotations Target="WarehouseService.Warehouse">
+
+        <Annotation Term="UI.HeaderInfo">
+          <Record>
+            <PropertyValue Property="TypeName" String="Warehouse"/>
+            <PropertyValue Property="TypeNamePlural" String="Warehouses"/>
+            <PropertyValue Property="Title">
+              <Record>
+                <PropertyValue Property="Value" Path="WarehouseName"/>
+              </Record>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+
+        <Annotation Term="UI.LineItem">
+          <Collection>
+            <Record Type="UI.DataField">
+              <PropertyValue Property="Value" Path="WarehouseId"/>
+            </Record>
+            <Record Type="UI.DataField">
+              <PropertyValue Property="Value" Path="WarehouseName"/>
+              <PropertyValue Property="Label" String="Name"/>
+            </Record>
+            <Record Type="UI.DataField">
+              <PropertyValue Property="Value" Path="ShippingCountry"/>
+              <PropertyValue Property="Importance" EnumMember="UI.ImportanceType/High"/>
+            </Record>
+            <!-- DataFieldForAction ignored — surfaces as a button in Fiori,
+                 not a column. Parser must skip non-DataField records. -->
+            <Record Type="UI.DataFieldForAction">
+              <PropertyValue Property="Action" String="Refresh"/>
+              <PropertyValue Property="Label" String="Refresh"/>
+            </Record>
+          </Collection>
+        </Annotation>
+
+        <Annotation Term="UI.SelectionFields">
+          <Collection>
+            <PropertyPath>WarehouseId</PropertyPath>
+            <PropertyPath>ShippingCountry</PropertyPath>
+          </Collection>
+        </Annotation>
+
+        <Annotation Term="UI.PresentationVariant">
+          <Record>
+            <PropertyValue Property="RequestAtLeast">
+              <Collection>
+                <PropertyPath>LastChangedAt</PropertyPath>
+              </Collection>
+            </PropertyValue>
+            <PropertyValue Property="SortOrder">
+              <Collection>
+                <Record>
+                  <PropertyValue Property="Property" PropertyPath="LastChangedAt"/>
+                  <PropertyValue Property="Descending" Bool="true"/>
+                </Record>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+
+        <Annotation Term="UI.SelectionVariant" Qualifier="Active">
+          <Record>
+            <PropertyValue Property="Text" String="Active warehouses"/>
+            <PropertyValue Property="SelectOptions">
+              <Collection>
+                <Record>
+                  <PropertyValue Property="PropertyName" PropertyPath="StatusCode"/>
+                  <PropertyValue Property="Ranges">
+                    <Collection>
+                      <Record Type="UI.SelectionRangeType">
+                        <PropertyValue Property="Sign" EnumMember="UI.SelectionRangeSignType/I"/>
+                        <PropertyValue Property="Option" EnumMember="UI.SelectionRangeOptionType/EQ"/>
+                        <PropertyValue Property="Low" String="1"/>
+                      </Record>
+                    </Collection>
+                  </PropertyValue>
+                </Record>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+
+        <Annotation Term="Common.SemanticKey">
+          <Collection>
+            <PropertyPath>WarehouseId</PropertyPath>
+          </Collection>
+        </Annotation>
+
+      </Annotations>
+
+      <!-- ═══ Property-level annotations ═══ -->
+      <Annotations Target="WarehouseService.Warehouse/WarehouseName">
+        <Annotation Term="Common.Label" String="Warehouse Name"/>
+      </Annotations>
+
+      <Annotations Target="WarehouseService.Warehouse/ShippingCountry">
+        <Annotation Term="Common.Label" String="Country"/>
+        <Annotation Term="Common.ValueListReferences">
+          <Collection>
+            <String>../../CountryVH/$metadata</String>
+          </Collection>
+        </Annotation>
+      </Annotations>
+
+      <Annotations Target="WarehouseService.Warehouse/StatusCode">
+        <Annotation Term="UI.Criticality" Path="StatusCode"/>
+        <Annotation Term="Common.FieldControl" EnumMember="Common.FieldControlType/Mandatory"/>
+      </Annotations>
+
+      <Annotations Target="WarehouseService.Warehouse/Quantity">
+        <Annotation Term="Measures.Unit" Path="UnitOfMeasure"/>
+      </Annotations>
+
+      <Annotations Target="WarehouseService.Warehouse/Amount">
+        <Annotation Term="Measures.ISOCurrency" Path="Currency"/>
+      </Annotations>
+
+      <Annotations Target="WarehouseService.Warehouse/LastChangedAt">
+        <Annotation Term="UI.Hidden" Bool="true"/>
+      </Annotations>
+
+      <!-- ═══ Entity-set-level Capabilities.* ═══ -->
+      <Annotations Target="WarehouseService.DefaultContainer/Warehouses">
+        <Annotation Term="Capabilities.FilterRestrictions">
+          <Record>
+            <PropertyValue Property="RequiredProperties">
+              <Collection>
+                <PropertyPath>WarehouseId</PropertyPath>
+              </Collection>
+            </PropertyValue>
+            <PropertyValue Property="NonFilterableProperties">
+              <Collection>
+                <PropertyPath>LastChangedAt</PropertyPath>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+
+        <Annotation Term="Capabilities.SortRestrictions">
+          <Record>
+            <PropertyValue Property="NonSortableProperties">
+              <Collection>
+                <PropertyPath>StatusCode</PropertyPath>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+
+        <Annotation Term="Capabilities.SearchRestrictions">
+          <Record>
+            <PropertyValue Property="Searchable" Bool="true"/>
+          </Record>
+        </Annotation>
+
+        <Annotation Term="Capabilities.CountRestrictions">
+          <Record>
+            <PropertyValue Property="Countable" Bool="false"/>
+          </Record>
+        </Annotation>
+      </Annotations>
+
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>
