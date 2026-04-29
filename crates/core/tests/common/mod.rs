@@ -4,6 +4,12 @@
 //! its own local server (fresh port, fresh state). The helpers here just
 //! glue a `SapClient` to that server's `uri()` so test bodies can focus on
 //! the scenario being mocked.
+//!
+//! `#[allow(dead_code)]` is the standard convention for `tests/common/mod.rs`:
+//! each integration-test binary compiles this module independently, so any
+//! helper not referenced by *that specific* binary is flagged as dead code.
+
+#![allow(dead_code)]
 
 use sap_odata_core::auth::{AuthConfig, SapConnection};
 use sap_odata_core::client::SapClient;
@@ -32,6 +38,28 @@ pub fn basic_connection(server: &MockServer) -> SapConnection {
 /// Convenience: build a `SapClient` already pointed at the mock server.
 pub fn basic_client(server: &MockServer) -> SapClient {
     SapClient::new(basic_connection(server)).expect("SapClient should build from test connection")
+}
+
+/// Build a browser-auth `SapConnection` pointed at the mock server. Used by
+/// tests that exercise browser-SSO-specific behavior — IdP redirect detection,
+/// HTML-response sign-in failures, etc. No cookie injection is done; the
+/// scenario is "session expired / not yet signed in".
+pub fn browser_connection(server: &MockServer) -> SapConnection {
+    SapConnection {
+        base_url: server.uri(),
+        client: "100".to_string(),
+        language: "EN".to_string(),
+        auth: AuthConfig::Browser,
+        insecure_tls: false,
+        sso_delegate: false,
+    }
+}
+
+/// Convenience: build a `SapClient` configured for browser SSO, pointed at
+/// the mock server.
+pub fn browser_client(server: &MockServer) -> SapClient {
+    SapClient::new(browser_connection(server))
+        .expect("SapClient should build from test connection")
 }
 
 /// Mount the two mocks needed to make `fetch_metadata(service_path)` succeed:
