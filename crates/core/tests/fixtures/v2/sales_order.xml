@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  V2 EDMX fixture covering the SAP-flavoured `sap:*` inline-attribute
+  surface. V2 expresses everything that V4 puts in <Annotations> blocks
+  as inline attributes on <Property> / <EntityType> / <EntitySet>, so the
+  parser code paths are largely separate from V4 and warrant their own
+  network-level coverage.
+
+  Attributes covered: sap:label, sap:filterable, sap:sortable,
+  sap:creatable, sap:updatable, sap:required-in-filter, sap:text,
+  sap:unit, sap:display-format, sap:value-list. Tests in
+  v2_attributes.rs assert each lands on the right Property field.
+-->
+<edmx:Edmx Version="1.0" xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx">
+  <edmx:DataServices m:DataServiceVersion="2.0"
+                     xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata">
+    <Schema Namespace="ZSALES_ORDER_SRV"
+            xmlns="http://schemas.microsoft.com/ado/2008/09/edm"
+            xmlns:sap="http://www.sap.com/Protocols/SAPData">
+
+      <EntityType Name="SalesOrder" sap:label="Sales Order">
+        <Key>
+          <PropertyRef Name="OrderID"/>
+        </Key>
+
+        <!-- Plain key with label only — restriction defaults are "true" so
+             no attributes here flip filterable/sortable/creatable/updatable. -->
+        <Property Name="OrderID" Type="Edm.String" Nullable="false" MaxLength="10"
+                  sap:label="Order"/>
+
+        <!-- Code column with a text companion (sap:text) — the sibling
+             property on the same entity that carries the human description. -->
+        <Property Name="MaterialCode" Type="Edm.String" MaxLength="18"
+                  sap:label="Material"
+                  sap:text="MaterialDescription"
+                  sap:value-list="standard"/>
+        <Property Name="MaterialDescription" Type="Edm.String" MaxLength="40"
+                  sap:label="Material Description"
+                  sap:creatable="false" sap:updatable="false"/>
+
+        <!-- Quantity + unit pairing — sap:unit on the amount, the unit
+             column itself is just a normal property. -->
+        <Property Name="Quantity" Type="Edm.Decimal" Precision="13" Scale="3"
+                  sap:label="Quantity"
+                  sap:unit="QuantityUnit"/>
+        <Property Name="QuantityUnit" Type="Edm.String" MaxLength="3"
+                  sap:label="UoM"/>
+
+        <!-- Date with display-format hint — Fiori would render `2024-03-15`
+             rather than `2024-03-15T00:00:00`. -->
+        <Property Name="DocumentDate" Type="Edm.DateTime"
+                  sap:label="Doc. Date"
+                  sap:display-format="Date"
+                  sap:filterable="true"
+                  sap:sortable="true"/>
+
+        <!-- Numeric with NonNegative display-format. -->
+        <Property Name="NetAmount" Type="Edm.Decimal" Precision="15" Scale="2"
+                  sap:label="Net Amount"
+                  sap:display-format="NonNegative"/>
+
+        <!-- Customer key with a value-list marker. -->
+        <Property Name="CustomerID" Type="Edm.String" Nullable="false" MaxLength="10"
+                  sap:label="Customer"
+                  sap:required-in-filter="true"
+                  sap:value-list="standard"/>
+
+        <!-- Status with fixed-values marker (small enum-like domain). -->
+        <Property Name="StatusCode" Type="Edm.String" MaxLength="2"
+                  sap:label="Status"
+                  sap:value-list="fixed-values"/>
+
+        <!-- Property locked down for write — explicit creatable/updatable
+             flips. Filterable + sortable left to default-true. -->
+        <Property Name="LastChangedAt" Type="Edm.DateTimeOffset"
+                  sap:label="Last Changed"
+                  sap:creatable="false"
+                  sap:updatable="false"
+                  sap:filterable="false"
+                  sap:sortable="false"/>
+      </EntityType>
+
+      <EntityContainer Name="ZSALES_ORDER_SRV_Entities" m:IsDefaultEntityContainer="true">
+        <EntitySet Name="SalesOrderSet" EntityType="ZSALES_ORDER_SRV.SalesOrder"/>
+      </EntityContainer>
+
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>
