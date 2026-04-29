@@ -574,7 +574,9 @@ impl ServiceMetadata {
 }
 
 /// Extract the simple type name from a qualified name (e.g., "Namespace.TypeName" → "TypeName").
-pub(super) fn extract_type_name(qualified: &str) -> &str {
+/// `pub(in crate::metadata)` so the sibling `annotations` submodule can use it
+/// without leaking it into the crate's public API.
+pub(in crate::metadata) fn extract_type_name(qualified: &str) -> &str {
     qualified.rsplit('.').next().unwrap_or(qualified)
 }
 
