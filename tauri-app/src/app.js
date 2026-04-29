@@ -361,7 +361,7 @@ async function signInCurrentProfile() {
   } catch (e) {
     setStatus('Sign-in failed: ' + e);
     document.getElementById('resultsArea').innerHTML =
-      `<div class="p-4 text-ox-red text-sm">${escapeHtml(String(e))}</div>`;
+      safeHtml`<div class="p-4 text-ox-red text-sm">${String(e)}</div>`;
   }
 }
 
@@ -615,7 +615,7 @@ document.getElementById('profileSelect').addEventListener('change', (e) => {
 });
 
 function resetResultsArea() {
-  document.getElementById('resultsArea').innerHTML = `
+  document.getElementById('resultsArea').innerHTML = safeHtml`
     <div class="flex items-center justify-center h-full">
       <div class="text-center">
         <div class="text-ox-amber text-3xl mb-3 opacity-20">&#9670;</div>
@@ -687,7 +687,7 @@ async function searchServices(query) {
     setStatus('Error: ' + e);
     const message = isBrowserAuthProfile(currentProfile) ? browserAuthMessage(e) : String(e);
     document.getElementById('resultsArea').innerHTML =
-      `<div class="p-4 text-ox-red text-sm">${escapeHtml(message)}</div>`;
+      safeHtml`<div class="p-4 text-ox-red text-sm">${message}</div>`;
   }
 }
 
@@ -707,13 +707,13 @@ function makeSvcItem(svc, starred) {
   div.dataset.action = 'pick-service';
   div.dataset.svc = JSON.stringify(svc);
   const badgeClass = svc.version === 'V4' ? 'badge-v4' : 'badge-v2';
-  div.innerHTML = `
+  div.innerHTML = safeHtml`
     <div class="flex items-center gap-1.5">
-      <span class="text-[9px] px-1 py-px rounded-sm font-mono ${badgeClass}">${escapeHtml(svc.version || '')}</span>
-      <span class="text-[13px] text-ox-text truncate font-mono flex-1">${escapeHtml(svc.technical_name)}</span>
-      <span class="svc-star${starred ? ' starred' : ''}" data-action="toggle-favorite" data-svc-name="${escapeHtml(svc.technical_name)}">${starred ? '★' : '☆'}</span>
+      <span class="text-[9px] px-1 py-px rounded-sm font-mono ${badgeClass}">${svc.version || ''}</span>
+      <span class="text-[13px] text-ox-text truncate font-mono flex-1">${svc.technical_name}</span>
+      <span class="svc-star${starred ? ' starred' : ''}" data-action="toggle-favorite" data-svc-name="${svc.technical_name}">${starred ? '★' : '☆'}</span>
     </div>
-    <div class="text-[11px] text-ox-muted truncate mt-0.5 pl-7">${escapeHtml(svc.title || svc.description || '')}</div>
+    <div class="text-[11px] text-ox-muted truncate mt-0.5 pl-7">${svc.title || svc.description || ''}</div>
   `;
   return div;
 }
@@ -879,7 +879,7 @@ async function resolveAndLoadService(input, versionHint) {
     setStatus('Error: ' + e);
     const message = isBrowserAuthProfile(currentProfile) ? browserAuthMessage(e) : String(e);
     document.getElementById('resultsArea').innerHTML =
-      `<div class="p-4 text-ox-red text-sm">${escapeHtml(message)}</div>`;
+      safeHtml`<div class="p-4 text-ox-red text-sm">${message}</div>`;
   }
 }
 
@@ -903,8 +903,8 @@ function renderEntityList(entities) {
     div.className = 'sidebar-item px-3 py-2 cursor-pointer';
     div.dataset.action = 'select-entity';
     div.dataset.entityName = es.name;
-    div.innerHTML = `
-      <div class="text-[13px] text-ox-text font-mono">${escapeHtml(es.name)}</div>
+    div.innerHTML = safeHtml`
+      <div class="text-[13px] text-ox-text font-mono">${es.name}</div>
       <div class="text-[10px] text-ox-dim font-mono mt-0.5">${es.keys.join(', ')}</div>
     `;
     // Click handled by document-level delegation (data-action="select-entity")
@@ -1484,7 +1484,7 @@ async function selectVariant(index) {
       variant.resolved = resolved;
     } catch (e) {
       status.textContent = 'Resolve error';
-      results.innerHTML = `<div class="p-4 text-ox-red text-[11px]">Could not resolve reference.\n${escapeHtml(String(e))}</div>`;
+      results.innerHTML = safeHtml`<div class="p-4 text-ox-red text-[11px]">Could not resolve reference.\n${String(e)}</div>`;
       return;
     }
   }
@@ -1638,7 +1638,7 @@ async function fetchValueListRows() {
     renderValueListRows(data, prop, vl);
   } catch (e) {
     status.textContent = 'Fetch error';
-    results.innerHTML = `<div class="p-4 text-ox-red text-[11px]">${escapeHtml(String(e))}</div>`;
+    results.innerHTML = safeHtml`<div class="p-4 text-ox-red text-[11px]">${String(e)}</div>`;
   }
 }
 
@@ -2271,10 +2271,7 @@ function renderDescribe(info) {
     if (hi.type_name) parts.push(hi.type_name);
     if (hi.type_name_plural && hi.type_name_plural !== hi.type_name) parts.push(hi.type_name_plural);
     if (parts.length) {
-      titleEl.innerHTML =
-        `${escapeHtml(info.name)}` +
-        `<span class="text-ox-dim ml-2">·</span>` +
-        `<span class="text-ox-blue ml-2">${escapeHtml(parts.join(' / '))}</span>`;
+      titleEl.innerHTML = safeHtml`${info.name}<span class="text-ox-dim ml-2">·</span><span class="text-ox-blue ml-2">${parts.join(' / ')}</span>`;
     }
   }
 
@@ -2465,7 +2462,7 @@ async function executeQuery(asJson = false) {
     hideStatsBar();
     const message = isBrowserAuthProfile(currentProfile) ? browserAuthMessage(e) : String(e);
     document.getElementById('resultsArea').innerHTML =
-      `<div class="p-4 text-ox-red text-sm">${escapeHtml(message)}</div>`;
+      safeHtml`<div class="p-4 text-ox-red text-sm">${message}</div>`;
   }
 }
 
@@ -2482,7 +2479,7 @@ function showStatsBar(rowCount, sizeBytes, elapsedMs) {
   else if (elapsedMs >= 500) timingClass = 'timing-ok';
 
   document.getElementById('statTiming').innerHTML =
-    `<span class="${timingClass}">${elapsedMs}ms</span>`;
+    safeHtml`<span class="${timingClass}">${elapsedMs}ms</span>`;
   document.getElementById('statsBar').classList.remove('hidden');
 }
 
@@ -2940,7 +2937,7 @@ async function openAnnotationInspector() {
       });
       _aiCache.set(cacheKey, annotations);
     } catch (e) {
-      results.innerHTML = `<div class="p-4 text-ox-red text-[11px]">Could not load annotations:\n${escapeHtml(String(e))}</div>`;
+      results.innerHTML = safeHtml`<div class="p-4 text-ox-red text-[11px]">Could not load annotations:\n${String(e)}</div>`;
       return;
     }
   }
@@ -3241,7 +3238,7 @@ function showNestedData(storeKey, colName) {
   const first = rows[0];
   if (typeof first !== 'object' || first === null) {
     const json = JSON.stringify(data, null, 2);
-    showNestedPanel(colName, `<pre class="text-xs font-mono text-ox-text p-3 whitespace-pre">${escapeHtml(json)}</pre>`);
+    showNestedPanel(colName, safeHtml`<pre class="text-xs font-mono text-ox-text p-3 whitespace-pre">${json}</pre>`);
     return;
   }
 
@@ -3274,15 +3271,17 @@ function showNestedPanel(title, contentHtml) {
   panel.id = 'nestedPanel';
   panel.className = 'fixed bottom-8 right-4 w-[600px] bg-ox-panel border border-ox-border rounded-lg shadow-2xl z-40';
   panel.style.animation = 'slideUp 0.2s ease';
-  panel.innerHTML = `
+  // contentHtml is built by callers (showNestedData, etc.) using safeHtml
+  // for every interpolation, so we pass it through unescaped via raw().
+  panel.innerHTML = safeHtml`
     <div class="px-4 py-2 border-b border-ox-border flex items-center justify-between">
       <div class="flex items-center gap-2">
         <div class="w-1.5 h-1.5 rounded-full bg-ox-blue"></div>
-        <span class="text-xs font-mono font-medium text-ox-text">${escapeHtml(title)}</span>
+        <span class="text-xs font-mono font-medium text-ox-text">${title}</span>
       </div>
       <button data-action="close-nested" class="text-ox-dim hover:text-ox-text text-xs px-2 py-0.5 rounded-sm hover:bg-ox-hover">close</button>
     </div>
-    <div class="p-2">${contentHtml}</div>
+    <div class="p-2">${raw(contentHtml)}</div>
   `;
   document.body.appendChild(panel);
 }
@@ -3290,7 +3289,7 @@ function showNestedPanel(title, contentHtml) {
 function renderJson(data) {
   const json = JSON.stringify(data, null, 2);
   document.getElementById('resultsArea').innerHTML =
-    `<pre class="text-xs font-mono text-ox-text p-4 overflow-auto h-full whitespace-pre leading-relaxed">${escapeHtml(json)}</pre>`;
+    safeHtml`<pre class="text-xs font-mono text-ox-text p-4 overflow-auto h-full whitespace-pre leading-relaxed">${json}</pre>`;
   setStatus('JSON');
 }
 
@@ -3516,6 +3515,38 @@ function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
+}
+
+// Tagged-template helper for HTML strings destined for innerHTML.
+// Every `${...}` interpolation is escaped via escapeHtml unless wrapped
+// with `raw(...)` to opt-in to passing through pre-escaped HTML.
+//
+// Convention: any backtick template literal that ends up assigned to
+// innerHTML MUST be tagged with safeHtml. CI greps for `\.innerHTML\s*=\s*\`
+// to fail the build on bare template literals; the only allowed forms are:
+//   el.innerHTML = '<static>...';            // single/double-quoted string
+//   el.innerHTML = safeHtml`<tpl>${x}</tpl>`; // tagged template
+//   el.innerHTML = preBuiltSafeHtmlString;   // assigned variable (build with safeHtml)
+function safeHtml(strings, ...values) {
+  let out = strings[0];
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    if (v && typeof v === 'object' && v.__rawHtml === true) {
+      out += v.value;
+    } else {
+      out += escapeHtml(v == null ? '' : String(v));
+    }
+    out += strings[i + 1];
+  }
+  return out;
+}
+
+// Mark a string as already-safe HTML so safeHtml passes it through
+// unescaped. Use ONLY for HTML you trust to be already escaped (typically
+// built via safeHtml itself, or a static literal known not to contain
+// untrusted data).
+function raw(htmlString) {
+  return { __rawHtml: true, value: htmlString == null ? '' : String(htmlString) };
 }
 
 // ══════════════════════════════════════════════════════════════

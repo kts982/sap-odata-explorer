@@ -54,3 +54,23 @@ jobs:
           tool: cargo-audit
       - name: cargo audit
         run: cargo audit
+
+  frontend-lint:
+    name: Frontend safeHtml lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Forbid bare template-literal innerHTML
+        # Untrusted SAP $metadata flows through innerHTML in many places.
+        # Bare template literals (`el.innerHTML = `<x>${y}</x>`;`) are easy
+        # to write without escaping and were the source of at least one
+        # XSS-shaped bug (es.keys.join(',') interpolated raw). Policy: any
+        # innerHTML assignment must be a quoted string, a pre-built variable,
+        # or `safeHtml\`...\``. The grep below catches violations.
+        run: |
+          set -euo pipefail
+          if grep -nP '\.innerHTML\s*=\s*`' tauri-app/src/*.js tauri-app/src/*.html; then
+            echo "::error::bare template-literal innerHTML found — wrap with safeHtml\`...\` (see tauri-app/src/app.js)"
+            exit 1
+          fi
+          echo "ok: no bare template-literal innerHTML sites"

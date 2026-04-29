@@ -79,6 +79,18 @@ All business logic lives in `crates/core`. The CLI and Tauri app are thin shells
 
 The Tauri app's CSP sets `script-src 'self'` (no `'unsafe-inline'`), which blocks inline scripts and inline event-handler attributes such as `onclick="..."` from executing. Use `addEventListener` in `app.js`, or `data-action` attributes routed through the document-level event-delegation handler.
 
+### Always escape `innerHTML` interpolations
+
+SAP `$metadata` is untrusted input — entity names, annotation values, and error messages can contain HTML special characters. Any HTML string assigned to `.innerHTML` must escape every interpolation. Use the `safeHtml` tagged-template helper in `app.js`:
+
+```js
+el.innerHTML = safeHtml`<div title="${title}">${name}</div>`;       // both auto-escaped
+el.innerHTML = safeHtml`<table>${raw(prebuiltSafeRows)}</table>`;   // opt-out via raw()
+el.innerHTML = '<div class="foo">static</div>';                     // plain string OK
+```
+
+Bare template literals (`el.innerHTML = \`...${x}...\``) are forbidden — CI greps for the pattern and fails the build.
+
 ## What's welcome
 
 - Bug fixes
