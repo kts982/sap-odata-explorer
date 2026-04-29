@@ -66,11 +66,10 @@ jobs:
         # to write without escaping and were the source of at least one
         # XSS-shaped bug (es.keys.join(',') interpolated raw). Policy: any
         # innerHTML assignment must be a quoted string, a pre-built variable,
-        # or `safeHtml\`...\``. The grep below catches violations.
-        run: |
-          set -euo pipefail
-          if grep -nP '\.innerHTML\s*=\s*`' tauri-app/src/*.js tauri-app/src/*.html; then
-            echo "::error::bare template-literal innerHTML found — wrap with safeHtml\`...\` (see tauri-app/src/app.js)"
-            exit 1
-          fi
-          echo "ok: no bare template-literal innerHTML sites"
+        # or `safeHtml\`...\``.
+        #
+        # The Node script reads each target file as a single string so
+        # multi-line forms (`el.innerHTML =\n  \`...\``) are caught — a gap
+        # the prior line-oriented grep had. See scripts/lint-innerhtml.mjs
+        # for the documented limitation around variable indirection.
+        run: node scripts/lint-innerhtml.mjs
