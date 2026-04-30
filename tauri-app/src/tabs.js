@@ -3,26 +3,28 @@
 // Each tab carries its own copy of the data the UI cares about: the
 // active service + entity + query bar values + cached results +
 // HTTP trace entries + history. `state` (state.js) holds *active-tab
-// mirrors* of the most-frequently-read fields; `restoreTabUI` (still in
-// app.js — see below) syncs those mirrors when the user switches.
+// mirrors* of the most-frequently-read fields; `restoreTabUI` syncs
+// those mirrors when the user switches.
 //
-// `restoreTabUI` deliberately stays in app.js. It touches every UI
-// surface (services / describe / query bar / results / traces / history
-// / annotations / stats) and pulling it in here would force callbacks
-// or upward imports back to most of the codebase. The plan is to leave
-// the cross-module orchestration in app.js until the rest of the
-// modules are split out and `restoreTabUI`'s sites have natural homes;
-// only then is it safe to lift.
-//
-// Two named imports cross module boundaries: `restoreTabUI` from
-// app.js (still circular until the rest of the orchestration splits
-// out), and `searchServices` from services.js. ESM resolves the
-// app.js circle because the binding is only referenced inside a
-// function body, not at top-level evaluation.
+// `restoreTabUI` is the cross-module orchestrator: it pokes at every
+// renderer to put the new tab's UI back on screen. That makes tabs.js
+// a sibling-circular partner with auth / api / history / trace /
+// services. The cycles are benign — every cross-module call sits
+// inside a function body, never at top-level evaluation, so ESM
+// resolves the bindings lazily.
 
 import { state } from './state.js';
-import { restoreTabUI } from './app.js';
-import { searchServices } from './services.js';
+import { searchServices, resetResultsArea } from './services.js';
+import { updateProfileAuthUi } from './auth.js';
+import { updateServicePathBar } from './api.js';
+import { renderHistoryPanel } from './history.js';
+import {
+  renderTraceSummary,
+  renderTraceInspector,
+  updateTraceToggleState,
+} from './trace.js';
+import { renderAnnotationBadge } from './annotations.js';
+import { renderDescribe } from './describe.js';
 
 export function createTab(opts = {}) {
   const id = 'tab_' + Date.now() + '_' + Math.random().toString(36).slice(2);
@@ -151,4 +153,121 @@ export function saveCurrentTabState() {
   // Save backing data for copy/expand
   tab._expandedDataStore = { ...state.expandedDataStore };
   tab._lastResultRows = state.lastResultRows;
+}
+
+export function restoreTabUI() {
+  const tab = getActiveTab();
+  if (!tab) return;
+
+  // Sync active-tab mirrors that other modules read off of state.
+  state.currentProfile    = tab.profile;
+  state.currentServicePath = tab.servicePath;
+  state.currentEntitySet  = tab.entitySet;
+  state.entitySets        = tab.entitySets;
+  state.cachedServices    = tab.cachedServices;
+  state.lastSearchQuery   = tab.lastSearchQuery;
+  state.expandedDataStore = tab._expandedDataStore || {};
+  state.lastResultRows = tab._lastResultRows || null;
+
+  // Sync profile dropdown
+  document.getElementById('profileSelect').value = state.currentProfile || '';
+  updateProfileAuthUi(state.currentProfile);
+
+  // Service path bar
+  updateServicePathBar(tab);
+
+  // Service input
+  document.getElementById('serviceInput').value = tab._serviceInput || '';
+
+  // Sidebar
+  document.getElementById('sidebarTitle').textContent = tab._sidebarTitle || 'Services';
+  document.getElementById('sidebarCount').textContent = tab._sidebarCount || '';
+  if (tab._sidebarHtml !== undefined) {
+    document.getElementById('entityList').innerHTML = tab._sidebarHtml;
+    // Re-attach sidebar item click handlers (lost when innerHTML was set)
+    reattachSidebarHandlers();
+  } else {
+    document.getElementById('entityList').innerHTML =
+      '<div class="px-4 py-8 text-center"><div class="text-ox-dim text-xs">Select a profile and search</div></div>';
+  }
+
+  // Describe panel. SAP View is a *global* preference, so we re-render
+  // from cached describe info rather than restoring the cached HTML —
+  // that way switching tabs reflects the current state.sapViewEnabled,
+  // not the value at the time this tab was last rendered.
+  if (tab._describePanelHidden === false) {
+    document.getElementById('describePanel').classList.remove('hidden');
+    if (tab._lastDescribeInfo) {
+      renderDescribe(tab._lastDescribeInfo);
+    } else {
+      document.getElementById('entityTitle').textContent = tab._describeTitle || '';
+      document.getElementById('describeContent').innerHTML = tab._describeHtml || '';
+    }
+  } else {
+    document.getElementById('describePanel').classList.add('hidden');
+  }
+
+  // Query bar
+  if (tab._queryBarHidden === false) {
+    document.getElementById('queryBar').classList.remove('hidden');
+    document.getElementById('queryEntitySet').textContent = tab._queryEntitySet || '';
+    document.getElementById('qSelect').value  = tab._qSelect  || '';
+    document.getElementById('qFilter').value  = tab._qFilter  || '';
+    document.getElementById('qExpand').value  = tab._qExpand  || '';
+    document.getElementById('qOrderby').value = tab._qOrderby || '';
+    document.getElementById('qTop').value     = tab._qTop     !== undefined ? tab._qTop : '20';
+    document.getElementById('qSkip').value    = tab._qSkip    || '';
+  } else {
+    document.getElementById('queryBar').classList.add('hidden');
+    document.getElementById('qSelect').value  = '';
+    document.getElementById('qFilter').value  = '';
+    document.getElementById('qExpand').value  = '';
+    document.getElementById('qOrderby').value = '';
+    document.getElementById('qTop').value     = '20';
+    document.getElementById('qSkip').value    = '';
+  }
+
+  // History panel
+  if (tab._historyVisible) {
+    renderHistoryPanel(tab);
+    document.getElementById('historyPanel').classList.remove('hidden');
+  } else {
+    document.getElementById('historyPanel').classList.add('hidden');
+  }
+
+  renderTraceSummary(tab);
+  if (tab._traceVisible) {
+    renderTraceInspector(tab);
+    document.getElementById('traceInspectorPanel').classList.remove('hidden');
+  } else {
+    document.getElementById('traceInspectorPanel').classList.add('hidden');
+  }
+  updateTraceToggleState(tab._traceVisible);
+
+  renderAnnotationBadge(tab.annotationSummary);
+
+  // Stats bar
+  if (tab._statsVisible) {
+    document.getElementById('statRows').textContent = tab._statRows || '';
+    document.getElementById('statSize').textContent = tab._statSize || '';
+    document.getElementById('statTiming').innerHTML = tab._statTiming || '';
+    document.getElementById('statsBar').classList.remove('hidden');
+  } else {
+    document.getElementById('statsBar').classList.add('hidden');
+  }
+
+  // Results
+  if (tab._resultsHtml !== undefined) {
+    document.getElementById('resultsArea').innerHTML = tab._resultsHtml;
+  } else {
+    resetResultsArea();
+  }
+}
+
+// All sidebar items (back link, service items, star buttons, entity
+// items) are handled by document-level delegation only — nothing to
+// re-attach. Kept as a named function so restoreTabUI's intent is
+// readable: "rendered HTML, now re-bind anything imperative."
+function reattachSidebarHandlers() {
+  /* intentionally empty */
 }

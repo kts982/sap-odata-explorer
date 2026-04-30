@@ -1,35 +1,24 @@
-// ── Module imports ──
-// `invoke` is for the small handful of commands that don't go through
-// `timedInvoke` (auth/profile lifecycle — no spinner / trace correlation
-// needed). Vendored copy of @tauri-apps/api/core (see
-// scripts/vendor-tauri.cjs); direct relative import avoids needing an
-// importmap under the locked-down `script-src 'self'` CSP. Re-run
-// `npm run vendor:tauri` after bumping @tauri-apps/api in package.json.
-import { invoke } from './vendor/tauri-core.js';
+// ── Entry / wiring module ──
+//
+// app.js is the entry point: it sets up the profile-select handler,
+// wires button clicks + the document-level click delegate, and binds
+// keyboard shortcuts. All feature logic lives in dedicated modules;
+// this file is intentionally just glue.
+
 import { state } from './state.js';
+import { timedInvoke, updateServicePathBar } from './api.js';
 import {
-  tabScope,
-  timedInvoke,
-  applyTraceToTab,
-  updateServicePathBar,
-} from './api.js';
-import {
-  getTab,
   getActiveTab,
   addTab,
   closeTab,
   switchTab,
-  renderTabBar,
   saveCurrentTabState,
 } from './tabs.js';
 import {
-  getProfileMeta,
-  isBrowserAuthProfile,
   updateProfileAuthUi,
   signOutCurrentProfile,
   removeCurrentProfile,
   signInCurrentProfile,
-  browserAuthMessage,
 } from './auth.js';
 import { getFavorites, toggleFavorite } from './favorites.js';
 import {
@@ -37,14 +26,11 @@ import {
   loadService,
   searchServices,
   pickService,
-  resolveAndLoadService,
   selectEntity,
   resetResultsArea,
   renderFavoritesOnlySidebar,
 } from './services.js';
 import {
-  propertyFlagHints,
-  validateQueryRestrictions,
   showSapViewWarnings,
   renderSelectionFieldsBar,
   openFilterBar,
@@ -58,7 +44,6 @@ import {
   renderFioriFilterButton,
   applyFioriFilter,
   applyFioriCols,
-  renderFioriReadinessPanel,
 } from './fiori.js';
 import {
   openValueListPicker,
@@ -91,7 +76,7 @@ import {
   renderAnnotationInspector,
   toggleAnnotationNamespace,
 } from './annotations.js';
-import { buildODataUrl, executeQuery, showStatsBar, hideStatsBar } from './executor.js';
+import { executeQuery } from './executor.js';
 import { renderHistoryPanel, replayHistory } from './history.js';
 import {
   showNestedData,
@@ -102,125 +87,15 @@ import {
   hideFilterTooltip,
   applyFilterFromTooltip,
 } from './results.js';
-import { copyToClipboard } from './clipboard.js';
-import { escapeHtml, safeHtml, raw } from './html.js';
 import {
-  criticalityDot,
-  formatDisplayValue,
-  formatODataLiteral,
-  valueListSummary,
-  valueListHint,
-  criticalityHint,
-} from './format.js';
-import { setStatus, setTime, showSpinner, hideSpinner } from './status.js';
+  showAddProfileModal,
+  updateAuthModeFields,
+  hideAddProfileModal,
+  saveProfileModal,
+  testProfileModal,
+} from './addProfile.js';
+import { setStatus } from './status.js';
 
-export function restoreTabUI() {
-  const tab = getActiveTab();
-  if (!tab) return;
-
-  // Sync global convenience vars (used in some legacy fn calls)
-  state.currentProfile    = tab.profile;
-  state.currentServicePath = tab.servicePath;
-  state.currentEntitySet  = tab.entitySet;
-  state.entitySets        = tab.entitySets;
-  state.cachedServices    = tab.cachedServices;
-  state.lastSearchQuery   = tab.lastSearchQuery;
-  state.expandedDataStore = tab._expandedDataStore || {};
-  state.lastResultRows = tab._lastResultRows || null;
-
-  // Sync profile dropdown
-  document.getElementById('profileSelect').value = state.currentProfile || '';
-  updateProfileAuthUi(state.currentProfile);
-
-  // Service path bar
-  updateServicePathBar(tab);
-
-  // Service input
-  document.getElementById('serviceInput').value = tab._serviceInput || '';
-
-  // Sidebar
-  document.getElementById('sidebarTitle').textContent = tab._sidebarTitle || 'Services';
-  document.getElementById('sidebarCount').textContent = tab._sidebarCount || '';
-  if (tab._sidebarHtml !== undefined) {
-    document.getElementById('entityList').innerHTML = tab._sidebarHtml;
-    // Re-attach sidebar item click handlers (lost when innerHTML was set)
-    reattachSidebarHandlers();
-  } else {
-    document.getElementById('entityList').innerHTML =
-      '<div class="px-4 py-8 text-center"><div class="text-ox-dim text-xs">Select a profile and search</div></div>';
-  }
-
-  // Describe panel
-  if (tab._describePanelHidden === false) {
-    document.getElementById('describePanel').classList.remove('hidden');
-    document.getElementById('entityTitle').textContent = tab._describeTitle || '';
-    document.getElementById('describeContent').innerHTML = tab._describeHtml || '';
-  } else {
-    document.getElementById('describePanel').classList.add('hidden');
-  }
-
-  // Query bar
-  if (tab._queryBarHidden === false) {
-    document.getElementById('queryBar').classList.remove('hidden');
-    document.getElementById('queryEntitySet').textContent = tab._queryEntitySet || '';
-    document.getElementById('qSelect').value  = tab._qSelect  || '';
-    document.getElementById('qFilter').value  = tab._qFilter  || '';
-    document.getElementById('qExpand').value  = tab._qExpand  || '';
-    document.getElementById('qOrderby').value = tab._qOrderby || '';
-    document.getElementById('qTop').value     = tab._qTop     !== undefined ? tab._qTop : '20';
-    document.getElementById('qSkip').value    = tab._qSkip    || '';
-  } else {
-    document.getElementById('queryBar').classList.add('hidden');
-    document.getElementById('qSelect').value  = '';
-    document.getElementById('qFilter').value  = '';
-    document.getElementById('qExpand').value  = '';
-    document.getElementById('qOrderby').value = '';
-    document.getElementById('qTop').value     = '20';
-    document.getElementById('qSkip').value    = '';
-  }
-
-  // History panel
-  if (tab._historyVisible) {
-    renderHistoryPanel(tab);
-    document.getElementById('historyPanel').classList.remove('hidden');
-  } else {
-    document.getElementById('historyPanel').classList.add('hidden');
-  }
-
-  renderTraceSummary(tab);
-  if (tab._traceVisible) {
-    renderTraceInspector(tab);
-    document.getElementById('traceInspectorPanel').classList.remove('hidden');
-  } else {
-    document.getElementById('traceInspectorPanel').classList.add('hidden');
-  }
-  updateTraceToggleState(tab._traceVisible);
-
-  renderAnnotationBadge(tab.annotationSummary);
-
-  // Stats bar
-  if (tab._statsVisible) {
-    document.getElementById('statRows').textContent = tab._statRows || '';
-    document.getElementById('statSize').textContent = tab._statSize || '';
-    document.getElementById('statTiming').innerHTML = tab._statTiming || '';
-    document.getElementById('statsBar').classList.remove('hidden');
-  } else {
-    document.getElementById('statsBar').classList.add('hidden');
-  }
-
-  // Results
-  if (tab._resultsHtml !== undefined) {
-    document.getElementById('resultsArea').innerHTML = tab._resultsHtml;
-  } else {
-    resetResultsArea();
-  }
-}
-
-/** Re-attach event handlers on sidebar items after innerHTML restore */
-function reattachSidebarHandlers() {
-  // All sidebar items (back link, service items, star buttons, entity items)
-  // are handled by document-level delegation only — nothing to re-attach.
-}
 
 document.getElementById('profileSelect').addEventListener('change', (e) => {
   const profile = e.target.value || null;
@@ -325,138 +200,6 @@ function toggleSapView() {
 
 
 
-// ══════════════════════════════════════════════════════════════
-// ── ADD PROFILE MODAL ──
-// ══════════════════════════════════════════════════════════════
-
-function showAddProfileModal() {
-  document.getElementById('addProfileModal').classList.remove('hidden');
-  document.getElementById('mpName').value = '';
-  document.getElementById('mpUrl').value = '';
-  document.getElementById('mpClient').value = '100';
-  document.getElementById('mpLang').value = 'EN';
-  document.getElementById('mpAuthMode').value = 'basic';
-  document.getElementById('mpUser').value = '';
-  document.getElementById('mpPass').value = '';
-  updateAuthModeFields();
-  document.getElementById('mpError').classList.add('hidden');
-  document.getElementById('mpSuccess').classList.add('hidden');
-  document.getElementById('mpName').focus();
-}
-
-function updateAuthModeFields() {
-  const mode = document.getElementById('mpAuthMode').value;
-  document.getElementById('mpCredFields').style.display = mode === 'basic' ? '' : 'none';
-
-  const hint = document.getElementById('mpAuthHint');
-  if (mode === 'sso') {
-    hint.textContent = 'Uses Windows integrated auth via Kerberos / Negotiate.';
-  } else if (mode === 'browser') {
-    hint.textContent = 'Opens an in-app sign-in window for Azure AD / SAP IAS style browser authentication.';
-  } else {
-    hint.textContent = 'Stores the password in Windows Credential Manager.';
-  }
-}
-
-function hideAddProfileModal() {
-  document.getElementById('addProfileModal').classList.add('hidden');
-}
-
-async function saveProfileModal() {
-  const name     = document.getElementById('mpName').value.trim();
-  const url      = document.getElementById('mpUrl').value.trim();
-  const client   = document.getElementById('mpClient').value.trim();
-  const language = document.getElementById('mpLang').value.trim();
-  const authMode = document.getElementById('mpAuthMode').value;
-  const user     = authMode === 'basic' ? document.getElementById('mpUser').value.trim() : '';
-  const pass     = authMode === 'basic' ? document.getElementById('mpPass').value : '';
-
-  const errEl = document.getElementById('mpError');
-  const okEl  = document.getElementById('mpSuccess');
-  errEl.classList.add('hidden');
-  okEl.classList.add('hidden');
-
-  if (!name || !url) {
-    errEl.textContent = 'Profile name and URL are required';
-    errEl.classList.remove('hidden');
-    return;
-  }
-  if (authMode === 'basic' && (!user || !pass)) {
-    errEl.textContent = 'Username and password are required for basic authentication';
-    errEl.classList.remove('hidden');
-    return;
-  }
-
-  const doSave = async (allowPlaintextFallback) => {
-    return await invoke('add_profile', {
-      name, baseUrl: url, client, language, authMode, username: user, password: pass,
-      allowPlaintextFallback,
-    });
-  };
-
-  try {
-    let msg;
-    try {
-      msg = await doSave(false);
-    } catch (e) {
-      const errStr = String(e);
-      // Backend signals keyring failure with a specific prefix so we can offer
-      // an explicit confirmation instead of silently downgrading to plaintext.
-      if (errStr.includes('KEYRING_FAILED')) {
-        const proceed = window.confirm(
-          'The OS keyring is unavailable or rejected the password.\n\n' +
-          'Store the password in the config file as plaintext instead?\n' +
-          '(Not recommended — the file is only protected by your OS file permissions.)'
-        );
-        if (!proceed) throw e;
-        msg = await doSave(true);
-      } else {
-        throw e;
-      }
-    }
-    okEl.textContent = msg;
-    okEl.classList.remove('hidden');
-    await loadProfiles();
-    document.getElementById('profileSelect').value = name;
-    document.getElementById('profileSelect').dispatchEvent(new Event('change'));
-    setTimeout(hideAddProfileModal, 800);
-  } catch (e) {
-    errEl.textContent = String(e).replace(/^KEYRING_FAILED:\s*/, '');
-    errEl.classList.remove('hidden');
-  }
-}
-
-async function testProfileModal() {
-  const url    = document.getElementById('mpUrl').value.trim();
-  const client = document.getElementById('mpClient').value.trim();
-  const language = document.getElementById('mpLang').value.trim() || 'EN';
-  const authMode = document.getElementById('mpAuthMode').value;
-  const user   = authMode === 'basic' ? document.getElementById('mpUser').value.trim() : '';
-  const pass   = authMode === 'basic' ? document.getElementById('mpPass').value : '';
-  const name   = document.getElementById('mpName').value.trim();
-
-  const errEl = document.getElementById('mpError');
-  const okEl  = document.getElementById('mpSuccess');
-  errEl.classList.add('hidden');
-  okEl.classList.add('hidden');
-
-  if (!name || !url) {
-    errEl.textContent = 'Fill in name and URL first';
-    errEl.classList.remove('hidden');
-    return;
-  }
-
-  try {
-    const msg = await timedInvoke('test_connection', {
-      baseUrl: url, client, language, authMode, username: user, password: pass,
-    });
-    okEl.textContent = msg;
-    okEl.classList.remove('hidden');
-  } catch (e) {
-    errEl.textContent = String(e);
-    errEl.classList.remove('hidden');
-  }
-}
 
 // ══════════════════════════════════════════════════════════════
 // ── KEYBOARD SHORTCUTS (Feature 8) ──
