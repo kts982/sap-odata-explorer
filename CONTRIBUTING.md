@@ -45,11 +45,13 @@ sap-odata-explorer/
 │   ├── core/       # Shared library (protocol, auth, HTTP, metadata, query, catalog, config)
 │   └── cli/        # CLI binary (clap)
 └── tauri-app/
-    ├── src/        # Frontend (vanilla HTML + Tailwind CSS v4 + JS)
+    ├── src/        # Frontend — vanilla HTML + Tailwind CSS v4 + ES modules
     └── src-tauri/  # Tauri backend (Rust commands wrapping core)
 ```
 
 All business logic lives in `crates/core`. The CLI and Tauri app are thin shells — add new capabilities in core first.
+
+The frontend is split into focused ES modules — `app.js` is wiring only (DOM ready, button bindings, click delegate). Feature logic lives in dedicated modules: `state.js`, `tabs.js`, `auth.js`, `services.js`, `query.js`, `executor.js`, `results.js`, `trace.js`, `describe.js`, `annotations.js`, `history.js`, `valueList.js`, `fiori.js`, `favorites.js`, `addProfile.js`, plus utility modules (`html.js`, `format.js`, `status.js`, `clipboard.js`, `api.js`, `resultCache.js`). All imports flow downward — no module imports back up to `app.js`.
 
 ## Making changes
 
@@ -63,7 +65,7 @@ All business logic lives in `crates/core`. The CLI and Tauri app are thin shells
 ### Code style
 
 - **Rust**: run `cargo fmt` before committing
-- **JS**: no framework, no TypeScript. Keep it simple.
+- **JS**: ES modules, no framework, no TypeScript, no bundler (vendored Tauri API loaded directly). Keep it simple. Add new feature logic in a dedicated module — `app.js` is the entry/wiring file and stays small.
 - **HTML/CSS**: Tailwind utility classes, no inline event handlers (CSP forbids them)
 - **Clippy**: `cargo clippy --workspace --all-targets -- -D warnings` is the desired long-term gate, but the current codebase still has existing style-only lints. Do not introduce new clippy warnings in touched code.
 
