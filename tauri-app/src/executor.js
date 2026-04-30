@@ -10,9 +10,7 @@
 // click delegate. `showStatsBar` / `hideStatsBar` / `formatBytes` are
 // the bottom-bar stats helpers.
 //
-// One temporary circular import: `renderJson` + `renderResults` are
-// still in app.js until 6e extracts results.js. After 6e, those move
-// to results.js and this module's app.js import goes away.
+// All imports flow downward — no circular back to app.js.
 
 import { state } from './state.js';
 import { setStatus } from './status.js';
@@ -22,7 +20,7 @@ import { getActiveTab } from './tabs.js';
 import { showSapViewWarnings, validateQueryRestrictions } from './query.js';
 import { isBrowserAuthProfile, browserAuthMessage } from './auth.js';
 import { addToHistory } from './history.js';
-import { renderJson, renderResults, extractRows } from './app.js';
+import { renderJson, renderResults, extractRows } from './results.js';
 
 export function buildODataUrl(params) {
   if (!state.currentServicePath || !params) return '';

@@ -11,9 +11,7 @@
 // Module-level mutables (`_vl*`) are intentionally not in state.js —
 // they're picker-private and have no readers outside this module.
 //
-// One circular import: `extractRows` lives in app.js (results module
-// hasn't split out yet). Imported lazily — bindings are only read
-// inside fetchValueListRows' body, never at top-level evaluation.
+// All imports flow downward — no circular back to app.js.
 
 import { state } from './state.js';
 import { safeHtml, escapeHtml } from './html.js';
@@ -21,7 +19,7 @@ import { valueListSummary, formatODataLiteral } from './format.js';
 import { setStatus } from './status.js';
 import { timedInvoke } from './api.js';
 import { getActiveTab } from './tabs.js';
-import { extractRows } from './app.js';
+import { extractRows } from './results.js';
 
 // State held per-open: the full Property info, the ValueList that will
 // drive the picker (inline for same-service value help, resolved for
