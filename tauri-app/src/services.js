@@ -8,10 +8,10 @@
 // renderEntityList). selectEntity drives the describe-panel round-trip
 // when the user clicks an entity set.
 //
-// Cross-module dependencies come back through circular imports for
-// renderAnnotationBadge / renderDescribe (still in app.js) and the
-// favorites pair (getFavorites/saveFavorites). ESM handles the cycles
-// because every reference is inside a function body, not top-level.
+// Circular pair with favorites.js (getFavorites/saveFavorites).
+// ESM resolves the cycle because every reference is inside a function
+// body, not top-level. All other imports flow downward — no circular
+// back to app.js.
 
 import { state } from './state.js';
 import { invoke } from './vendor/tauri-core.js';
@@ -29,7 +29,8 @@ import {
   browserAuthMessage,
 } from './auth.js';
 import { getFavorites, saveFavorites } from './favorites.js';
-import { renderAnnotationBadge, renderDescribe } from './app.js';
+import { renderAnnotationBadge } from './annotations.js';
+import { renderDescribe } from './describe.js';
 
 export async function loadProfiles() {
   try {
