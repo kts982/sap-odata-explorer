@@ -13,6 +13,24 @@ import {
   applyTraceToTab,
   updateServicePathBar,
 } from './api.js';
+import {
+  getTab,
+  getActiveTab,
+  addTab,
+  closeTab,
+  switchTab,
+  renderTabBar,
+  saveCurrentTabState,
+} from './tabs.js';
+import {
+  getProfileMeta,
+  isBrowserAuthProfile,
+  updateProfileAuthUi,
+  signOutCurrentProfile,
+  removeCurrentProfile,
+  signInCurrentProfile,
+  browserAuthMessage,
+} from './auth.js';
 import { escapeHtml, safeHtml, raw } from './html.js';
 import {
   criticalityDot,
@@ -24,143 +42,7 @@ import {
 } from './format.js';
 import { setStatus, setTime, showSpinner, hideSpinner } from './status.js';
 
-// ══════════════════════════════════════════════════════════════
-// ── TAB SYSTEM ──
-// Each tab carries its own independent state.
-// ══════════════════════════════════════════════════════════════
-
-function createTab(opts = {}) {
-  const id = 'tab_' + Date.now() + '_' + Math.random().toString(36).slice(2);
-  return {
-    id,
-    title: opts.title || 'New Tab',
-    // per-tab state
-    profile: opts.profile || null,
-    servicePath: opts.servicePath || null,
-    serviceVersion: opts.serviceVersion || null,   // 'V2' | 'V4' | null
-    entitySet: opts.entitySet || null,
-    entitySets: [],
-    cachedServices: null,
-    lastSearchQuery: null,
-    // query history (last 20, in-memory)
-    queryHistory: [],
-    // last query params (for "history" re-use)
-    lastParams: null,
-    httpTraceEntries: [],
-    selectedTraceId: null,
-    _traceVisible: false,
-    _traceSubTab: 'response',
-    annotationSummary: null,
-  };
-}
-
-// Exported temporarily so the api.js wrapper layer can resolve a tab by id
-// without a flat global scope. Future batches lift tab CRUD into tabs.js.
-export function getTab(id) {
-  return state.tabs.find(t => t.id === id) || null;
-}
-
-function getActiveTab() {
-  return getTab(state.activeTabId);
-}
-
-function addTab(opts = {}) {
-  const tab = createTab(opts);
-  state.tabs.push(tab);
-  renderTabBar();
-  switchTab(tab.id);
-  // If there's an active profile, auto-load services (shows favorites at top)
-  if (state.currentProfile && state.cachedServices) {
-    tab.profile = state.currentProfile;
-    tab.cachedServices = state.cachedServices;
-    searchServices('');
-  }
-  return tab;
-}
-
-function closeTab(id) {
-  if (state.tabs.length <= 1) return; // keep at least 1
-  const idx = state.tabs.findIndex(t => t.id === id);
-  if (idx === -1) return;
-  state.tabs.splice(idx, 1);
-  if (state.activeTabId === id) {
-    const next = state.tabs[Math.min(idx, state.tabs.length - 1)];
-    renderTabBar();
-    switchTab(next.id);
-  } else {
-    renderTabBar();
-  }
-}
-
-function switchTab(id) {
-  state.activeTabId = id;
-  renderTabBar();
-  restoreTabUI();
-}
-
-function renderTabBar() {
-  const bar = document.getElementById('tabBar');
-  const addBtn = document.getElementById('btnAddTab');
-  // Remove all tab elements (not the add button)
-  [...bar.querySelectorAll('.tab-item')].forEach(el => el.remove());
-
-  for (const tab of state.tabs) {
-    const el = document.createElement('div');
-    el.className = 'tab-item' + (tab.id === state.activeTabId ? ' active' : '');
-    el.dataset.tabId = tab.id;
-
-    const titleEl = document.createElement('span');
-    titleEl.className = 'tab-title';
-    titleEl.textContent = tab.title;
-
-    const closeEl = document.createElement('span');
-    closeEl.className = 'tab-close';
-    closeEl.textContent = '×';
-    closeEl.dataset.action = 'close-tab';
-    closeEl.dataset.tabId = tab.id;
-
-    el.appendChild(titleEl);
-    if (state.tabs.length > 1) el.appendChild(closeEl);
-    el.dataset.action = 'switch-tab';
-
-    bar.insertBefore(el, addBtn);
-  }
-}
-
-/** Save current UI state into the active tab, then restore the new tab's UI */
-function saveCurrentTabState() {
-  const tab = getActiveTab();
-  if (!tab) return;
-  // Save query bar values
-  tab._qSelect  = document.getElementById('qSelect').value;
-  tab._qFilter  = document.getElementById('qFilter').value;
-  tab._qExpand  = document.getElementById('qExpand').value;
-  tab._qOrderby = document.getElementById('qOrderby').value;
-  tab._qTop     = document.getElementById('qTop').value;
-  tab._qSkip    = document.getElementById('qSkip').value;
-  // Save results HTML and stats
-  tab._resultsHtml = document.getElementById('resultsArea').innerHTML;
-  tab._statsVisible = !document.getElementById('statsBar').classList.contains('hidden');
-  tab._statRows  = document.getElementById('statRows').textContent;
-  tab._statSize  = document.getElementById('statSize').textContent;
-  tab._statTiming = document.getElementById('statTiming').innerHTML;
-  tab._describePanelHidden = document.getElementById('describePanel').classList.contains('hidden');
-  tab._describeTitle = document.getElementById('entityTitle').textContent;
-  tab._describeHtml = document.getElementById('describeContent').innerHTML;
-  tab._queryBarHidden = document.getElementById('queryBar').classList.contains('hidden');
-  tab._queryEntitySet = document.getElementById('queryEntitySet').textContent;
-  tab._historyVisible = !document.getElementById('historyPanel').classList.contains('hidden');
-  tab._traceVisible = !document.getElementById('traceInspectorPanel').classList.contains('hidden');
-  tab._sidebarTitle = document.getElementById('sidebarTitle').textContent;
-  tab._sidebarCount = document.getElementById('sidebarCount').textContent;
-  tab._sidebarHtml = document.getElementById('entityList').innerHTML;
-  tab._serviceInput = document.getElementById('serviceInput').value;
-  // Save backing data for copy/expand
-  tab._expandedDataStore = { ...state.expandedDataStore };
-  tab._lastResultRows = state.lastResultRows;
-}
-
-function restoreTabUI() {
+export function restoreTabUI() {
   const tab = getActiveTab();
   if (!tab) return;
 
@@ -268,105 +150,6 @@ function reattachSidebarHandlers() {
   // are handled by document-level delegation only — nothing to re-attach.
 }
 
-function getProfileMeta(profileName) {
-  return profileName ? (state.profileMap.get(profileName) || null) : null;
-}
-
-function isBrowserAuthProfile(profileName = state.currentProfile) {
-  return getProfileMeta(profileName)?.auth_mode === 'browser';
-}
-
-function updateProfileAuthUi(profileName = state.currentProfile) {
-  const signInBtn  = document.getElementById('btnProfileSignIn');
-  const signOutBtn = document.getElementById('btnProfileSignOut');
-  const removeBtn  = document.getElementById('btnRemoveProfile');
-
-  // Sign In / Sign Out: only for browser SSO profiles
-  if (!profileName || !isBrowserAuthProfile(profileName)) {
-    signInBtn.classList.add('hidden');
-    signOutBtn.classList.add('hidden');
-  } else {
-    signInBtn.classList.remove('hidden');
-    signOutBtn.classList.remove('hidden');
-  }
-
-  // Remove button: shown whenever any profile is selected
-  if (!profileName) {
-    removeBtn.classList.add('hidden');
-  } else {
-    removeBtn.classList.remove('hidden');
-  }
-}
-
-async function signOutCurrentProfile() {
-  if (!state.currentProfile) { setStatus('Select a profile first'); return; }
-  if (!isBrowserAuthProfile(state.currentProfile)) {
-    setStatus('Sign Out only applies to browser SSO profiles');
-    return;
-  }
-  try {
-    const msg = await invoke('sign_out_profile', { profileName: state.currentProfile });
-    clearTraceState(getActiveTab());
-    setStatus(msg);
-  } catch (e) {
-    setStatus('Sign out failed: ' + e);
-  }
-}
-
-async function removeCurrentProfile() {
-  if (!state.currentProfile) {
-    setStatus('Select a profile first');
-    return;
-  }
-  const name = state.currentProfile;
-  if (!confirm(`Remove profile '${name}'?\n\nThis will also delete its password from the OS keyring.`)) {
-    return;
-  }
-  try {
-    const msg = await invoke('remove_profile', { name });
-    setStatus(msg);
-    clearTraceState(getActiveTab());
-    // Reset UI state
-    state.currentProfile = null;
-    state.cachedServices = null;
-    document.getElementById('profileSelect').value = '';
-    document.getElementById('entityList').innerHTML =
-      '<div class="px-4 py-8 text-center"><div class="text-ox-dim text-xs">Select a profile</div></div>';
-    updateProfileAuthUi(null);
-    updateServicePathBar(null);
-    resetResultsArea();
-    // Refresh dropdown
-    await loadProfiles();
-  } catch (e) {
-    setStatus('Remove failed: ' + e);
-  }
-}
-
-function browserAuthMessage(err) {
-  return `${String(err)}\n\nBrowser SSO session required. Use the Sign In button next to the profile selector.`;
-}
-
-async function signInCurrentProfile() {
-  if (!state.currentProfile) {
-    setStatus('Select a profile first');
-    return;
-  }
-  if (!isBrowserAuthProfile(state.currentProfile)) {
-    setStatus('The selected profile does not use browser SSO');
-    return;
-  }
-
-  setStatus(`Signing in to ${state.currentProfile}...`);
-  try {
-    const msg = await timedInvoke('browser_sign_in_profile', { profileName: state.currentProfile });
-    setStatus(msg);
-  } catch (e) {
-    setStatus('Sign-in failed: ' + e);
-    document.getElementById('resultsArea').innerHTML =
-      safeHtml`<div class="p-4 text-ox-red text-sm">${String(e)}</div>`;
-  }
-}
-
 // ══════════════════════════════════════════════════════════════
 // ── FAVORITES (Feature 2) ──
 // ══════════════════════════════════════════════════════════════
@@ -436,7 +219,7 @@ function toggleFavorite(svc, starEl) {
 // ── PROFILES ──
 // ══════════════════════════════════════════════════════════════
 
-async function loadProfiles() {
+export async function loadProfiles() {
   try {
     const profiles = await invoke('get_profiles');
     state.profileMap = new Map(profiles.map(p => [p.name, p]));
@@ -517,7 +300,7 @@ document.getElementById('profileSelect').addEventListener('change', (e) => {
   }
 });
 
-function resetResultsArea() {
+export function resetResultsArea() {
   document.getElementById('resultsArea').innerHTML = safeHtml`
     <div class="flex items-center justify-center h-full">
       <div class="text-center">
@@ -555,7 +338,7 @@ function isServicePath(s) {
   return typeof s === 'string' && s.startsWith('/sap/');
 }
 
-async function searchServices(query) {
+export async function searchServices(query) {
   if (!state.currentProfile) return;
   const tab = getActiveTab();
 
@@ -2243,7 +2026,7 @@ function replayHistory(idx) {
 // ── HTTP INSPECTOR ──
 // ══════════════════════════════════════════════════════════════
 
-function clearTraceState(tab = getActiveTab()) {
+export function clearTraceState(tab = getActiveTab()) {
   if (!tab) return;
   tab.httpTraceEntries = [];
   tab.selectedTraceId = null;

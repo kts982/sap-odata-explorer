@@ -14,19 +14,19 @@
 //      the trace inspector renders on the *originating* tab even after
 //      the user has moved on.
 //
-// The trace-application path imports four helpers from app.js — getTab,
-// ensureTraceSelection, renderTraceSummary, renderTraceInspector. That
-// is a circular import (app.js also imports from api.js); ES modules
-// resolve it correctly because the helpers are only invoked inside
-// function bodies, never at top-level evaluation. Future batches will
-// lift those helpers into tabs.js / a trace-rendering module and the
+// The trace-application path imports four helpers: getTab from tabs.js,
+// and ensureTraceSelection / renderTraceSummary / renderTraceInspector
+// from app.js. The latter trio is a circular import (app.js also
+// imports from api.js); ES modules resolve it because the helpers are
+// only invoked inside function bodies, never at top-level evaluation.
+// Future batches will lift those into a trace-rendering module and the
 // circle will close.
 
 import { invoke } from './vendor/tauri-core.js';
 import { state } from './state.js';
 import { setTime, showSpinner, hideSpinner } from './status.js';
+import { getTab } from './tabs.js';
 import {
-  getTab,
   ensureTraceSelection,
   renderTraceSummary,
   renderTraceInspector,
