@@ -32,7 +32,10 @@ import { readFileSync } from 'node:fs';
 
 const TARGETS = [
   'tauri-app/src/app.js',
+  'tauri-app/src/format.js',
+  'tauri-app/src/html.js',
   'tauri-app/src/index.html',
+  'tauri-app/src/status.js',
 ];
 
 const RE = /\.innerHTML\s*=\s*`/g;
