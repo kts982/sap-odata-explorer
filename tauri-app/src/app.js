@@ -91,6 +91,8 @@ import {
   renderAnnotationInspector,
   toggleAnnotationNamespace,
 } from './annotations.js';
+import { buildODataUrl, executeQuery, showStatsBar, hideStatsBar } from './executor.js';
+import { renderHistoryPanel, replayHistory } from './history.js';
 import { copyToClipboard } from './clipboard.js';
 import { escapeHtml, safeHtml, raw } from './html.js';
 import {
@@ -275,201 +277,6 @@ document.getElementById('profileSelect').addEventListener('change', (e) => {
 });
 
 
-// ══════════════════════════════════════════════════════════════
-// ── ODATA URL BUILDER (for Copy URL feature) ──
-// ══════════════════════════════════════════════════════════════
-
-function buildODataUrl(params) {
-  if (!state.currentServicePath || !params) return '';
-  const parts = [];
-  if (params.select)  parts.push(`$select=${encodeURIComponent(params.select)}`);
-  if (params.filter)  parts.push(`$filter=${encodeURIComponent(params.filter)}`);
-  if (params.expand)  parts.push(`$expand=${encodeURIComponent(params.expand)}`);
-  if (params.orderby) parts.push(`$orderby=${encodeURIComponent(params.orderby)}`);
-  if (params.top)     parts.push(`$top=${params.top}`);
-  if (params.skip)    parts.push(`$skip=${params.skip}`);
-  const qs = parts.length ? '?' + parts.join('&') : '';
-  return `${state.currentServicePath}/${params.entity_set}${qs}`;
-}
-
-// ══════════════════════════════════════════════════════════════
-// ── QUERY EXECUTION ──
-// ══════════════════════════════════════════════════════════════
-
-async function executeQuery(asJson = false) {
-  if (!state.currentProfile || !state.currentServicePath || !state.currentEntitySet) {
-    setStatus('Select a profile, service, and entity set first');
-    return;
-  }
-
-  const params = {
-    entity_set: state.currentEntitySet,
-    select:  document.getElementById('qSelect').value  || null,
-    filter:  document.getElementById('qFilter').value  || null,
-    expand:  document.getElementById('qExpand').value  || null,
-    orderby: document.getElementById('qOrderby').value || null,
-    top:     parseInt(document.getElementById('qTop').value)  || null,
-    skip:    parseInt(document.getElementById('qSkip').value) || null,
-    key:     null,
-    count:   false,
-  };
-
-  // SAP View pre-flight: when enabled, surface restriction warnings
-  // without blocking. Annotations describe what Fiori would do; SAP
-  // servers are often more permissive than the metadata claims, so the
-  // server's response is the final word. We just make the context
-  // visible before hitting send.
-  if (state.sapViewEnabled) {
-    const tab = getActiveTab();
-    const info = tab && tab._lastDescribeInfo;
-    if (info && info.name && state.currentEntitySet === document.getElementById('queryEntitySet').textContent) {
-      showSapViewWarnings(validateQueryRestrictions(params, info));
-    } else {
-      showSapViewWarnings([]);
-    }
-  } else {
-    showSapViewWarnings([]);
-  }
-
-  setStatus(`Querying ${state.currentEntitySet}...`);
-  const queryStart = performance.now();
-  const scope = tabScope();
-
-  try {
-    const data = await timedInvoke('run_query', {
-      profileName: state.currentProfile,
-      servicePath: state.currentServicePath,
-      params,
-    });
-    if (!scope.active()) return;
-
-    const elapsed = Math.round(performance.now() - queryStart);
-
-    if (asJson) {
-      renderJson(data);
-      hideStatsBar();
-    } else {
-      renderResults(data, elapsed, params);
-    }
-
-    // Record in history
-    const tab = getActiveTab();
-    if (tab && !asJson) {
-      const rows = extractRows(data);
-      const rowCount = rows ? rows.length : 0;
-      addToHistory(tab, params, rowCount, elapsed);
-    }
-  } catch (e) {
-    if (!scope.active()) return;
-    setStatus('Query error: ' + e);
-    hideStatsBar();
-    const message = isBrowserAuthProfile(state.currentProfile) ? browserAuthMessage(e) : String(e);
-    document.getElementById('resultsArea').innerHTML =
-      safeHtml`<div class="p-4 text-ox-red text-sm">${message}</div>`;
-  }
-}
-
-// ══════════════════════════════════════════════════════════════
-// ── STATS BAR (Feature 4) ──
-// ══════════════════════════════════════════════════════════════
-
-function showStatsBar(rowCount, sizeBytes, elapsedMs) {
-  document.getElementById('statRows').textContent = `${rowCount} row${rowCount !== 1 ? 's' : ''}`;
-  document.getElementById('statSize').textContent = formatBytes(sizeBytes);
-
-  let timingClass = 'timing-fast';
-  if (elapsedMs >= 2000) timingClass = 'timing-slow';
-  else if (elapsedMs >= 500) timingClass = 'timing-ok';
-
-  document.getElementById('statTiming').innerHTML =
-    safeHtml`<span class="${timingClass}">${elapsedMs}ms</span>`;
-  document.getElementById('statsBar').classList.remove('hidden');
-}
-
-function hideStatsBar() {
-  document.getElementById('statsBar').classList.add('hidden');
-}
-
-function formatBytes(bytes) {
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-}
-
-// ══════════════════════════════════════════════════════════════
-// ── QUERY HISTORY (Feature 3) ──
-// ══════════════════════════════════════════════════════════════
-
-function addToHistory(tab, params, rowCount, elapsed) {
-  const entry = {
-    ts: new Date(),
-    entitySet: params.entity_set,
-    params: { ...params },
-    rowCount,
-    elapsed,
-    summary: buildParamSummary(params),
-  };
-  tab.queryHistory.unshift(entry);
-  if (tab.queryHistory.length > 20) tab.queryHistory.length = 20;
-  if (!document.getElementById('historyPanel').classList.contains('hidden')) {
-    renderHistoryPanel(tab);
-  }
-}
-
-function buildParamSummary(params) {
-  const parts = [];
-  if (params.select)  parts.push(`$select=${params.select}`);
-  if (params.filter)  parts.push(`$filter=${params.filter}`);
-  if (params.expand)  parts.push(`$expand=${params.expand}`);
-  if (params.orderby) parts.push(`$orderby=${params.orderby}`);
-  if (params.top)     parts.push(`$top=${params.top}`);
-  if (params.skip)    parts.push(`$skip=${params.skip}`);
-  return parts.join(' · ') || '(no params)';
-}
-
-function renderHistoryPanel(tab) {
-  const panel = document.getElementById('historyPanel');
-  if (!tab || tab.queryHistory.length === 0) {
-    panel.innerHTML = '<div class="px-4 py-3 text-[11px] text-ox-dim font-mono">No history yet</div>';
-    return;
-  }
-  let html = '<div class="flex items-center justify-between px-3 py-1 border-b border-ox-border">';
-  html += '<span class="text-[9px] uppercase tracking-widest text-ox-dim font-medium">Query History</span>';
-  html += '<button data-action="clear-history" class="text-[10px] text-ox-dim hover:text-ox-red px-1 transition-colors">clear</button>';
-  html += '</div>';
-  for (let i = 0; i < tab.queryHistory.length; i++) {
-    const h = tab.queryHistory[i];
-    const time = h.ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    html += `<div class="history-item" data-action="replay-history" data-idx="${i}">
-      <span class="text-ox-amber shrink-0">${escapeHtml(h.entitySet)}</span>
-      <span class="text-ox-dim flex-1 truncate">${escapeHtml(h.summary)}</span>
-      <span class="text-ox-dim shrink-0">${h.rowCount}r</span>
-      <span class="text-ox-dim shrink-0">${h.elapsed}ms</span>
-      <span class="text-ox-dim shrink-0">${time}</span>
-    </div>`;
-  }
-  panel.innerHTML = html;
-}
-
-function replayHistory(idx) {
-  const tab = getActiveTab();
-  if (!tab) return;
-  const h = tab.queryHistory[idx];
-  if (!h) return;
-  // Restore entity set and params into query bar
-  if (h.entitySet) {
-    state.currentEntitySet = h.entitySet;
-    tab.entitySet = h.entitySet;
-    document.getElementById('queryEntitySet').textContent = h.entitySet;
-  }
-  document.getElementById('qSelect').value  = h.params.select  || '';
-  document.getElementById('qFilter').value  = h.params.filter  || '';
-  document.getElementById('qExpand').value  = h.params.expand  || '';
-  document.getElementById('qOrderby').value = h.params.orderby || '';
-  document.getElementById('qTop').value     = h.params.top     || '20';
-  document.getElementById('qSkip').value    = h.params.skip    || '';
-  executeQuery(false);
-}
 
 function updateSapViewToggleState() {
   const btn = document.getElementById('btnSapView');
@@ -521,7 +328,7 @@ export function extractRows(data) {
   return null;
 }
 
-function renderResults(data, elapsedMs, params) {
+export function renderResults(data, elapsedMs, params) {
   const rows = extractRows(data);
   if (!rows || rows.length === 0) {
     document.getElementById('resultsArea').innerHTML =
@@ -739,7 +546,7 @@ function showNestedPanel(title, contentHtml) {
   document.body.appendChild(panel);
 }
 
-function renderJson(data) {
+export function renderJson(data) {
   const json = JSON.stringify(data, null, 2);
   document.getElementById('resultsArea').innerHTML =
     safeHtml`<pre class="text-xs font-mono text-ox-text p-4 overflow-auto h-full whitespace-pre leading-relaxed">${json}</pre>`;
