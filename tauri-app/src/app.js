@@ -1,9 +1,18 @@
-// ── Tauri invoke wrapper ──
-// Vendored copy of @tauri-apps/api/core (see scripts/vendor-tauri.cjs).
-// Direct relative import avoids needing an importmap under our locked-down
-// `script-src 'self'` CSP. Re-run `npm run vendor:tauri` after bumping
-// @tauri-apps/api in package.json.
+// ── Module imports ──
+// `invoke` is for the small handful of commands that don't go through
+// `timedInvoke` (auth/profile lifecycle — no spinner / trace correlation
+// needed). Vendored copy of @tauri-apps/api/core (see
+// scripts/vendor-tauri.cjs); direct relative import avoids needing an
+// importmap under the locked-down `script-src 'self'` CSP. Re-run
+// `npm run vendor:tauri` after bumping @tauri-apps/api in package.json.
 import { invoke } from './vendor/tauri-core.js';
+import { state } from './state.js';
+import {
+  tabScope,
+  timedInvoke,
+  applyTraceToTab,
+  updateServicePathBar,
+} from './api.js';
 import { escapeHtml, safeHtml, raw } from './html.js';
 import {
   criticalityDot,
@@ -19,10 +28,6 @@ import { setStatus, setTime, showSpinner, hideSpinner } from './status.js';
 // ── TAB SYSTEM ──
 // Each tab carries its own independent state.
 // ══════════════════════════════════════════════════════════════
-
-let tabs = [];         // array of tab objects
-let activeTabId = null;
-let profileMap = new Map();
 
 function createTab(opts = {}) {
   const id = 'tab_' + Date.now() + '_' + Math.random().toString(36).slice(2);
@@ -49,35 +54,37 @@ function createTab(opts = {}) {
   };
 }
 
-function getTab(id) {
-  return tabs.find(t => t.id === id) || null;
+// Exported temporarily so the api.js wrapper layer can resolve a tab by id
+// without a flat global scope. Future batches lift tab CRUD into tabs.js.
+export function getTab(id) {
+  return state.tabs.find(t => t.id === id) || null;
 }
 
 function getActiveTab() {
-  return getTab(activeTabId);
+  return getTab(state.activeTabId);
 }
 
 function addTab(opts = {}) {
   const tab = createTab(opts);
-  tabs.push(tab);
+  state.tabs.push(tab);
   renderTabBar();
   switchTab(tab.id);
   // If there's an active profile, auto-load services (shows favorites at top)
-  if (currentProfile && cachedServices) {
-    tab.profile = currentProfile;
-    tab.cachedServices = cachedServices;
+  if (state.currentProfile && state.cachedServices) {
+    tab.profile = state.currentProfile;
+    tab.cachedServices = state.cachedServices;
     searchServices('');
   }
   return tab;
 }
 
 function closeTab(id) {
-  if (tabs.length <= 1) return; // keep at least 1
-  const idx = tabs.findIndex(t => t.id === id);
+  if (state.tabs.length <= 1) return; // keep at least 1
+  const idx = state.tabs.findIndex(t => t.id === id);
   if (idx === -1) return;
-  tabs.splice(idx, 1);
-  if (activeTabId === id) {
-    const next = tabs[Math.min(idx, tabs.length - 1)];
+  state.tabs.splice(idx, 1);
+  if (state.activeTabId === id) {
+    const next = state.tabs[Math.min(idx, state.tabs.length - 1)];
     renderTabBar();
     switchTab(next.id);
   } else {
@@ -86,7 +93,7 @@ function closeTab(id) {
 }
 
 function switchTab(id) {
-  activeTabId = id;
+  state.activeTabId = id;
   renderTabBar();
   restoreTabUI();
 }
@@ -97,9 +104,9 @@ function renderTabBar() {
   // Remove all tab elements (not the add button)
   [...bar.querySelectorAll('.tab-item')].forEach(el => el.remove());
 
-  for (const tab of tabs) {
+  for (const tab of state.tabs) {
     const el = document.createElement('div');
-    el.className = 'tab-item' + (tab.id === activeTabId ? ' active' : '');
+    el.className = 'tab-item' + (tab.id === state.activeTabId ? ' active' : '');
     el.dataset.tabId = tab.id;
 
     const titleEl = document.createElement('span');
@@ -113,7 +120,7 @@ function renderTabBar() {
     closeEl.dataset.tabId = tab.id;
 
     el.appendChild(titleEl);
-    if (tabs.length > 1) el.appendChild(closeEl);
+    if (state.tabs.length > 1) el.appendChild(closeEl);
     el.dataset.action = 'switch-tab';
 
     bar.insertBefore(el, addBtn);
@@ -149,8 +156,8 @@ function saveCurrentTabState() {
   tab._sidebarHtml = document.getElementById('entityList').innerHTML;
   tab._serviceInput = document.getElementById('serviceInput').value;
   // Save backing data for copy/expand
-  tab._expandedDataStore = { ...expandedDataStore };
-  tab._lastResultRows = lastResultRows;
+  tab._expandedDataStore = { ...state.expandedDataStore };
+  tab._lastResultRows = state.lastResultRows;
 }
 
 function restoreTabUI() {
@@ -158,18 +165,18 @@ function restoreTabUI() {
   if (!tab) return;
 
   // Sync global convenience vars (used in some legacy fn calls)
-  currentProfile    = tab.profile;
-  currentServicePath = tab.servicePath;
-  currentEntitySet  = tab.entitySet;
-  entitySets        = tab.entitySets;
-  cachedServices    = tab.cachedServices;
-  lastSearchQuery   = tab.lastSearchQuery;
-  expandedDataStore = tab._expandedDataStore || {};
-  lastResultRows = tab._lastResultRows || null;
+  state.currentProfile    = tab.profile;
+  state.currentServicePath = tab.servicePath;
+  state.currentEntitySet  = tab.entitySet;
+  state.entitySets        = tab.entitySets;
+  state.cachedServices    = tab.cachedServices;
+  state.lastSearchQuery   = tab.lastSearchQuery;
+  state.expandedDataStore = tab._expandedDataStore || {};
+  state.lastResultRows = tab._lastResultRows || null;
 
   // Sync profile dropdown
-  document.getElementById('profileSelect').value = currentProfile || '';
-  updateProfileAuthUi(currentProfile);
+  document.getElementById('profileSelect').value = state.currentProfile || '';
+  updateProfileAuthUi(state.currentProfile);
 
   // Service path bar
   updateServicePathBar(tab);
@@ -261,34 +268,15 @@ function reattachSidebarHandlers() {
   // are handled by document-level delegation only — nothing to re-attach.
 }
 
-// ══════════════════════════════════════════════════════════════
-// ── GLOBAL CONVENIENCE STATE (mirrors active tab) ──
-// ══════════════════════════════════════════════════════════════
-
-let currentProfile    = null;
-let currentServicePath = null;
-let currentEntitySet  = null;
-let entitySets        = [];
-let cachedServices    = null;
-let lastSearchQuery   = null;
-let expandedDataStore = {};
-let lastResultRows    = null; // raw result rows for copy operations
-
-// Global SAP-view preference: when enabled, describe panel and results
-// surface typed annotation hints (HeaderInfo, Common.Text, etc.) on top
-// of the raw EDM data. Persisted so the preference survives app restarts.
-let sapViewEnabled = false;
-try { sapViewEnabled = localStorage.getItem('ox_sap_view_enabled') === '1'; } catch { /* ignore */ }
-
 function getProfileMeta(profileName) {
-  return profileName ? (profileMap.get(profileName) || null) : null;
+  return profileName ? (state.profileMap.get(profileName) || null) : null;
 }
 
-function isBrowserAuthProfile(profileName = currentProfile) {
+function isBrowserAuthProfile(profileName = state.currentProfile) {
   return getProfileMeta(profileName)?.auth_mode === 'browser';
 }
 
-function updateProfileAuthUi(profileName = currentProfile) {
+function updateProfileAuthUi(profileName = state.currentProfile) {
   const signInBtn  = document.getElementById('btnProfileSignIn');
   const signOutBtn = document.getElementById('btnProfileSignOut');
   const removeBtn  = document.getElementById('btnRemoveProfile');
@@ -311,13 +299,13 @@ function updateProfileAuthUi(profileName = currentProfile) {
 }
 
 async function signOutCurrentProfile() {
-  if (!currentProfile) { setStatus('Select a profile first'); return; }
-  if (!isBrowserAuthProfile(currentProfile)) {
+  if (!state.currentProfile) { setStatus('Select a profile first'); return; }
+  if (!isBrowserAuthProfile(state.currentProfile)) {
     setStatus('Sign Out only applies to browser SSO profiles');
     return;
   }
   try {
-    const msg = await invoke('sign_out_profile', { profileName: currentProfile });
+    const msg = await invoke('sign_out_profile', { profileName: state.currentProfile });
     clearTraceState(getActiveTab());
     setStatus(msg);
   } catch (e) {
@@ -326,11 +314,11 @@ async function signOutCurrentProfile() {
 }
 
 async function removeCurrentProfile() {
-  if (!currentProfile) {
+  if (!state.currentProfile) {
     setStatus('Select a profile first');
     return;
   }
-  const name = currentProfile;
+  const name = state.currentProfile;
   if (!confirm(`Remove profile '${name}'?\n\nThis will also delete its password from the OS keyring.`)) {
     return;
   }
@@ -339,8 +327,8 @@ async function removeCurrentProfile() {
     setStatus(msg);
     clearTraceState(getActiveTab());
     // Reset UI state
-    currentProfile = null;
-    cachedServices = null;
+    state.currentProfile = null;
+    state.cachedServices = null;
     document.getElementById('profileSelect').value = '';
     document.getElementById('entityList').innerHTML =
       '<div class="px-4 py-8 text-center"><div class="text-ox-dim text-xs">Select a profile</div></div>';
@@ -359,102 +347,23 @@ function browserAuthMessage(err) {
 }
 
 async function signInCurrentProfile() {
-  if (!currentProfile) {
+  if (!state.currentProfile) {
     setStatus('Select a profile first');
     return;
   }
-  if (!isBrowserAuthProfile(currentProfile)) {
+  if (!isBrowserAuthProfile(state.currentProfile)) {
     setStatus('The selected profile does not use browser SSO');
     return;
   }
 
-  setStatus(`Signing in to ${currentProfile}...`);
+  setStatus(`Signing in to ${state.currentProfile}...`);
   try {
-    const msg = await timedInvoke('browser_sign_in_profile', { profileName: currentProfile });
+    const msg = await timedInvoke('browser_sign_in_profile', { profileName: state.currentProfile });
     setStatus(msg);
   } catch (e) {
     setStatus('Sign-in failed: ' + e);
     document.getElementById('resultsArea').innerHTML =
       safeHtml`<div class="p-4 text-ox-red text-sm">${String(e)}</div>`;
-  }
-}
-
-// Capture the tab that initiated an async invoke. SAP requests can take
-// seconds; if the user switches tabs mid-flight, DOM writes intended for
-// the origin tab will land in whichever tab happens to be active when the
-// await resumes. Callers bail out via `if (!scope.active()) return;` and
-// re-trigger the action (via the tab's cached state) when the user comes back.
-function tabScope() {
-  const originTabId = activeTabId;
-  return {
-    originTabId,
-    active: () => activeTabId === originTabId,
-  };
-}
-
-async function timedInvoke(cmd, args) {
-  showSpinner();
-  const start = performance.now();
-  const originTabId = activeTabId;
-  try {
-    const result = await invoke(cmd, args);
-    setTime(Math.round(performance.now() - start));
-    // Commands that touch the network return { data, trace }. Legacy commands
-    // still return their value directly.
-    if (result && typeof result === 'object' && 'data' in result && Array.isArray(result.trace)) {
-      applyTraceToTab(originTabId, result.trace);
-      return result.data;
-    }
-    return result;
-  } catch (err) {
-    // Network commands serialize errors as { message, trace } — apply the trace
-    // and re-throw the plain message so callers keep the string-based API.
-    if (err && typeof err === 'object' && 'message' in err && Array.isArray(err.trace)) {
-      applyTraceToTab(originTabId, err.trace);
-      throw err.message;
-    }
-    throw err;
-  } finally {
-    hideSpinner();
-  }
-}
-
-function applyTraceToTab(tabId, trace) {
-  const tab = getTab(tabId);
-  if (!tab) return;
-  tab.httpTraceEntries = Array.isArray(trace) ? trace : [];
-  if (!tab.httpTraceEntries.some(entry => entry.id === tab.selectedTraceId)) {
-    tab.selectedTraceId = null;
-  }
-  ensureTraceSelection(tab);
-  if (tab.id === activeTabId) {
-    renderTraceSummary(tab);
-    if (tab._traceVisible) {
-      renderTraceInspector(tab);
-    }
-  }
-}
-
-// ══════════════════════════════════════════════════════════════
-// ── SERVICE PATH BAR (Feature 6) ──
-// ══════════════════════════════════════════════════════════════
-
-function updateServicePathBar(tab) {
-  const bar = document.getElementById('servicePathBar');
-  if (tab && tab.servicePath) {
-    document.getElementById('servicePathText').textContent = tab.servicePath;
-    const verEl = document.getElementById('servicePathVersion');
-    if (tab.serviceVersion) {
-      verEl.textContent = tab.serviceVersion;
-      verEl.className = 'text-[10px] px-1 py-px rounded-sm font-mono ' +
-        (tab.serviceVersion === 'V4' ? 'badge-v4' : 'badge-v2');
-      verEl.style.display = '';
-    } else {
-      verEl.style.display = 'none';
-    }
-    bar.classList.add('visible');
-  } else {
-    bar.classList.remove('visible');
   }
 }
 
@@ -498,7 +407,7 @@ function isFavorite(profileName, svcName) {
 
 function toggleFavorite(svc, starEl) {
   const tab = getActiveTab();
-  const profile = tab ? tab.profile : currentProfile;
+  const profile = tab ? tab.profile : state.currentProfile;
   if (!profile) return;
   const favs = getFavorites(profile);
   const idx = favIndex(favs, svc.technical_name);
@@ -530,7 +439,7 @@ function toggleFavorite(svc, starEl) {
 async function loadProfiles() {
   try {
     const profiles = await invoke('get_profiles');
-    profileMap = new Map(profiles.map(p => [p.name, p]));
+    state.profileMap = new Map(profiles.map(p => [p.name, p]));
     const select = document.getElementById('profileSelect');
     select.innerHTML = '<option value="">Select profile...</option>';
     for (const p of profiles) {
@@ -539,7 +448,7 @@ async function loadProfiles() {
       opt.textContent = `${p.name} — ${p.base_url.replace('https://', '')}`;
       select.appendChild(opt);
     }
-    updateProfileAuthUi(select.value || currentProfile);
+    updateProfileAuthUi(select.value || state.currentProfile);
   } catch (e) {
     setStatus('Error loading profiles: ' + e);
   }
@@ -574,12 +483,12 @@ document.getElementById('profileSelect').addEventListener('change', (e) => {
   tab.annotationSummary = null;
 
   // Sync globals
-  currentProfile = profile;
-  currentServicePath = null;
-  currentEntitySet = null;
-  entitySets = [];
-  cachedServices = null;
-  lastSearchQuery = null;
+  state.currentProfile = profile;
+  state.currentServicePath = null;
+  state.currentEntitySet = null;
+  state.entitySets = [];
+  state.cachedServices = null;
+  state.lastSearchQuery = null;
 
   document.getElementById('entityList').innerHTML =
     '<div class="px-4 py-8 text-center"><div class="text-ox-dim text-xs">Click Search to browse services</div></div>';
@@ -628,7 +537,7 @@ function resetResultsArea() {
 
 async function loadService() {
   const input = document.getElementById('serviceInput').value.trim();
-  if (!currentProfile) { setStatus('Select a profile first'); return; }
+  if (!state.currentProfile) { setStatus('Select a profile first'); return; }
   // Only treat as a literal path when it starts with `/sap/`. SAP catalog
   // technical names in a customer namespace (e.g. `/NAMESPACE/SERVICE_NAME`)
   // also start with `/` but are NOT service paths — they need catalog
@@ -647,7 +556,7 @@ function isServicePath(s) {
 }
 
 async function searchServices(query) {
-  if (!currentProfile) return;
+  if (!state.currentProfile) return;
   const tab = getActiveTab();
 
   if (tab && tab.cachedServices && tab.lastSearchQuery === (query || '')) {
@@ -659,27 +568,27 @@ async function searchServices(query) {
   const scope = tabScope();
 
   try {
-    if (!cachedServices) {
+    if (!state.cachedServices) {
       const services = await timedInvoke('get_services', {
-        profileName: currentProfile,
+        profileName: state.currentProfile,
         search: null,
         v4Only: false,
       });
       if (!scope.active()) return;
-      cachedServices = services;
+      state.cachedServices = services;
       if (tab) tab.cachedServices = services;
     }
 
-    lastSearchQuery = query || '';
-    if (tab) tab.lastSearchQuery = lastSearchQuery;
+    state.lastSearchQuery = query || '';
+    if (tab) tab.lastSearchQuery = state.lastSearchQuery;
 
-    const filtered = filterServices(cachedServices, query);
+    const filtered = filterServices(state.cachedServices, query);
     renderServiceList(filtered);
     setStatus(`${filtered.length} service(s)${query ? ` matching '${query}'` : ''}`);
   } catch (e) {
     if (!scope.active()) return;
     setStatus('Error: ' + e);
-    const message = isBrowserAuthProfile(currentProfile) ? browserAuthMessage(e) : String(e);
+    const message = isBrowserAuthProfile(state.currentProfile) ? browserAuthMessage(e) : String(e);
     document.getElementById('resultsArea').innerHTML =
       safeHtml`<div class="p-4 text-ox-red text-sm">${message}</div>`;
   }
@@ -743,11 +652,11 @@ function renderFavoritesOnlySidebar(profile) {
 
 function renderServiceList(services, saveState = true) {
   const tab = getActiveTab();
-  const profile = tab ? tab.profile : currentProfile;
+  const profile = tab ? tab.profile : state.currentProfile;
 
   if (saveState) {
-    currentServicePath = null;
-    currentEntitySet = null;
+    state.currentServicePath = null;
+    state.currentEntitySet = null;
     if (tab) { tab.servicePath = null; tab.entitySet = null; }
   }
 
@@ -822,7 +731,7 @@ async function pickService(svc) {
 }
 
 async function resolveAndLoadService(input, versionHint) {
-  if (!currentProfile) return;
+  if (!state.currentProfile) return;
   setStatus(`Resolving '${input}'...`);
   const scope = tabScope();
 
@@ -832,13 +741,13 @@ async function resolveAndLoadService(input, versionHint) {
       path = input;
     } else {
       path = await timedInvoke('resolve_service', {
-        profileName: currentProfile,
+        profileName: state.currentProfile,
         service: input,
       });
       if (!scope.active()) return;
     }
 
-    currentServicePath = path;
+    state.currentServicePath = path;
     const tab = getActiveTab();
     if (tab) {
       tab.servicePath = path;
@@ -850,15 +759,15 @@ async function resolveAndLoadService(input, versionHint) {
 
     setStatus(`Loading entities...`);
     const response = await timedInvoke('get_entities', {
-      profileName: currentProfile,
-      servicePath: currentServicePath,
+      profileName: state.currentProfile,
+      servicePath: state.currentServicePath,
     });
     if (!scope.active()) return;
 
     const entities = response.entity_sets || [];
     const summary = response.annotation_summary || { total: 0, by_namespace: {} };
 
-    entitySets = entities;
+    state.entitySets = entities;
     if (tab) {
       tab.entitySets = entities;
       tab.annotationSummary = summary;
@@ -871,7 +780,7 @@ async function resolveAndLoadService(input, versionHint) {
   } catch (e) {
     if (!scope.active()) return;
     setStatus('Error: ' + e);
-    const message = isBrowserAuthProfile(currentProfile) ? browserAuthMessage(e) : String(e);
+    const message = isBrowserAuthProfile(state.currentProfile) ? browserAuthMessage(e) : String(e);
     document.getElementById('resultsArea').innerHTML =
       safeHtml`<div class="p-4 text-ox-red text-sm">${message}</div>`;
   }
@@ -920,7 +829,7 @@ async function selectEntity(entitySetName, element) {
   document.querySelectorAll('.sidebar-item').forEach(el => el.classList.remove('active'));
   if (element) element.classList.add('active');
 
-  currentEntitySet = entitySetName;
+  state.currentEntitySet = entitySetName;
   const tab = getActiveTab();
   if (tab) {
     tab.entitySet = entitySetName;
@@ -944,8 +853,8 @@ async function selectEntity(entitySetName, element) {
   const scope = tabScope();
   try {
     const info = await timedInvoke('describe_entity', {
-      profileName: currentProfile,
-      servicePath: currentServicePath,
+      profileName: state.currentProfile,
+      servicePath: state.currentServicePath,
       entitySet: entitySetName,
     });
     if (!scope.active()) return;
@@ -1133,7 +1042,7 @@ function renderSelectionFieldsBar(info) {
   const bar = document.getElementById('selectionFieldsBar');
   const host = document.getElementById('selectionFieldsChips');
   if (!bar || !host) return;
-  const fields = sapViewEnabled && info && Array.isArray(info.selection_fields)
+  const fields = state.sapViewEnabled && info && Array.isArray(info.selection_fields)
     ? info.selection_fields
     : [];
   if (fields.length === 0) {
@@ -1348,7 +1257,7 @@ const _vlResolveCache = new Map();
 
 // Known variants for the active property, in the order they appear in
 // the modal's pill bar. Two kinds:
-//   { kind: 'inline', valueList, servicePath: currentServicePath, label }
+//   { kind: 'inline', valueList, servicePath: state.currentServicePath, label }
 //   { kind: 'reference', url, label, resolved?: { value_list, resolved_service_path } }
 // Reference variants are resolved lazily the first time they're
 // selected; the result is memoized both here AND in the long-lived
@@ -1384,7 +1293,7 @@ async function openValueListPicker(propertyName) {
     _vlVariants.push({
       kind: 'inline',
       valueList: vl,
-      servicePath: currentServicePath,
+      servicePath: state.currentServicePath,
       label: vl.qualifier || vl.label || vl.collection_path || 'default',
     });
   }
@@ -1469,8 +1378,8 @@ async function selectVariant(index) {
     status.textContent = 'Resolving…';
     try {
       const resolved = await timedInvoke('resolve_value_list_reference', {
-        profileName: currentProfile,
-        servicePath: currentServicePath,
+        profileName: state.currentProfile,
+        servicePath: state.currentServicePath,
         referenceUrl: variant.url,
         localProperty: prop.name,
       });
@@ -1625,7 +1534,7 @@ async function fetchValueListRows() {
       top,
     };
     const data = await timedInvoke('run_query', {
-      profileName: currentProfile,
+      profileName: state.currentProfile,
       servicePath,
       params,
     });
@@ -1720,7 +1629,7 @@ function pickValueListRow(rowIndex) {
 function renderFioriColsButton(info) {
   const btn = document.getElementById('btnFioriCols');
   if (!btn) return;
-  const active = sapViewEnabled && info;
+  const active = state.sapViewEnabled && info;
   const fields = active && Array.isArray(info.line_item) ? info.line_item : [];
   const propNames = new Set(
     Array.isArray(info && info.properties) ? info.properties.map(p => p.name) : []
@@ -1779,7 +1688,7 @@ function renderFioriColsButton(info) {
 function renderFioriFilterButton(info) {
   const btn = document.getElementById('btnFioriFilter');
   if (!btn) return;
-  const variants = sapViewEnabled && info && Array.isArray(info.selection_variants)
+  const variants = state.sapViewEnabled && info && Array.isArray(info.selection_variants)
     ? info.selection_variants
     : [];
   if (variants.length === 0) {
@@ -2027,7 +1936,7 @@ function renderDescribe(info) {
   // singular/plural so the entity reads as "WarehouseOrderType · Warehouse Order / Warehouse Orders".
   const titleEl = document.getElementById('entityTitle');
   titleEl.textContent = info.name;
-  if (sapViewEnabled && info.header_info) {
+  if (state.sapViewEnabled && info.header_info) {
     const hi = info.header_info;
     const parts = [];
     if (hi.type_name) parts.push(hi.type_name);
@@ -2051,28 +1960,28 @@ function renderDescribe(info) {
     // SAP view: surface the text-companion property ("↦ TextProp") next to
     // the property name. The arrow hints that this column has an associated
     // description field that Fiori renders together with it.
-    const textHint = sapViewEnabled && p.text_path
+    const textHint = state.sapViewEnabled && p.text_path
       ? ` <span class="text-ox-blue text-[10px]" title="Common.Text → ${escapeHtml(p.text_path)}">&#x21A6; ${escapeHtml(p.text_path)}</span>`
       : '';
-    const currencyHint = sapViewEnabled && p.iso_currency_path
+    const currencyHint = state.sapViewEnabled && p.iso_currency_path
       ? ` <span class="text-ox-green text-[10px]" title="Measures.ISOCurrency → ${escapeHtml(p.iso_currency_path)}">&curren; ${escapeHtml(p.iso_currency_path)}</span>`
       : '';
-    const unitHint = sapViewEnabled && p.unit_path && !p.iso_currency_path
+    const unitHint = state.sapViewEnabled && p.unit_path && !p.iso_currency_path
       ? ` <span class="text-ox-green text-[10px]" title="Measures.Unit / sap:unit → ${escapeHtml(p.unit_path)}">&#8593; ${escapeHtml(p.unit_path)}</span>`
       : '';
-    const titleHint = sapViewEnabled && info.header_info && info.header_info.title_path === p.name
+    const titleHint = state.sapViewEnabled && info.header_info && info.header_info.title_path === p.name
       ? ' <span class="text-ox-amber text-[10px]" title="Used as UI.HeaderInfo.Title">title</span>'
       : '';
-    const semKeyHint = sapViewEnabled && Array.isArray(info.semantic_keys) && info.semantic_keys.includes(p.name)
+    const semKeyHint = state.sapViewEnabled && Array.isArray(info.semantic_keys) && info.semantic_keys.includes(p.name)
       ? ' <span class="text-ox-amber text-[10px]" title="Common.SemanticKey — business-key property (vs the technical primary key)">biz key</span>'
       : '';
-    const flagHints = sapViewEnabled ? propertyFlagHints(p) : '';
-    const critHint = sapViewEnabled ? criticalityHint(p) : '';
-    const vlHint = valueListHint(p, sapViewEnabled);
+    const flagHints = state.sapViewEnabled ? propertyFlagHints(p) : '';
+    const critHint = state.sapViewEnabled ? criticalityHint(p) : '';
+    const vlHint = valueListHint(p, state.sapViewEnabled);
     // Dim the row when SAP View is on and Fiori would hide this
     // property (UI.Hidden or FieldControl=Hidden). Row stays visible
     // and clickable — the muted text just makes it visually recede.
-    const hiddenRow = sapViewEnabled && (p.hidden || (p.field_control && p.field_control.kind === 'hidden'));
+    const hiddenRow = state.sapViewEnabled && (p.hidden || (p.field_control && p.field_control.kind === 'hidden'));
     const rowCls = hiddenRow ? 'opacity-60' : '';
     const nameCls = hiddenRow ? 'text-ox-dim' : 'text-ox-text';
     html += `<tr class="hover:bg-ox-amberGlow cursor-pointer transition-colors ${rowCls}" data-action="select" data-field="${escapeHtml(p.name)}">`;
@@ -2102,7 +2011,7 @@ function renderDescribe(info) {
   }
 
   html += '</div>';
-  if (sapViewEnabled) {
+  if (state.sapViewEnabled) {
     html += renderFioriReadinessPanel(info);
   }
   document.getElementById('describeContent').innerHTML = html;
@@ -2139,7 +2048,7 @@ function addToExpand(navName) {
 // ══════════════════════════════════════════════════════════════
 
 function buildODataUrl(params) {
-  if (!currentServicePath || !params) return '';
+  if (!state.currentServicePath || !params) return '';
   const parts = [];
   if (params.select)  parts.push(`$select=${encodeURIComponent(params.select)}`);
   if (params.filter)  parts.push(`$filter=${encodeURIComponent(params.filter)}`);
@@ -2148,7 +2057,7 @@ function buildODataUrl(params) {
   if (params.top)     parts.push(`$top=${params.top}`);
   if (params.skip)    parts.push(`$skip=${params.skip}`);
   const qs = parts.length ? '?' + parts.join('&') : '';
-  return `${currentServicePath}/${params.entity_set}${qs}`;
+  return `${state.currentServicePath}/${params.entity_set}${qs}`;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -2156,13 +2065,13 @@ function buildODataUrl(params) {
 // ══════════════════════════════════════════════════════════════
 
 async function executeQuery(asJson = false) {
-  if (!currentProfile || !currentServicePath || !currentEntitySet) {
+  if (!state.currentProfile || !state.currentServicePath || !state.currentEntitySet) {
     setStatus('Select a profile, service, and entity set first');
     return;
   }
 
   const params = {
-    entity_set: currentEntitySet,
+    entity_set: state.currentEntitySet,
     select:  document.getElementById('qSelect').value  || null,
     filter:  document.getElementById('qFilter').value  || null,
     expand:  document.getElementById('qExpand').value  || null,
@@ -2178,10 +2087,10 @@ async function executeQuery(asJson = false) {
   // servers are often more permissive than the metadata claims, so the
   // server's response is the final word. We just make the context
   // visible before hitting send.
-  if (sapViewEnabled) {
+  if (state.sapViewEnabled) {
     const tab = getActiveTab();
     const info = tab && tab._lastDescribeInfo;
-    if (info && info.name && currentEntitySet === document.getElementById('queryEntitySet').textContent) {
+    if (info && info.name && state.currentEntitySet === document.getElementById('queryEntitySet').textContent) {
       showSapViewWarnings(validateQueryRestrictions(params, info));
     } else {
       showSapViewWarnings([]);
@@ -2190,14 +2099,14 @@ async function executeQuery(asJson = false) {
     showSapViewWarnings([]);
   }
 
-  setStatus(`Querying ${currentEntitySet}...`);
+  setStatus(`Querying ${state.currentEntitySet}...`);
   const queryStart = performance.now();
   const scope = tabScope();
 
   try {
     const data = await timedInvoke('run_query', {
-      profileName: currentProfile,
-      servicePath: currentServicePath,
+      profileName: state.currentProfile,
+      servicePath: state.currentServicePath,
       params,
     });
     if (!scope.active()) return;
@@ -2222,7 +2131,7 @@ async function executeQuery(asJson = false) {
     if (!scope.active()) return;
     setStatus('Query error: ' + e);
     hideStatsBar();
-    const message = isBrowserAuthProfile(currentProfile) ? browserAuthMessage(e) : String(e);
+    const message = isBrowserAuthProfile(state.currentProfile) ? browserAuthMessage(e) : String(e);
     document.getElementById('resultsArea').innerHTML =
       safeHtml`<div class="p-4 text-ox-red text-sm">${message}</div>`;
   }
@@ -2317,7 +2226,7 @@ function replayHistory(idx) {
   if (!h) return;
   // Restore entity set and params into query bar
   if (h.entitySet) {
-    currentEntitySet = h.entitySet;
+    state.currentEntitySet = h.entitySet;
     tab.entitySet = h.entitySet;
     document.getElementById('queryEntitySet').textContent = h.entitySet;
   }
@@ -2339,13 +2248,13 @@ function clearTraceState(tab = getActiveTab()) {
   tab.httpTraceEntries = [];
   tab.selectedTraceId = null;
   tab._traceVisible = false;
-  if (tab.id === activeTabId) {
+  if (tab.id === state.activeTabId) {
     document.getElementById('traceInspectorPanel').classList.add('hidden');
     renderTraceSummary(tab);
   }
 }
 
-function ensureTraceSelection(tab) {
+export function ensureTraceSelection(tab) {
   if (!tab) return null;
   if (
     tab.selectedTraceId &&
@@ -2366,7 +2275,7 @@ function getSelectedTraceEntry(tab = getActiveTab()) {
   return tab.httpTraceEntries.find(entry => entry.id === selectedId) || null;
 }
 
-function renderTraceSummary(tab = getActiveTab()) {
+export function renderTraceSummary(tab = getActiveTab()) {
   const count = tab?.httpTraceEntries?.length || 0;
   document.getElementById('traceSummary').textContent = count
     ? `${count} request${count === 1 ? '' : 's'}`
@@ -2547,7 +2456,7 @@ function renderTraceDetail(tab) {
   detail.innerHTML = html;
 }
 
-function renderTraceInspector(tab = getActiveTab()) {
+export function renderTraceInspector(tab = getActiveTab()) {
   renderTraceSummary(tab);
   renderTraceList(tab);
   renderTraceDetail(tab);
@@ -2590,10 +2499,10 @@ function updateSapViewToggleState() {
   const btn = document.getElementById('btnSapView');
   const chev = document.getElementById('sapViewChevron');
   if (!btn || !chev) return;
-  chev.innerHTML = sapViewEnabled ? '&#x25BE;' : '&#x25B4;';
+  chev.innerHTML = state.sapViewEnabled ? '&#x25BE;' : '&#x25B4;';
   // Off state = dim amber (primed but inactive). On state = full amber
   // with a subtle glow so it reads clearly as "engaged".
-  if (sapViewEnabled) {
+  if (state.sapViewEnabled) {
     btn.classList.add('text-ox-amber', 'border-ox-amber', 'bg-ox-amberGlow');
     btn.classList.remove('text-ox-amberDim', 'border-ox-amberDim/60');
   } else {
@@ -2603,8 +2512,8 @@ function updateSapViewToggleState() {
 }
 
 function toggleSapView() {
-  sapViewEnabled = !sapViewEnabled;
-  try { localStorage.setItem('ox_sap_view_enabled', sapViewEnabled ? '1' : '0'); } catch { /* ignore */ }
+  state.sapViewEnabled = !state.sapViewEnabled;
+  try { localStorage.setItem('ox_sap_view_enabled', state.sapViewEnabled ? '1' : '0'); } catch { /* ignore */ }
   updateSapViewToggleState();
   // Re-render describe panel in place if the active tab has one up.
   // renderDescribe also refreshes the selection-fields chip bar.
@@ -2618,7 +2527,7 @@ function toggleSapView() {
     renderFioriFilterButton(null);
   }
   // Clear any lingering warnings from the previous mode.
-  if (!sapViewEnabled) showSapViewWarnings([]);
+  if (!state.sapViewEnabled) showSapViewWarnings([]);
 }
 
 function toggleTraceInspector() {
@@ -2683,19 +2592,19 @@ async function openAnnotationInspector() {
   const search = document.getElementById('aiSearch');
   const results = document.getElementById('aiResults');
   if (!modal) return;
-  if (!currentProfile || !currentServicePath) return;
+  if (!state.currentProfile || !state.currentServicePath) return;
   modal.classList.remove('hidden');
-  subtitle.textContent = currentServicePath;
+  subtitle.textContent = state.currentServicePath;
   search.value = '';
   _aiActiveNamespaces = new Set();
-  const cacheKey = `${currentProfile}::${currentServicePath}`;
+  const cacheKey = `${state.currentProfile}::${state.currentServicePath}`;
   let annotations = _aiCache.get(cacheKey);
   if (!annotations) {
     results.innerHTML = '<div class="p-4 text-ox-dim text-[11px]">Loading annotations…</div>';
     try {
       annotations = await timedInvoke('get_annotations', {
-        profileName: currentProfile,
-        servicePath: currentServicePath,
+        profileName: state.currentProfile,
+        servicePath: state.currentServicePath,
       });
       _aiCache.set(cacheKey, annotations);
     } catch (e) {
@@ -2840,8 +2749,8 @@ function renderResults(data, elapsedMs, params) {
     return;
   }
 
-  expandedDataStore = {};
-  lastResultRows = rows;
+  state.expandedDataStore = {};
+  state.lastResultRows = rows;
   const first = rows[0];
 
   const scalarCols = [];
@@ -2862,7 +2771,7 @@ function renderResults(data, elapsedMs, params) {
   // into their ID column.
   const tab = getActiveTab();
   const info = tab && tab._lastDescribeInfo;
-  const sapShape = sapViewEnabled && info && Array.isArray(info.properties);
+  const sapShape = state.sapViewEnabled && info && Array.isArray(info.properties);
   const propByName = sapShape ? new Map(info.properties.map(p => [p.name, p])) : null;
   // Text-companion columns that will be folded into their ID column's
   // cell — we skip rendering them as standalone columns when the
@@ -2934,12 +2843,12 @@ function renderResults(data, elapsedMs, params) {
         html += `<td class="px-3 py-1 text-ox-dim">—</td>`;
       } else if (Array.isArray(val)) {
         const storeKey = `r${i}_${col}`;
-        expandedDataStore[storeKey] = val;
+        state.expandedDataStore[storeKey] = val;
         const count = val.length;
         html += `<td class="px-3 py-1"><span class="expand-badge text-[10px] px-1.5 py-0.5 rounded-sm font-mono inline-block" data-action="nested" data-key="${storeKey}" data-col="${escapeHtml(col)}">${count} item${count !== 1 ? 's' : ''}</span></td>`;
       } else if (typeof val === 'object') {
         const storeKey = `r${i}_${col}`;
-        expandedDataStore[storeKey] = val;
+        state.expandedDataStore[storeKey] = val;
         html += `<td class="px-3 py-1"><span class="expand-badge text-[10px] px-1.5 py-0.5 rounded-sm font-mono inline-block" data-action="nested" data-key="${storeKey}" data-col="${escapeHtml(col)}">object</span></td>`;
       } else {
         const text = String(val);
@@ -2974,7 +2883,7 @@ function renderResults(data, elapsedMs, params) {
 
     // Row copy button (Feature 5)
     const storeKey = `row_${i}`;
-    expandedDataStore[storeKey] = row;
+    state.expandedDataStore[storeKey] = row;
     html += `<td class="px-2 py-1">`;
     html += `<button class="copy-btn row-copy-btn" data-action="copy-row" data-key="${storeKey}" title="Copy row as JSON">`;
     html += `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
@@ -2985,13 +2894,13 @@ function renderResults(data, elapsedMs, params) {
   html += '</tbody></table></div>';
   document.getElementById('resultsArea').innerHTML = html;
 
-  // lastResultRows already set above for copy operations
+  // state.lastResultRows already set above for copy operations
 
   setStatus(`${rows.length} row(s)${nestedCols.length ? ' — click badges to view expanded data' : ''}`);
 }
 
 function showNestedData(storeKey, colName) {
-  const data = expandedDataStore[storeKey];
+  const data = state.expandedDataStore[storeKey];
   if (!data) return;
 
   const rows = Array.isArray(data) ? data : [data];
@@ -3069,7 +2978,7 @@ async function copyToClipboard(text, label) {
 }
 
 function copyColumnValues(colName) {
-  const rows = lastResultRows || [];
+  const rows = state.lastResultRows || [];
   const values = rows.map(r => {
     const v = r[colName];
     return (v === null || v === undefined) ? '' : String(v);
@@ -3078,7 +2987,7 @@ function copyColumnValues(colName) {
 }
 
 function copyRowAsJson(storeKey) {
-  const row = expandedDataStore[storeKey];
+  const row = state.expandedDataStore[storeKey];
   if (!row) return;
   const json = JSON.stringify(row, null, 2);
   copyToClipboard(json, 'row as JSON');
@@ -3086,7 +2995,7 @@ function copyRowAsJson(storeKey) {
 
 function copyODataUrl() {
   const params = {
-    entity_set: currentEntitySet,
+    entity_set: state.currentEntitySet,
     select:  document.getElementById('qSelect').value  || null,
     filter:  document.getElementById('qFilter').value  || null,
     expand:  document.getElementById('qExpand').value  || null,
@@ -3379,7 +3288,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('btnAddTab').addEventListener('click', () => {
     saveCurrentTabState();
-    addTab({ title: 'New Tab', profile: currentProfile });
+    addTab({ title: 'New Tab', profile: state.currentProfile });
   });
   document.getElementById('btnModalClose').addEventListener('click', hideAddProfileModal);
   document.getElementById('btnCancel').addEventListener('click', hideAddProfileModal);
@@ -3516,7 +3425,7 @@ document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('serviceInput').value = '';
       const tab = getActiveTab();
       if (tab) tab._serviceInput = '';
-      searchServices(lastSearchQuery === '' ? '' : lastSearchQuery);
+      searchServices(state.lastSearchQuery === '' ? '' : state.lastSearchQuery);
     } else if (action === 'pick-service') {
       try {
         const svc = JSON.parse(el.dataset.svc || '{}');
