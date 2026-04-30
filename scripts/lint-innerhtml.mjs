@@ -35,13 +35,16 @@ const TARGETS = [
   'tauri-app/src/app.js',
   'tauri-app/src/auth.js',
   'tauri-app/src/favorites.js',
+  'tauri-app/src/fiori.js',
   'tauri-app/src/format.js',
   'tauri-app/src/html.js',
   'tauri-app/src/index.html',
+  'tauri-app/src/query.js',
   'tauri-app/src/services.js',
   'tauri-app/src/state.js',
   'tauri-app/src/status.js',
   'tauri-app/src/tabs.js',
+  'tauri-app/src/valueList.js',
 ];
 
 const RE = /\.innerHTML\s*=\s*`/g;
