@@ -14,14 +14,15 @@
 // modules are split out and `restoreTabUI`'s sites have natural homes;
 // only then is it safe to lift.
 //
-// Two named imports come from app.js (circular with this module): the
-// orchestrator `restoreTabUI`, and `searchServices` which `addTab`
-// calls when a profile is already active. ESM resolves the circle
-// because the bindings are only referenced inside function bodies, not
-// at top-level evaluation.
+// Two named imports cross module boundaries: `restoreTabUI` from
+// app.js (still circular until the rest of the orchestration splits
+// out), and `searchServices` from services.js. ESM resolves the
+// app.js circle because the binding is only referenced inside a
+// function body, not at top-level evaluation.
 
 import { state } from './state.js';
-import { restoreTabUI, searchServices } from './app.js';
+import { restoreTabUI } from './app.js';
+import { searchServices } from './services.js';
 
 export function createTab(opts = {}) {
   const id = 'tab_' + Date.now() + '_' + Math.random().toString(36).slice(2);
