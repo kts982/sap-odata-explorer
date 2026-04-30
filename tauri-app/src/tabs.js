@@ -14,7 +14,7 @@
 // resolves the bindings lazily.
 
 import { state } from './state.js';
-import { searchServices, resetResultsArea } from './services.js';
+import { resetResultsArea } from './services.js';
 import { updateProfileAuthUi } from './auth.js';
 import { updateServicePathBar } from './api.js';
 import { renderHistoryPanel } from './history.js';
@@ -60,16 +60,19 @@ export function getActiveTab() {
 }
 
 export function addTab(opts = {}) {
+  // New tabs land in the "Select profile..." default — no inherit
+  // from the active tab. Same mental model as opening a new browser
+  // tab: a blank canvas, the user picks a profile per tab. The
+  // earlier inherit attempt was preexisting dead code (the order of
+  // restoreTabUI's state writes vs. the inherit guard meant it never
+  // fired) and "fixing" it surfaced a second gap — favorites-only
+  // sidebar only renders on a real profile-select event, not on a
+  // programmatic dropdown set during restoreTabUI. Cleaner to just
+  // not inherit.
   const tab = createTab(opts);
   state.tabs.push(tab);
   renderTabBar();
   switchTab(tab.id);
-  // If there's an active profile, auto-load services (shows favorites at top)
-  if (state.currentProfile && state.cachedServices) {
-    tab.profile = state.currentProfile;
-    tab.cachedServices = state.cachedServices;
-    searchServices('');
-  }
   return tab;
 }
 

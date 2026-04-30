@@ -311,7 +311,13 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('btnAddTab').addEventListener('click', () => {
     saveCurrentTabState();
-    addTab({ title: 'New Tab', profile: state.currentProfile });
+    // No profile inherit — new tab lands in "Select profile..." default,
+    // same mental model as a fresh browser tab. The earlier inherit
+    // attempt (both here and in addTab) was incomplete: it set the
+    // profile but couldn't render the favorites-only sidebar without
+    // a real profile-select event firing, leaving the user with a
+    // selected dropdown and an empty sidebar.
+    addTab({ title: 'New Tab' });
   });
   document.getElementById('btnModalClose').addEventListener('click', hideAddProfileModal);
   document.getElementById('btnCancel').addEventListener('click', hideAddProfileModal);
