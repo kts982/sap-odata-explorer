@@ -67,6 +67,18 @@ import {
   fetchValueListRows,
   pickValueListRow,
 } from './valueList.js';
+import {
+  renderTraceSummary,
+  renderTraceInspector,
+  renderTraceDetail,
+  updateTraceToggleState,
+  toggleTraceInspector,
+  hideTraceInspector,
+  copySelectedTraceAsCurl,
+  copySelectedTraceRequestBody,
+  copySelectedTraceResponseBody,
+} from './trace.js';
+import { copyToClipboard } from './clipboard.js';
 import { escapeHtml, safeHtml, raw } from './html.js';
 import {
   criticalityDot,
@@ -582,262 +594,6 @@ function replayHistory(idx) {
   executeQuery(false);
 }
 
-// ══════════════════════════════════════════════════════════════
-// ── HTTP INSPECTOR ──
-// ══════════════════════════════════════════════════════════════
-
-export function clearTraceState(tab = getActiveTab()) {
-  if (!tab) return;
-  tab.httpTraceEntries = [];
-  tab.selectedTraceId = null;
-  tab._traceVisible = false;
-  if (tab.id === state.activeTabId) {
-    document.getElementById('traceInspectorPanel').classList.add('hidden');
-    renderTraceSummary(tab);
-  }
-}
-
-export function ensureTraceSelection(tab) {
-  if (!tab) return null;
-  if (
-    tab.selectedTraceId &&
-    tab.httpTraceEntries.some(entry => entry.id === tab.selectedTraceId)
-  ) {
-    return tab.selectedTraceId;
-  }
-  tab.selectedTraceId = tab.httpTraceEntries.length
-    ? tab.httpTraceEntries[tab.httpTraceEntries.length - 1].id
-    : null;
-  return tab.selectedTraceId;
-}
-
-function getSelectedTraceEntry(tab = getActiveTab()) {
-  if (!tab) return null;
-  const selectedId = ensureTraceSelection(tab);
-  if (!selectedId) return null;
-  return tab.httpTraceEntries.find(entry => entry.id === selectedId) || null;
-}
-
-export function renderTraceSummary(tab = getActiveTab()) {
-  const count = tab?.httpTraceEntries?.length || 0;
-  document.getElementById('traceSummary').textContent = count
-    ? `${count} request${count === 1 ? '' : 's'}`
-    : 'No trace';
-  document.getElementById('traceCount').textContent = count
-    ? `${count} request${count === 1 ? '' : 's'}`
-    : 'No requests';
-}
-
-function traceStatusClass(entry) {
-  if (entry.error) return 'err';
-  if (!entry.status) return '';
-  if (entry.status >= 500) return 'err';
-  if (entry.status >= 400) return 'warn';
-  if (entry.status >= 300) return 'warn';
-  return 'ok';
-}
-
-function traceStatusLabel(entry) {
-  if (entry.status) return String(entry.status);
-  if (entry.error) return 'ERR';
-  return 'OPEN';
-}
-
-function compactTraceUrl(url) {
-  try {
-    const parsed = new URL(url);
-    return `${parsed.host}${parsed.pathname}${parsed.search}`;
-  } catch {
-    return url;
-  }
-}
-
-function traceOutcomeLabel(entry) {
-  if (entry.error) return entry.error;
-  if (entry.redirect_location) return `redirect → ${entry.redirect_location}`;
-  return entry.response_body_preview ? 'response captured' : 'headers captured';
-}
-
-function renderTraceHeaders(headers) {
-  if (!headers || headers.length === 0) {
-    return '<div class="trace-code text-ox-dim">No headers captured.</div>';
-  }
-
-  let html = '<div class="trace-header-grid">';
-  for (const header of headers) {
-    html += `<div class="trace-header-name">${escapeHtml(header.name)}</div>`;
-    html += `<div class="trace-header-value">${escapeHtml(header.value)}</div>`;
-  }
-  html += '</div>';
-  return html;
-}
-
-// First-render length for trace bodies — keeps the inspector snappy on
-// large responses. The "show full" button below the preview reveals the
-// rest (up to the core's MAX_BODY_PREVIEW_CHARS cap — anything beyond
-// that arrives with a `... <truncated>` suffix already in place).
-const TRACE_BODY_PREVIEW_CHARS = 4000;
-
-function renderTraceBody(body, emptyLabel) {
-  if (!body) {
-    return `<div class="trace-code text-ox-dim">${escapeHtml(emptyLabel)}</div>`;
-  }
-  if (body.length <= TRACE_BODY_PREVIEW_CHARS) {
-    return `<pre class="trace-code">${escapeHtml(body)}</pre>`;
-  }
-  // Long body — render collapsed, let the user opt in to full render.
-  // `_traceBodyExpanded` is set per-tab when the expand button is clicked.
-  const tab = getActiveTab();
-  const expanded = tab && tab._traceBodyExpanded === true;
-  const shown = expanded ? body : body.slice(0, TRACE_BODY_PREVIEW_CHARS) + '\n…';
-  const sizeKb = (body.length / 1024).toFixed(1);
-  const label = expanded
-    ? `collapse (showing full ${sizeKb} KB)`
-    : `show full response body (${sizeKb} KB)`;
-  return `<pre class="trace-code">${escapeHtml(shown)}</pre>` +
-    `<button type="button" class="mt-2 text-[10px] font-semibold tracking-wide px-2 py-1 rounded-sm text-ox-electric border border-ox-electric/50 hover:bg-ox-electric/10 hover:border-ox-electric transition-colors" data-action="toggle-trace-body">${escapeHtml(label)}</button>`;
-}
-
-function renderTraceList(tab) {
-  const list = document.getElementById('traceList');
-  if (!tab || tab.httpTraceEntries.length === 0) {
-    list.innerHTML = '<div class="px-4 py-3 text-[11px] text-ox-dim font-mono">No traced requests yet.</div>';
-    return;
-  }
-
-  const selectedId = ensureTraceSelection(tab);
-  let html = '';
-  for (const entry of [...tab.httpTraceEntries].reverse()) {
-    const active = entry.id === selectedId ? ' active' : '';
-    const statusClass = traceStatusClass(entry);
-    const statusCls = statusClass ? ` ${statusClass}` : '';
-    html += `<div class="trace-row${active}" data-action="select-trace" data-trace-id="${entry.id}">`;
-    html += '<div class="trace-meta">';
-    html += `<span class="trace-pill">${escapeHtml(entry.method)}</span>`;
-    html += `<span class="trace-pill${statusCls}">${escapeHtml(traceStatusLabel(entry))}</span>`;
-    html += `<span>${entry.duration_ms}ms</span>`;
-    html += '</div>';
-    html += `<div class="trace-url">${escapeHtml(compactTraceUrl(entry.url))}</div>`;
-    html += `<div class="trace-meta">${escapeHtml(traceOutcomeLabel(entry))}</div>`;
-    html += '</div>';
-  }
-  list.innerHTML = html;
-}
-
-function renderTraceDetail(tab) {
-  const detail = document.getElementById('traceDetail');
-  const entry = getSelectedTraceEntry(tab);
-  if (!entry) {
-    detail.innerHTML = '<div class="px-4 py-4 text-[11px] text-ox-dim font-mono">Select a traced request to inspect it.</div>';
-    return;
-  }
-
-  const activeSubTab = tab?._traceSubTab === 'request' ? 'request' : 'response';
-  const statusClass = traceStatusClass(entry);
-  const statusCls = statusClass ? ` ${statusClass}` : '';
-
-  let html = '<div class="trace-section">';
-  html += '<div class="flex items-center gap-2 mb-2">';
-  html += `<span class="trace-pill">${escapeHtml(entry.method)}</span>`;
-  html += `<span class="trace-pill${statusCls}">${escapeHtml(traceStatusLabel(entry))}</span>`;
-  html += `<span class="trace-meta">${entry.duration_ms}ms</span>`;
-  html += '</div>';
-  html += `<div class="trace-url">${escapeHtml(entry.url)}</div>`;
-  html += '</div>';
-
-  html += '<div class="trace-subtabs">';
-  html += `<div class="trace-subtab${activeSubTab === 'request' ? ' active' : ''}" data-action="select-trace-subtab" data-subtab="request">Request</div>`;
-  html += `<div class="trace-subtab${activeSubTab === 'response' ? ' active' : ''}" data-action="select-trace-subtab" data-subtab="response">Response</div>`;
-  html += '<div class="trace-subtab-actions">';
-  if (activeSubTab === 'request') {
-    html += '<button data-action="copy-trace-curl">copy as curl</button>';
-    const disabled = entry.request_body_preview ? '' : ' disabled';
-    html += `<button data-action="copy-trace-request-body"${disabled}>copy body</button>`;
-  } else {
-    const disabled = entry.response_body_preview ? '' : ' disabled';
-    html += `<button data-action="copy-trace-response-body"${disabled}>copy body</button>`;
-  }
-  html += '</div>';
-  html += '</div>';
-
-  if (activeSubTab === 'request') {
-    html += '<div class="trace-section">';
-    html += '<div class="trace-section-title">Headers</div>';
-    html += renderTraceHeaders(entry.request_headers);
-    html += '</div>';
-
-    html += '<div class="trace-section">';
-    html += '<div class="trace-section-title">Body</div>';
-    html += renderTraceBody(entry.request_body_preview, 'No request body captured.');
-    html += '</div>';
-  } else {
-    html += '<div class="trace-section">';
-    html += '<div class="trace-section-title">Headers</div>';
-    html += renderTraceHeaders(entry.response_headers);
-    html += '</div>';
-
-    html += '<div class="trace-section">';
-    html += '<div class="trace-section-title">Body Preview</div>';
-    html += renderTraceBody(entry.response_body_preview, 'No response body preview captured.');
-    html += '</div>';
-
-    if (entry.redirect_location) {
-      html += '<div class="trace-section">';
-      html += '<div class="trace-section-title">Redirect</div>';
-      html += `<div class="trace-code">${escapeHtml(entry.redirect_location)}</div>`;
-      html += '</div>';
-    }
-
-    if (entry.error) {
-      html += '<div class="trace-section">';
-      html += '<div class="trace-section-title">Error</div>';
-      html += `<pre class="trace-code">${escapeHtml(entry.error)}</pre>`;
-      html += '</div>';
-    }
-  }
-
-  detail.innerHTML = html;
-}
-
-export function renderTraceInspector(tab = getActiveTab()) {
-  renderTraceSummary(tab);
-  renderTraceList(tab);
-  renderTraceDetail(tab);
-}
-
-function showTraceInspector() {
-  const tab = getActiveTab();
-  if (!tab) return;
-  tab._traceVisible = true;
-  renderTraceInspector(tab);
-  document.getElementById('traceInspectorPanel').classList.remove('hidden');
-  updateTraceToggleState(true);
-}
-
-function hideTraceInspector() {
-  const tab = getActiveTab();
-  if (tab) tab._traceVisible = false;
-  document.getElementById('traceInspectorPanel').classList.add('hidden');
-  updateTraceToggleState(false);
-}
-
-function updateTraceToggleState(open) {
-  const btn = document.getElementById('btnTraceToggle');
-  const chevron = document.getElementById('traceToggleChevron');
-  if (!btn || !chevron) return;
-  chevron.innerHTML = open ? '&#x25BE;' : '&#x25B4;';
-  // Off = dim green (primed / telemetry standby). On = full green
-  // with a subtle glow. Distinct from SAP View's amber so the two
-  // status-bar toggles read as different kinds of switch at a glance.
-  if (open) {
-    btn.classList.add('text-ox-green', 'border-ox-green', 'bg-ox-greenGlow');
-    btn.classList.remove('text-ox-greenDim', 'border-ox-greenDim/60');
-  } else {
-    btn.classList.add('text-ox-greenDim', 'border-ox-greenDim/60');
-    btn.classList.remove('text-ox-green', 'border-ox-green', 'bg-ox-greenGlow');
-  }
-}
-
 function updateSapViewToggleState() {
   const btn = document.getElementById('btnSapView');
   const chev = document.getElementById('sapViewChevron');
@@ -871,22 +627,6 @@ function toggleSapView() {
   }
   // Clear any lingering warnings from the previous mode.
   if (!state.sapViewEnabled) showSapViewWarnings([]);
-}
-
-function toggleTraceInspector() {
-  const panel = document.getElementById('traceInspectorPanel');
-  if (panel.classList.contains('hidden')) {
-    showTraceInspector();
-  } else {
-    hideTraceInspector();
-  }
-}
-
-// POSIX-shell single-quote escape. The resulting curl command runs in bash /
-// zsh / git-bash, but cmd.exe and PowerShell use different quoting rules —
-// paste into those shells and the quotes will leak through literally.
-function shellQuoteForCurl(value) {
-  return "'" + String(value).replace(/'/g, `'\"'\"'`) + "'";
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -1028,46 +768,6 @@ function renderAnnotationInspector() {
   results.innerHTML = html;
 }
 
-function traceToCurl(entry) {
-  const parts = [
-    `curl -X ${shellQuoteForCurl(entry.method)}`,
-    `--url ${shellQuoteForCurl(entry.url)}`,
-  ];
-  for (const header of entry.request_headers || []) {
-    parts.push(`-H ${shellQuoteForCurl(`${header.name}: ${header.value}`)}`);
-  }
-  if (entry.request_body_preview) {
-    parts.push(`--data-raw ${shellQuoteForCurl(entry.request_body_preview)}`);
-  }
-  return parts.join(' ');
-}
-
-async function copySelectedTraceAsCurl() {
-  const entry = getSelectedTraceEntry(getActiveTab());
-  if (!entry) {
-    setStatus('No trace selected');
-    return;
-  }
-  await copyToClipboard(traceToCurl(entry), 'curl command');
-}
-
-async function copySelectedTraceRequestBody() {
-  const entry = getSelectedTraceEntry(getActiveTab());
-  if (!entry || !entry.request_body_preview) {
-    setStatus('No request body to copy');
-    return;
-  }
-  await copyToClipboard(entry.request_body_preview, 'request body');
-}
-
-async function copySelectedTraceResponseBody() {
-  const entry = getSelectedTraceEntry(getActiveTab());
-  if (!entry || !entry.response_body_preview) {
-    setStatus('No response body to copy');
-    return;
-  }
-  await copyToClipboard(entry.response_body_preview, 'response body');
-}
 
 // ══════════════════════════════════════════════════════════════
 // ── RESULTS RENDERING ──
@@ -1310,15 +1010,6 @@ function renderJson(data) {
 // ══════════════════════════════════════════════════════════════
 // ── COPY FUNCTIONS (Feature 5) ──
 // ══════════════════════════════════════════════════════════════
-
-async function copyToClipboard(text, label) {
-  try {
-    await navigator.clipboard.writeText(text);
-    setStatus(`Copied ${label || 'to clipboard'}`);
-  } catch (e) {
-    setStatus('Copy failed: ' + e);
-  }
-}
 
 function copyColumnValues(colName) {
   const rows = state.lastResultRows || [];

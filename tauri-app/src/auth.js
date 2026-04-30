@@ -8,11 +8,7 @@
 //     side and replayed on each request. The Sign In / Sign Out
 //     buttons next to the profile selector only show for these.
 //
-// `removeCurrentProfile` and `signOutCurrentProfile` reach into
-// services.js for `resetResultsArea` + `loadProfiles`, and into app.js
-// for `clearTraceState` (still there until the trace renderer splits
-// out). The app.js half is circular; ESM resolves it because the
-// reference sits inside a function body.
+// All imports flow downward — no circular back to app.js.
 
 import { state } from './state.js';
 import { invoke } from './vendor/tauri-core.js';
@@ -21,7 +17,7 @@ import { timedInvoke, updateServicePathBar } from './api.js';
 import { safeHtml } from './html.js';
 import { getActiveTab } from './tabs.js';
 import { resetResultsArea, loadProfiles } from './services.js';
-import { clearTraceState } from './app.js';
+import { clearTraceState } from './trace.js';
 
 export function getProfileMeta(profileName) {
   return profileName ? (state.profileMap.get(profileName) || null) : null;
