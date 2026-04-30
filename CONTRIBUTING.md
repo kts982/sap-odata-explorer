@@ -91,6 +91,8 @@ el.innerHTML = '<div class="foo">static</div>';                     // plain str
 
 Bare template literals (`el.innerHTML = \`...${x}...\``) are forbidden — `scripts/lint-innerhtml.mjs` runs in CI and fails the build on any matching pattern across `tauri-app/src/**/*.js` and `index.html`.
 
+If a renderer builds HTML in a variable before assignment, build each dynamic fragment with `safeHtml` and join only those safe fragments. Do not build `let html = \`...\`` or append unescaped interpolated template literals before assigning `el.innerHTML = html`.
+
 ## What's welcome
 
 - Bug fixes

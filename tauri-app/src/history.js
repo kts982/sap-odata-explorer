@@ -11,7 +11,7 @@
 // bodies only.
 
 import { state } from './state.js';
-import { escapeHtml } from './html.js';
+import { safeHtml, raw } from './html.js';
 import { getActiveTab } from './tabs.js';
 import { executeQuery } from './executor.js';
 
@@ -48,21 +48,23 @@ export function renderHistoryPanel(tab) {
     panel.innerHTML = '<div class="px-4 py-3 text-[11px] text-ox-dim font-mono">No history yet</div>';
     return;
   }
-  let html = '<div class="flex items-center justify-between px-3 py-1 border-b border-ox-border">';
-  html += '<span class="text-[9px] uppercase tracking-widest text-ox-dim font-medium">Query History</span>';
-  html += '<button data-action="clear-history" class="text-[10px] text-ox-dim hover:text-ox-red px-1 transition-colors">clear</button>';
-  html += '</div>';
-  for (let i = 0; i < tab.queryHistory.length; i++) {
-    const h = tab.queryHistory[i];
+  const rows = tab.queryHistory.map((h, i) => {
     const time = h.ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    html += `<div class="history-item" data-action="replay-history" data-idx="${i}">
-      <span class="text-ox-amber shrink-0">${escapeHtml(h.entitySet)}</span>
-      <span class="text-ox-dim flex-1 truncate">${escapeHtml(h.summary)}</span>
-      <span class="text-ox-dim shrink-0">${h.rowCount}r</span>
-      <span class="text-ox-dim shrink-0">${h.elapsed}ms</span>
-      <span class="text-ox-dim shrink-0">${time}</span>
-    </div>`;
-  }
+    return safeHtml`
+      <div class="history-item" data-action="replay-history" data-idx="${i}">
+        <span class="text-ox-amber shrink-0">${h.entitySet}</span>
+        <span class="text-ox-dim flex-1 truncate">${h.summary}</span>
+        <span class="text-ox-dim shrink-0">${h.rowCount}r</span>
+        <span class="text-ox-dim shrink-0">${h.elapsed}ms</span>
+        <span class="text-ox-dim shrink-0">${time}</span>
+      </div>`;
+  }).join('');
+  const html = safeHtml`
+    <div class="flex items-center justify-between px-3 py-1 border-b border-ox-border">
+      <span class="text-[9px] uppercase tracking-widest text-ox-dim font-medium">Query History</span>
+      <button data-action="clear-history" class="text-[10px] text-ox-dim hover:text-ox-red px-1 transition-colors">clear</button>
+    </div>
+    ${raw(rows)}`;
   panel.innerHTML = html;
 }
 

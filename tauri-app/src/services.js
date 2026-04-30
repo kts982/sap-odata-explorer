@@ -31,6 +31,7 @@ import {
 import { getFavorites, saveFavorites } from './favorites.js';
 import { renderAnnotationBadge } from './annotations.js';
 import { renderDescribe } from './describe.js';
+import { clearQueryResultCache } from './resultCache.js';
 
 export async function loadProfiles() {
   try {
@@ -51,6 +52,8 @@ export async function loadProfiles() {
 }
 
 export function resetResultsArea() {
+  state.expandedDataStore = {};
+  state.lastResultRows = null;
   document.getElementById('resultsArea').innerHTML = safeHtml`
     <div class="flex items-center justify-center h-full">
       <div class="text-center">
@@ -231,6 +234,7 @@ export function renderServiceList(services, saveState = true) {
     document.getElementById('statsBar').classList.add('hidden');
     document.getElementById('historyPanel').classList.add('hidden');
     resetResultsArea();
+    clearQueryResultCache(tab);
   }
 
   // Persist sidebar HTML to tab
@@ -303,7 +307,7 @@ export async function resolveAndLoadService(input, versionHint) {
     renderAnnotationBadge(summary);
     setStatus(`${entities.length} entity set(s)`);
     resetResultsArea();
-    if (tab) tab._resultsHtml = undefined;
+    clearQueryResultCache(tab);
   } catch (e) {
     if (!scope.active()) return;
     setStatus('Error: ' + e);
@@ -371,6 +375,8 @@ export async function selectEntity(entitySetName, element) {
   document.getElementById('qSkip').value = '';
   document.getElementById('statsBar').classList.add('hidden');
   document.getElementById('historyPanel').classList.add('hidden');
+  clearQueryResultCache(tab);
+  resetResultsArea();
 
   setStatus(`Describing ${entitySetName}...`);
   const scope = tabScope();

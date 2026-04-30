@@ -14,7 +14,7 @@
 // All imports flow downward — no circular back to app.js.
 
 import { state } from './state.js';
-import { safeHtml, escapeHtml } from './html.js';
+import { safeHtml, raw } from './html.js';
 import { valueListSummary, formatODataLiteral } from './format.js';
 import { setStatus } from './status.js';
 import { timedInvoke } from './api.js';
@@ -203,7 +203,7 @@ function renderVlVariantBar() {
       const cls = active ? `${base} ${onCls}` : `${base} ${offCls}`;
       const kindGlyph = v.kind === 'reference' ? '↗' : '·';
       const title = v.kind === 'reference' ? `Resolved via reference:\n${v.url}` : 'Inline Common.ValueList';
-      return `<button type="button" class="${cls}" data-action="vl-select-variant" data-variant-index="${i}" title="${escapeHtml(title)}">${kindGlyph} ${escapeHtml(v.label)}</button>`;
+      return safeHtml`<button type="button" class="${cls}" data-action="vl-select-variant" data-variant-index="${i}" title="${title}">${kindGlyph} ${v.label}</button>`;
     })
     .join('');
 }
@@ -340,21 +340,31 @@ function renderValueListRows(data, prop, vl) {
   const cols = [];
   for (const k of priority) if (firstRowKeys.includes(k) && !cols.includes(k)) cols.push(k);
   for (const k of firstRowKeys) if (!cols.includes(k)) cols.push(k);
-  let html = '<table class="w-full"><thead class="sticky top-0 bg-ox-surface z-10"><tr class="text-ox-dim text-[10px]">';
-  for (const c of cols) {
-    html += `<th class="text-left px-3 py-1 border-b border-ox-border">${escapeHtml(c)}</th>`;
-  }
-  html += '</tr></thead><tbody>';
-  for (let i = 0; i < rows.length; i++) {
-    html += `<tr class="hover:bg-ox-electric/10 cursor-pointer border-b border-ox-border/30" data-action="vl-pick" data-row="${i}">`;
-    for (const c of cols) {
-      const v = rows[i][c];
-      const shown = v === null || v === undefined ? '' : String(v);
-      html += `<td class="px-3 py-1 text-ox-text">${escapeHtml(shown)}</td>`;
-    }
-    html += '</tr>';
-  }
-  html += '</tbody></table>';
+  const headerCells = cols
+    .map(c => safeHtml`<th class="text-left px-3 py-1 border-b border-ox-border">${c}</th>`)
+    .join('');
+  const bodyRows = rows
+    .map((row, i) => {
+      const cells = cols
+        .map(c => {
+          const v = row[c];
+          const shown = v === null || v === undefined ? '' : String(v);
+          return safeHtml`<td class="px-3 py-1 text-ox-text">${shown}</td>`;
+        })
+        .join('');
+      return safeHtml`
+        <tr class="hover:bg-ox-electric/10 cursor-pointer border-b border-ox-border/30" data-action="vl-pick" data-row="${i}">
+          ${raw(cells)}
+        </tr>`;
+    })
+    .join('');
+  const html = safeHtml`
+    <table class="w-full">
+      <thead class="sticky top-0 bg-ox-surface z-10">
+        <tr class="text-ox-dim text-[10px]">${raw(headerCells)}</tr>
+      </thead>
+      <tbody>${raw(bodyRows)}</tbody>
+    </table>`;
   results.innerHTML = html;
   // Stash rows on the container so the pick handler can read without
   // re-fetching. Use a private key to avoid clashing with user data.

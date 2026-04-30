@@ -87,6 +87,7 @@ import {
   hideFilterTooltip,
   applyFilterFromTooltip,
 } from './results.js';
+import { clearQueryResultCache } from './resultCache.js';
 import {
   showAddProfileModal,
   updateAuthModeFields,
@@ -118,7 +119,7 @@ document.getElementById('profileSelect').addEventListener('change', (e) => {
   tab._queryBarHidden = true;
   tab._describePanelHidden = true;
   tab._statsVisible = false;
-  tab._resultsHtml = undefined;
+  clearQueryResultCache(tab);
   tab._historyVisible = false;
   tab.httpTraceEntries = [];
   tab.selectedTraceId = null;

@@ -8,7 +8,7 @@
 // Pure module — no circular imports.
 
 import { state } from './state.js';
-import { escapeHtml } from './html.js';
+import { safeHtml, raw } from './html.js';
 import { formatODataLiteral } from './format.js';
 import { getActiveTab } from './tabs.js';
 
@@ -251,9 +251,9 @@ export function renderFioriReadinessPanel(info) {
     if (counts[f.severity] !== undefined) counts[f.severity]++;
   }
   const summary = [
-    counts.pass ? `<span class="text-ox-green">&#9679; ${counts.pass} pass</span>` : '',
-    counts.warn ? `<span class="text-ox-amber">&#9679; ${counts.warn} warn</span>` : '',
-    counts.miss ? `<span class="text-ox-red">&#9679; ${counts.miss} miss</span>` : '',
+    counts.pass ? safeHtml`<span class="text-ox-green">&#9679; ${counts.pass} pass</span>` : '',
+    counts.warn ? safeHtml`<span class="text-ox-amber">&#9679; ${counts.warn} warn</span>` : '',
+    counts.miss ? safeHtml`<span class="text-ox-red">&#9679; ${counts.miss} miss</span>` : '',
   ].filter(Boolean).join(' <span class="text-ox-border">·</span> ');
   // Group by category, preserve original order within each group.
   const order = ['profile', 'identity', 'listreport', 'filtering', 'fields', 'integrity', 'capabilities'];
@@ -271,38 +271,46 @@ export function renderFioriReadinessPanel(info) {
     integrity: 'Integrity',
     capabilities: 'Capabilities',
   };
-  let html = '<div class="mt-4 border border-ox-border rounded-sm overflow-hidden">';
-  html += `<div class="px-3 py-1.5 bg-ox-panel text-[10px] uppercase tracking-widest text-ox-dim flex items-center gap-3">`;
-  html += `<span class="font-medium">Fiori readiness</span>`;
-  html += `<span class="text-[10px] normal-case tracking-normal">${summary}</span>`;
-  html += `</div>`;
+  const categoryBlocks = [];
   for (const [cat, items] of byCategory) {
     if (!items || items.length === 0) continue;
-    html += `<div class="px-3 py-1 bg-ox-surface/40 text-[9px] uppercase tracking-widest text-ox-muted border-t border-ox-border/40">${escapeHtml(pretty[cat] || cat)}</div>`;
-    for (const f of items) {
+    const rows = items.map(f => {
       const color = f.severity === 'pass' ? 'text-ox-green'
         : f.severity === 'warn' ? 'text-ox-amber'
         : 'text-ox-red';
-      html += `<div class="px-3 py-1 border-t border-ox-border/40 flex items-start gap-2 text-[11px]">`;
-      html += `<span class="${color} mt-0.5">&#9679;</span>`;
-      html += `<div class="flex-1">`;
-      html += `<span class="text-ox-dim font-mono">${escapeHtml(f.code)}</span> — <span class="text-ox-text">${escapeHtml(f.message)}</span>`;
+      let extra = '';
       // ABAP CDS "fix hint" — surfaces the annotation to add at the
       // source so the linter teaches, not just grades. Only present
       // on actionable (warn/miss) findings; passes skip this line.
       if (f.suggested_cds || f.why_in_fiori) {
-        html += `<div class="mt-1 text-[10px] text-ox-muted leading-snug">`;
+        const parts = [];
         if (f.suggested_cds) {
-          html += `<span class="text-ox-blue font-mono">ABAP CDS:</span> <code class="text-ox-blue">${escapeHtml(f.suggested_cds)}</code>`;
+          parts.push(safeHtml`<span class="text-ox-blue font-mono">ABAP CDS:</span> <code class="text-ox-blue">${f.suggested_cds}</code>`);
         }
         if (f.why_in_fiori) {
-          html += `<div class="text-ox-dim">${escapeHtml(f.why_in_fiori)}</div>`;
+          parts.push(safeHtml`<div class="text-ox-dim">${f.why_in_fiori}</div>`);
         }
-        html += `</div>`;
+        extra = safeHtml`<div class="mt-1 text-[10px] text-ox-muted leading-snug">${raw(parts.join(''))}</div>`;
       }
-      html += `</div></div>`;
-    }
+      return safeHtml`
+        <div class="px-3 py-1 border-t border-ox-border/40 flex items-start gap-2 text-[11px]">
+          <span class="${color} mt-0.5">&#9679;</span>
+          <div class="flex-1">
+            <span class="text-ox-dim font-mono">${f.code}</span> — <span class="text-ox-text">${f.message}</span>
+            ${raw(extra)}
+          </div>
+        </div>`;
+    }).join('');
+    categoryBlocks.push(safeHtml`
+      <div class="px-3 py-1 bg-ox-surface/40 text-[9px] uppercase tracking-widest text-ox-muted border-t border-ox-border/40">${pretty[cat] || cat}</div>
+      ${raw(rows)}`);
   }
-  html += '</div>';
-  return html;
+  return safeHtml`
+    <div class="mt-4 border border-ox-border rounded-sm overflow-hidden">
+      <div class="px-3 py-1.5 bg-ox-panel text-[10px] uppercase tracking-widest text-ox-dim flex items-center gap-3">
+        <span class="font-medium">Fiori readiness</span>
+        <span class="text-[10px] normal-case tracking-normal">${raw(summary)}</span>
+      </div>
+      ${raw(categoryBlocks.join(''))}
+    </div>`;
 }

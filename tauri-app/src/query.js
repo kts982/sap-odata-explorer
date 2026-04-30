@@ -15,7 +15,7 @@
 // Pure module — no circular imports back to app.js.
 
 import { state } from './state.js';
-import { escapeHtml } from './html.js';
+import { safeHtml, raw } from './html.js';
 import { formatODataLiteral } from './format.js';
 import { setStatus } from './status.js';
 import { getActiveTab } from './tabs.js';
@@ -28,23 +28,23 @@ import { getActiveTab } from './tabs.js';
 export function propertyFlagHints(p) {
   const badges = [];
   if (p.filterable === false) {
-    badges.push(`<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="sap:filterable=false — server rejects $filter on this column">no filter</span>`);
+    badges.push('<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="sap:filterable=false — server rejects $filter on this column">no filter</span>');
   }
   if (p.sortable === false) {
-    badges.push(`<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="sap:sortable=false — server rejects $orderby on this column">no sort</span>`);
+    badges.push('<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="sap:sortable=false — server rejects $orderby on this column">no sort</span>');
   }
   if (p.creatable === false && p.updatable === false) {
-    badges.push(`<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="sap:creatable=false and sap:updatable=false — server assigns this value, clients cannot write it">read-only</span>`);
+    badges.push('<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="sap:creatable=false and sap:updatable=false — server assigns this value, clients cannot write it">read-only</span>');
   } else {
     if (p.creatable === false) {
-      badges.push(`<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="sap:creatable=false">no create</span>`);
+      badges.push('<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="sap:creatable=false">no create</span>');
     }
     if (p.updatable === false) {
-      badges.push(`<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="sap:updatable=false">no update</span>`);
+      badges.push('<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="sap:updatable=false">no update</span>');
     }
   }
   if (p.required_in_filter === true) {
-    badges.push(`<span class="text-[9px] text-ox-amber bg-ox-amberGlow border border-ox-amber/40 rounded-sm px-1 py-px" title="sap:required-in-filter=true — the server requires $filter to constrain this column">req.filter</span>`);
+    badges.push('<span class="text-[9px] text-ox-amber bg-ox-amberGlow border border-ox-amber/40 rounded-sm px-1 py-px" title="sap:required-in-filter=true — the server requires $filter to constrain this column">req.filter</span>');
   }
   // Common.FieldControl — write/display control. Mandatory overlaps
   // semantically with required_in_filter so we keep the pills distinct
@@ -53,37 +53,37 @@ export function propertyFlagHints(p) {
   if (p.field_control) {
     const fc = p.field_control;
     if (fc.kind === 'mandatory') {
-      badges.push(`<span class="text-[9px] text-ox-amber bg-ox-amberGlow border border-ox-amber/40 rounded-sm px-1 py-px" title="Common.FieldControl=Mandatory — required on write">mandatory</span>`);
+      badges.push('<span class="text-[9px] text-ox-amber bg-ox-amberGlow border border-ox-amber/40 rounded-sm px-1 py-px" title="Common.FieldControl=Mandatory — required on write">mandatory</span>');
     } else if (fc.kind === 'readonly' && !(p.updatable === false && p.creatable === false)) {
-      badges.push(`<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="Common.FieldControl=ReadOnly">read-only</span>`);
+      badges.push('<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="Common.FieldControl=ReadOnly">read-only</span>');
     } else if (fc.kind === 'inapplicable') {
-      badges.push(`<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="Common.FieldControl=Inapplicable — not relevant for this record">n/a</span>`);
+      badges.push('<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="Common.FieldControl=Inapplicable — not relevant for this record">n/a</span>');
     } else if (fc.kind === 'hidden') {
-      badges.push(`<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="Common.FieldControl=Hidden">hidden</span>`);
+      badges.push('<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="Common.FieldControl=Hidden">hidden</span>');
     } else if (fc.kind === 'path') {
-      badges.push(`<span class="text-[9px] text-ox-blue border border-ox-blue/40 rounded-sm px-1 py-px" title="Common.FieldControl Path — state driven by ${escapeHtml(fc.value)} at runtime">⇨ ${escapeHtml(fc.value)}</span>`);
+      badges.push(safeHtml`<span class="text-[9px] text-ox-blue border border-ox-blue/40 rounded-sm px-1 py-px" title="Common.FieldControl Path — state driven by ${fc.value} at runtime">⇨ ${fc.value}</span>`);
     }
     // `optional` is the default; no pill needed.
   }
   // UI.Hidden / UI.HiddenFilter — marker pills.
   if (p.hidden && (!p.field_control || p.field_control.kind !== 'hidden')) {
-    badges.push(`<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="UI.Hidden — Fiori would not show this property">UI hidden</span>`);
+    badges.push('<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="UI.Hidden — Fiori would not show this property">UI hidden</span>');
   }
   if (p.hidden_filter) {
-    badges.push(`<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="UI.HiddenFilter — shown as a column but suppressed from Fiori's filter bar">no filter UI</span>`);
+    badges.push('<span class="text-[9px] text-ox-muted bg-ox-panel border border-ox-border rounded-sm px-1 py-px" title="UI.HiddenFilter — shown as a column but suppressed from Fiori\'s filter bar">no filter UI</span>');
   }
   // V2 sap:display-format — presentation hint. Small-caps pill.
   if (p.display_format) {
     const val = p.display_format;
-    badges.push(`<span class="text-[9px] text-ox-green border border-ox-green/40 rounded-sm px-1 py-px" title="sap:display-format=${escapeHtml(val)}">fmt: ${escapeHtml(val)}</span>`);
+    badges.push(safeHtml`<span class="text-[9px] text-ox-green border border-ox-green/40 rounded-sm px-1 py-px" title="sap:display-format=${val}">fmt: ${val}</span>`);
   }
   // Common.SemanticObject — Fiori cross-app navigation target.
   if (p.semantic_object) {
-    badges.push(`<span class="text-[9px] text-ox-blue border border-ox-blue/40 rounded-sm px-1 py-px" title="Common.SemanticObject — Fiori cross-app navigation target">&#8605; ${escapeHtml(p.semantic_object)}</span>`);
+    badges.push(safeHtml`<span class="text-[9px] text-ox-blue border border-ox-blue/40 rounded-sm px-1 py-px" title="Common.SemanticObject — Fiori cross-app navigation target">&#8605; ${p.semantic_object}</span>`);
   }
   // Common.Masked — sensitive data warning.
   if (p.masked) {
-    badges.push(`<span class="text-[9px] text-ox-amber bg-ox-amberGlow border border-ox-amber/40 rounded-sm px-1 py-px" title="Common.Masked — sensitive / PII data; Fiori masks the value at runtime">masked</span>`);
+    badges.push('<span class="text-[9px] text-ox-amber bg-ox-amberGlow border border-ox-amber/40 rounded-sm px-1 py-px" title="Common.Masked — sensitive / PII data; Fiori masks the value at runtime">masked</span>');
   }
   return badges.length ? ' ' + badges.join(' ') : '';
 }
@@ -220,7 +220,7 @@ export function renderSelectionFieldsBar(info) {
         ? 'Required in $filter — append and narrow'
         : 'Append to $filter';
       const title = `${tipBase}\nShift-click to append to $select instead`;
-      return `<button type="button" class="${cls}" data-action="selection-field" data-name="${escapeHtml(name)}" title="${title}">${escapeHtml(name)}</button>`;
+      return safeHtml`<button type="button" class="${cls}" data-action="selection-field" data-name="${name}" title="${title}">${name}</button>`;
     })
     .join('');
 }
@@ -273,19 +273,19 @@ export function buildFilterBarRows(info) {
     ['between', 'between'],
   ];
   const opOptions = operators
-    .map(([v, label]) => `<option value="${v}">${label}</option>`)
+    .map(([v, label]) => safeHtml`<option value="${v}">${label}</option>`)
     .join('');
   return info.selection_fields.map(name => {
     const p = propByName.get(name);
     const type = p ? p.edm_type.replace('Edm.', '') : '';
     const req = p && p.required_in_filter === true;
     const reqBadge = req
-      ? `<span class="text-[9px] text-ox-amber bg-ox-amberGlow border border-ox-amber/40 rounded-sm px-1 ml-1" title="required-in-filter">req</span>`
+      ? '<span class="text-[9px] text-ox-amber bg-ox-amberGlow border border-ox-amber/40 rounded-sm px-1 ml-1" title="required-in-filter">req</span>'
       : '';
-    return `
-      <div class="grid grid-cols-[160px_90px_1fr_auto] gap-2 items-center" data-fb-row data-field="${escapeHtml(name)}">
-        <div class="text-[11px] text-ox-text truncate" title="${escapeHtml(name)} (${escapeHtml(type)})">${escapeHtml(name)}${reqBadge} <span class="text-ox-dim">${escapeHtml(type)}</span></div>
-        <select data-fb="op" class="bg-ox-surface text-ox-text text-[11px] font-mono border border-ox-border rounded-sm px-1.5 py-1 outline-hidden">${opOptions}</select>
+    return safeHtml`
+      <div class="grid grid-cols-[160px_90px_1fr_auto] gap-2 items-center" data-fb-row data-field="${name}">
+        <div class="text-[11px] text-ox-text truncate" title="${name} (${type})">${name}${raw(reqBadge)} <span class="text-ox-dim">${type}</span></div>
+        <select data-fb="op" class="bg-ox-surface text-ox-text text-[11px] font-mono border border-ox-border rounded-sm px-1.5 py-1 outline-hidden">${raw(opOptions)}</select>
         <div data-fb="inputs" class="flex items-center gap-1">
           <input data-fb="value" type="text" placeholder="value"
             class="flex-1 bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 outline-hidden" />

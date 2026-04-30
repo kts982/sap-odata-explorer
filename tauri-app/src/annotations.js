@@ -14,7 +14,7 @@
 // All imports flow downward — no circular back to app.js.
 
 import { state } from './state.js';
-import { escapeHtml, safeHtml } from './html.js';
+import { safeHtml, raw } from './html.js';
 import { timedInvoke } from './api.js';
 
 // Lazy-loaded dump of every raw annotation the parser captured. Good
@@ -117,7 +117,7 @@ export function renderAnnotationInspector() {
       const onCls = 'text-ox-blue border border-ox-blue bg-ox-blue/10';
       const offCls = 'text-ox-dim border border-ox-border hover:text-ox-blue hover:border-ox-blue/50';
       const cls = on ? `${base} ${onCls}` : `${base} ${offCls}`;
-      return `<button type="button" class="${cls}" data-action="ai-toggle-ns" data-ns="${escapeHtml(ns)}">${escapeHtml(ns)} · ${count}</button>`;
+      return safeHtml`<button type="button" class="${cls}" data-action="ai-toggle-ns" data-ns="${ns}">${ns} · ${count}</button>`;
     })
     .join('');
   // Filter by namespace + text search.
@@ -135,25 +135,33 @@ export function renderAnnotationInspector() {
     results.innerHTML = '<div class="p-4 text-ox-dim text-[11px]">No matching annotations.</div>';
     return;
   }
-  let html = '<table class="w-full border-collapse">';
-  html += '<thead class="sticky top-0 bg-ox-surface z-10"><tr class="text-ox-dim text-[10px]">';
-  html += '<th class="text-left px-3 py-1 border-b border-ox-border w-[110px]">Namespace</th>';
-  html += '<th class="text-left px-3 py-1 border-b border-ox-border">Term</th>';
-  html += '<th class="text-left px-3 py-1 border-b border-ox-border">Target</th>';
-  html += '<th class="text-left px-3 py-1 border-b border-ox-border">Value</th>';
-  html += '<th class="text-left px-3 py-1 border-b border-ox-border w-[90px]">Qualifier</th>';
-  html += '</tr></thead><tbody>';
-  for (const a of filtered) {
+  const rowsHtml = filtered.map(a => {
     const value = a.value === null || a.value === undefined ? '' : String(a.value);
     const qualifier = a.qualifier || '';
-    html += '<tr class="border-b border-ox-border/30 hover:bg-ox-hover/40">';
-    html += `<td class="px-3 py-0.5 text-ox-blue">${escapeHtml(a.namespace)}</td>`;
-    html += `<td class="px-3 py-0.5 text-ox-text">${escapeHtml(a.term)}</td>`;
-    html += `<td class="px-3 py-0.5 text-ox-muted">${escapeHtml(a.target)}</td>`;
-    html += `<td class="px-3 py-0.5 text-ox-text">${escapeHtml(value) || '<span class="text-ox-dim">—</span>'}</td>`;
-    html += `<td class="px-3 py-0.5 text-ox-muted">${escapeHtml(qualifier)}</td>`;
-    html += '</tr>';
-  }
-  html += '</tbody></table>';
+    const valueHtml = value
+      ? safeHtml`${value}`
+      : '<span class="text-ox-dim">—</span>';
+    return safeHtml`
+      <tr class="border-b border-ox-border/30 hover:bg-ox-hover/40">
+        <td class="px-3 py-0.5 text-ox-blue">${a.namespace}</td>
+        <td class="px-3 py-0.5 text-ox-text">${a.term}</td>
+        <td class="px-3 py-0.5 text-ox-muted">${a.target}</td>
+        <td class="px-3 py-0.5 text-ox-text">${raw(valueHtml)}</td>
+        <td class="px-3 py-0.5 text-ox-muted">${qualifier}</td>
+      </tr>`;
+  }).join('');
+  const html = safeHtml`
+    <table class="w-full border-collapse">
+      <thead class="sticky top-0 bg-ox-surface z-10">
+        <tr class="text-ox-dim text-[10px]">
+          <th class="text-left px-3 py-1 border-b border-ox-border w-[110px]">Namespace</th>
+          <th class="text-left px-3 py-1 border-b border-ox-border">Term</th>
+          <th class="text-left px-3 py-1 border-b border-ox-border">Target</th>
+          <th class="text-left px-3 py-1 border-b border-ox-border">Value</th>
+          <th class="text-left px-3 py-1 border-b border-ox-border w-[90px]">Qualifier</th>
+        </tr>
+      </thead>
+      <tbody>${raw(rowsHtml)}</tbody>
+    </table>`;
   results.innerHTML = html;
 }

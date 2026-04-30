@@ -11,7 +11,7 @@
 // All imports flow downward — no circular back to app.js.
 
 import { state } from './state.js';
-import { escapeHtml, safeHtml } from './html.js';
+import { safeHtml, raw } from './html.js';
 import { criticalityHint, valueListHint } from './format.js';
 import { getActiveTab } from './tabs.js';
 import { propertyFlagHints, renderSelectionFieldsBar } from './query.js';
@@ -50,28 +50,20 @@ export function renderDescribe(info) {
     }
   }
 
-  let html = '<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">';
-
   // Properties
-  html += '<div class="overflow-auto"><table class="w-full text-xs font-mono"><thead><tr class="text-ox-dim">';
-  html += '<th class="text-left pb-1.5 bg-ox-surface pr-3">Property</th>';
-  html += '<th class="text-left pb-1.5 bg-ox-surface pr-3">Type</th>';
-  html += '<th class="text-left pb-1.5 bg-ox-surface pr-3">Key</th>';
-  html += '<th class="text-left pb-1.5 bg-ox-surface">Label</th>';
-  html += '</tr></thead><tbody>';
-  for (const p of info.properties) {
+  const propertyRows = info.properties.map(p => {
     const keyMark = p.is_key ? '<span class="text-ox-amber">&#9679;</span>' : '';
     // SAP view: surface the text-companion property ("↦ TextProp") next to
     // the property name. The arrow hints that this column has an associated
     // description field that Fiori renders together with it.
     const textHint = state.sapViewEnabled && p.text_path
-      ? ` <span class="text-ox-blue text-[10px]" title="Common.Text → ${escapeHtml(p.text_path)}">&#x21A6; ${escapeHtml(p.text_path)}</span>`
+      ? safeHtml` <span class="text-ox-blue text-[10px]" title="Common.Text → ${p.text_path}">&#x21A6; ${p.text_path}</span>`
       : '';
     const currencyHint = state.sapViewEnabled && p.iso_currency_path
-      ? ` <span class="text-ox-green text-[10px]" title="Measures.ISOCurrency → ${escapeHtml(p.iso_currency_path)}">&curren; ${escapeHtml(p.iso_currency_path)}</span>`
+      ? safeHtml` <span class="text-ox-green text-[10px]" title="Measures.ISOCurrency → ${p.iso_currency_path}">&curren; ${p.iso_currency_path}</span>`
       : '';
     const unitHint = state.sapViewEnabled && p.unit_path && !p.iso_currency_path
-      ? ` <span class="text-ox-green text-[10px]" title="Measures.Unit / sap:unit → ${escapeHtml(p.unit_path)}">&#8593; ${escapeHtml(p.unit_path)}</span>`
+      ? safeHtml` <span class="text-ox-green text-[10px]" title="Measures.Unit / sap:unit → ${p.unit_path}">&#8593; ${p.unit_path}</span>`
       : '';
     const titleHint = state.sapViewEnabled && info.header_info && info.header_info.title_path === p.name
       ? ' <span class="text-ox-amber text-[10px]" title="Used as UI.HeaderInfo.Title">title</span>'
@@ -88,36 +80,62 @@ export function renderDescribe(info) {
     const hiddenRow = state.sapViewEnabled && (p.hidden || (p.field_control && p.field_control.kind === 'hidden'));
     const rowCls = hiddenRow ? 'opacity-60' : '';
     const nameCls = hiddenRow ? 'text-ox-dim' : 'text-ox-text';
-    html += `<tr class="hover:bg-ox-amberGlow cursor-pointer transition-colors ${rowCls}" data-action="select" data-field="${escapeHtml(p.name)}">`;
-    html += `<td class="py-0.5 pr-3 ${nameCls}">${escapeHtml(p.name)}${textHint}${currencyHint}${unitHint}${titleHint}${semKeyHint}${critHint}${flagHints}${vlHint}</td>`;
-    html += `<td class="py-0.5 pr-3 text-ox-dim">${escapeHtml(p.edm_type.replace('Edm.', ''))}</td>`;
-    html += `<td class="py-0.5 pr-3 text-center">${keyMark}</td>`;
-    html += `<td class="py-0.5 text-ox-muted">${escapeHtml(p.label || '')}</td>`;
-    html += '</tr>';
-  }
-  html += '</tbody></table></div>';
+    const hints = [textHint, currencyHint, unitHint, titleHint, semKeyHint, critHint, flagHints, vlHint].join('');
+    return safeHtml`
+      <tr class="hover:bg-ox-amberGlow cursor-pointer transition-colors ${rowCls}" data-action="select" data-field="${p.name}">
+        <td class="py-0.5 pr-3 ${nameCls}">${p.name}${raw(hints)}</td>
+        <td class="py-0.5 pr-3 text-ox-dim">${p.edm_type.replace('Edm.', '')}</td>
+        <td class="py-0.5 pr-3 text-center">${raw(keyMark)}</td>
+        <td class="py-0.5 text-ox-muted">${p.label || ''}</td>
+      </tr>`;
+  }).join('');
+
+  const propertiesTable = safeHtml`
+    <div class="overflow-auto">
+      <table class="w-full text-xs font-mono">
+        <thead>
+          <tr class="text-ox-dim">
+            <th class="text-left pb-1.5 bg-ox-surface pr-3">Property</th>
+            <th class="text-left pb-1.5 bg-ox-surface pr-3">Type</th>
+            <th class="text-left pb-1.5 bg-ox-surface pr-3">Key</th>
+            <th class="text-left pb-1.5 bg-ox-surface">Label</th>
+          </tr>
+        </thead>
+        <tbody>${raw(propertyRows)}</tbody>
+      </table>
+    </div>`;
 
   // Nav properties
+  let navTable = '';
   if (info.nav_properties.length > 0) {
-    html += '<div class="overflow-auto"><table class="w-full text-xs font-mono"><thead><tr class="text-ox-dim">';
-    html += '<th class="text-left pb-1.5 bg-ox-surface pr-3">Navigation</th>';
-    html += '<th class="text-left pb-1.5 bg-ox-surface pr-3">Target</th>';
-    html += '<th class="text-left pb-1.5 bg-ox-surface">Mult.</th>';
-    html += '</tr></thead><tbody>';
-    for (const n of info.nav_properties) {
-      html += `<tr class="hover:bg-ox-amberGlow cursor-pointer transition-colors" data-action="expand" data-field="${escapeHtml(n.name)}">`;
-      html += `<td class="py-0.5 pr-3 text-ox-text">${escapeHtml(n.name)}</td>`;
-      html += `<td class="py-0.5 pr-3 text-ox-dim">${escapeHtml(n.target_type)}</td>`;
-      html += `<td class="py-0.5 text-ox-muted">${escapeHtml(n.multiplicity)}</td>`;
-      html += '</tr>';
-    }
-    html += '</tbody></table></div>';
+    const navRows = info.nav_properties.map(n => safeHtml`
+      <tr class="hover:bg-ox-amberGlow cursor-pointer transition-colors" data-action="expand" data-field="${n.name}">
+        <td class="py-0.5 pr-3 text-ox-text">${n.name}</td>
+        <td class="py-0.5 pr-3 text-ox-dim">${n.target_type}</td>
+        <td class="py-0.5 text-ox-muted">${n.multiplicity}</td>
+      </tr>`).join('');
+    navTable = safeHtml`
+      <div class="overflow-auto">
+        <table class="w-full text-xs font-mono">
+          <thead>
+            <tr class="text-ox-dim">
+              <th class="text-left pb-1.5 bg-ox-surface pr-3">Navigation</th>
+              <th class="text-left pb-1.5 bg-ox-surface pr-3">Target</th>
+              <th class="text-left pb-1.5 bg-ox-surface">Mult.</th>
+            </tr>
+          </thead>
+          <tbody>${raw(navRows)}</tbody>
+        </table>
+      </div>`;
   }
 
-  html += '</div>';
-  if (state.sapViewEnabled) {
-    html += renderFioriReadinessPanel(info);
-  }
+  const readinessPanel = state.sapViewEnabled ? renderFioriReadinessPanel(info) : '';
+  const html = safeHtml`
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      ${raw(propertiesTable)}
+      ${raw(navTable)}
+    </div>
+    ${raw(readinessPanel)}`;
   document.getElementById('describeContent').innerHTML = html;
 }
 

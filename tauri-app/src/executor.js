@@ -21,6 +21,7 @@ import { showSapViewWarnings, validateQueryRestrictions } from './query.js';
 import { isBrowserAuthProfile, browserAuthMessage } from './auth.js';
 import { addToHistory } from './history.js';
 import { renderJson, renderResults, extractRows } from './results.js';
+import { cacheQueryResult, clearQueryResultCache } from './resultCache.js';
 
 export function buildODataUrl(params) {
   if (!state.currentServicePath || !params) return '';
@@ -83,6 +84,8 @@ export async function executeQuery(asJson = false) {
     if (!scope.active()) return;
 
     const elapsed = Math.round(performance.now() - queryStart);
+    const tab = getActiveTab();
+    cacheQueryResult(tab, data, params, elapsed, asJson);
 
     if (asJson) {
       renderJson(data);
@@ -92,7 +95,6 @@ export async function executeQuery(asJson = false) {
     }
 
     // Record in history
-    const tab = getActiveTab();
     if (tab && !asJson) {
       const rows = extractRows(data);
       const rowCount = rows ? rows.length : 0;
@@ -102,6 +104,9 @@ export async function executeQuery(asJson = false) {
     if (!scope.active()) return;
     setStatus('Query error: ' + e);
     hideStatsBar();
+    clearQueryResultCache(getActiveTab());
+    state.expandedDataStore = {};
+    state.lastResultRows = null;
     const message = isBrowserAuthProfile(state.currentProfile) ? browserAuthMessage(e) : String(e);
     document.getElementById('resultsArea').innerHTML =
       safeHtml`<div class="p-4 text-ox-red text-sm">${message}</div>`;

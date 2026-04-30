@@ -18,7 +18,7 @@
 // them clean trace.js targets.
 
 import { state } from './state.js';
-import { escapeHtml } from './html.js';
+import { safeHtml, raw } from './html.js';
 import { setStatus } from './status.js';
 import { getActiveTab } from './tabs.js';
 import { copyToClipboard } from './clipboard.js';
@@ -100,13 +100,12 @@ function renderTraceHeaders(headers) {
     return '<div class="trace-code text-ox-dim">No headers captured.</div>';
   }
 
-  let html = '<div class="trace-header-grid">';
-  for (const header of headers) {
-    html += `<div class="trace-header-name">${escapeHtml(header.name)}</div>`;
-    html += `<div class="trace-header-value">${escapeHtml(header.value)}</div>`;
-  }
-  html += '</div>';
-  return html;
+  const rows = headers
+    .map(header => safeHtml`
+      <div class="trace-header-name">${header.name}</div>
+      <div class="trace-header-value">${header.value}</div>`)
+    .join('');
+  return safeHtml`<div class="trace-header-grid">${raw(rows)}</div>`;
 }
 
 // First-render length for trace bodies — keeps the inspector snappy on
@@ -117,10 +116,10 @@ const TRACE_BODY_PREVIEW_CHARS = 4000;
 
 function renderTraceBody(body, emptyLabel) {
   if (!body) {
-    return `<div class="trace-code text-ox-dim">${escapeHtml(emptyLabel)}</div>`;
+    return safeHtml`<div class="trace-code text-ox-dim">${emptyLabel}</div>`;
   }
   if (body.length <= TRACE_BODY_PREVIEW_CHARS) {
-    return `<pre class="trace-code">${escapeHtml(body)}</pre>`;
+    return safeHtml`<pre class="trace-code">${body}</pre>`;
   }
   // Long body — render collapsed, let the user opt in to full render.
   // `_traceBodyExpanded` is set per-tab when the expand button is clicked.
@@ -131,8 +130,9 @@ function renderTraceBody(body, emptyLabel) {
   const label = expanded
     ? `collapse (showing full ${sizeKb} KB)`
     : `show full response body (${sizeKb} KB)`;
-  return `<pre class="trace-code">${escapeHtml(shown)}</pre>` +
-    `<button type="button" class="mt-2 text-[10px] font-semibold tracking-wide px-2 py-1 rounded-sm text-ox-electric border border-ox-electric/50 hover:bg-ox-electric/10 hover:border-ox-electric transition-colors" data-action="toggle-trace-body">${escapeHtml(label)}</button>`;
+  return safeHtml`
+    <pre class="trace-code">${shown}</pre>
+    <button type="button" class="mt-2 text-[10px] font-semibold tracking-wide px-2 py-1 rounded-sm text-ox-electric border border-ox-electric/50 hover:bg-ox-electric/10 hover:border-ox-electric transition-colors" data-action="toggle-trace-body">${label}</button>`;
 }
 
 function renderTraceList(tab) {
@@ -143,21 +143,21 @@ function renderTraceList(tab) {
   }
 
   const selectedId = ensureTraceSelection(tab);
-  let html = '';
-  for (const entry of [...tab.httpTraceEntries].reverse()) {
+  const html = [...tab.httpTraceEntries].reverse().map(entry => {
     const active = entry.id === selectedId ? ' active' : '';
     const statusClass = traceStatusClass(entry);
     const statusCls = statusClass ? ` ${statusClass}` : '';
-    html += `<div class="trace-row${active}" data-action="select-trace" data-trace-id="${entry.id}">`;
-    html += '<div class="trace-meta">';
-    html += `<span class="trace-pill">${escapeHtml(entry.method)}</span>`;
-    html += `<span class="trace-pill${statusCls}">${escapeHtml(traceStatusLabel(entry))}</span>`;
-    html += `<span>${entry.duration_ms}ms</span>`;
-    html += '</div>';
-    html += `<div class="trace-url">${escapeHtml(compactTraceUrl(entry.url))}</div>`;
-    html += `<div class="trace-meta">${escapeHtml(traceOutcomeLabel(entry))}</div>`;
-    html += '</div>';
-  }
+    return safeHtml`
+      <div class="trace-row${active}" data-action="select-trace" data-trace-id="${entry.id}">
+        <div class="trace-meta">
+          <span class="trace-pill">${entry.method}</span>
+          <span class="trace-pill${statusCls}">${traceStatusLabel(entry)}</span>
+          <span>${entry.duration_ms}ms</span>
+        </div>
+        <div class="trace-url">${compactTraceUrl(entry.url)}</div>
+        <div class="trace-meta">${traceOutcomeLabel(entry)}</div>
+      </div>`;
+  }).join('');
   list.innerHTML = html;
 }
 
@@ -173,65 +173,71 @@ export function renderTraceDetail(tab) {
   const statusClass = traceStatusClass(entry);
   const statusCls = statusClass ? ` ${statusClass}` : '';
 
-  let html = '<div class="trace-section">';
-  html += '<div class="flex items-center gap-2 mb-2">';
-  html += `<span class="trace-pill">${escapeHtml(entry.method)}</span>`;
-  html += `<span class="trace-pill${statusCls}">${escapeHtml(traceStatusLabel(entry))}</span>`;
-  html += `<span class="trace-meta">${entry.duration_ms}ms</span>`;
-  html += '</div>';
-  html += `<div class="trace-url">${escapeHtml(entry.url)}</div>`;
-  html += '</div>';
+  const requestActive = activeSubTab === 'request' ? ' active' : '';
+  const responseActive = activeSubTab === 'response' ? ' active' : '';
+  const actionButtons = activeSubTab === 'request'
+    ? safeHtml`
+      <button data-action="copy-trace-curl">copy as curl</button>
+      <button data-action="copy-trace-request-body"${raw(entry.request_body_preview ? '' : ' disabled')}>copy body</button>`
+    : safeHtml`
+      <button data-action="copy-trace-response-body"${raw(entry.response_body_preview ? '' : ' disabled')}>copy body</button>`;
 
-  html += '<div class="trace-subtabs">';
-  html += `<div class="trace-subtab${activeSubTab === 'request' ? ' active' : ''}" data-action="select-trace-subtab" data-subtab="request">Request</div>`;
-  html += `<div class="trace-subtab${activeSubTab === 'response' ? ' active' : ''}" data-action="select-trace-subtab" data-subtab="response">Response</div>`;
-  html += '<div class="trace-subtab-actions">';
+  const sections = [];
   if (activeSubTab === 'request') {
-    html += '<button data-action="copy-trace-curl">copy as curl</button>';
-    const disabled = entry.request_body_preview ? '' : ' disabled';
-    html += `<button data-action="copy-trace-request-body"${disabled}>copy body</button>`;
+    sections.push(safeHtml`
+      <div class="trace-section">
+        <div class="trace-section-title">Headers</div>
+        ${raw(renderTraceHeaders(entry.request_headers))}
+      </div>`);
+    sections.push(safeHtml`
+      <div class="trace-section">
+        <div class="trace-section-title">Body</div>
+        ${raw(renderTraceBody(entry.request_body_preview, 'No request body captured.'))}
+      </div>`);
   } else {
-    const disabled = entry.response_body_preview ? '' : ' disabled';
-    html += `<button data-action="copy-trace-response-body"${disabled}>copy body</button>`;
-  }
-  html += '</div>';
-  html += '</div>';
-
-  if (activeSubTab === 'request') {
-    html += '<div class="trace-section">';
-    html += '<div class="trace-section-title">Headers</div>';
-    html += renderTraceHeaders(entry.request_headers);
-    html += '</div>';
-
-    html += '<div class="trace-section">';
-    html += '<div class="trace-section-title">Body</div>';
-    html += renderTraceBody(entry.request_body_preview, 'No request body captured.');
-    html += '</div>';
-  } else {
-    html += '<div class="trace-section">';
-    html += '<div class="trace-section-title">Headers</div>';
-    html += renderTraceHeaders(entry.response_headers);
-    html += '</div>';
-
-    html += '<div class="trace-section">';
-    html += '<div class="trace-section-title">Body Preview</div>';
-    html += renderTraceBody(entry.response_body_preview, 'No response body preview captured.');
-    html += '</div>';
+    sections.push(safeHtml`
+      <div class="trace-section">
+        <div class="trace-section-title">Headers</div>
+        ${raw(renderTraceHeaders(entry.response_headers))}
+      </div>`);
+    sections.push(safeHtml`
+      <div class="trace-section">
+        <div class="trace-section-title">Body Preview</div>
+        ${raw(renderTraceBody(entry.response_body_preview, 'No response body preview captured.'))}
+      </div>`);
 
     if (entry.redirect_location) {
-      html += '<div class="trace-section">';
-      html += '<div class="trace-section-title">Redirect</div>';
-      html += `<div class="trace-code">${escapeHtml(entry.redirect_location)}</div>`;
-      html += '</div>';
+      sections.push(safeHtml`
+        <div class="trace-section">
+          <div class="trace-section-title">Redirect</div>
+          <div class="trace-code">${entry.redirect_location}</div>
+        </div>`);
     }
 
     if (entry.error) {
-      html += '<div class="trace-section">';
-      html += '<div class="trace-section-title">Error</div>';
-      html += `<pre class="trace-code">${escapeHtml(entry.error)}</pre>`;
-      html += '</div>';
+      sections.push(safeHtml`
+        <div class="trace-section">
+          <div class="trace-section-title">Error</div>
+          <pre class="trace-code">${entry.error}</pre>
+        </div>`);
     }
   }
+
+  const html = safeHtml`
+    <div class="trace-section">
+      <div class="flex items-center gap-2 mb-2">
+        <span class="trace-pill">${entry.method}</span>
+        <span class="trace-pill${statusCls}">${traceStatusLabel(entry)}</span>
+        <span class="trace-meta">${entry.duration_ms}ms</span>
+      </div>
+      <div class="trace-url">${entry.url}</div>
+    </div>
+    <div class="trace-subtabs">
+      <div class="trace-subtab${requestActive}" data-action="select-trace-subtab" data-subtab="request">Request</div>
+      <div class="trace-subtab${responseActive}" data-action="select-trace-subtab" data-subtab="response">Response</div>
+      <div class="trace-subtab-actions">${raw(actionButtons)}</div>
+    </div>
+    ${raw(sections.join(''))}`;
 
   detail.innerHTML = html;
 }

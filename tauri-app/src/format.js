@@ -1,10 +1,9 @@
 // ── Display formatting helpers ──
 // Pure functions that turn raw EDM values + SAP annotation hints into
-// presentation-layer strings. The HTML-emitting helpers escape every
-// interpolation via escapeHtml; callers assemble the returned strings
-// into safeHtml templates before innerHTML assignment.
+// presentation-layer strings. The HTML-emitting helpers build their
+// snippets with safeHtml so callers can raw() the returned fragments.
 
-import { escapeHtml } from './html.js';
+import { safeHtml } from './html.js';
 
 // Render a small colored dot for a cell's UI.Criticality when SAP
 // View is on. Fixed criticality paints the same level for every row;
@@ -40,7 +39,7 @@ export function criticalityDot(prop, row) {
                 level === 1 ? 'negative' :
                 level === 5 ? 'info' : '';
   const src = c.kind === 'path' ? `via ${c.value}` : 'fixed';
-  return `<span class="${color} mr-1" title="UI.Criticality (${src}) = ${label}">&#9679;</span>`;
+  return safeHtml`<span class="${color} mr-1" title="UI.Criticality (${src}) = ${label}">&#9679;</span>`;
 }
 
 // Apply a V2 `sap:display-format` hint to a raw cell value for
@@ -214,7 +213,7 @@ export function valueListHint(p, sapViewEnabled) {
     cls = 'text-ox-dim border border-ox-dim/50 cursor-help';
     kind = 'v2';
   }
-  return ` <button type="button" class="text-[9px] font-semibold tracking-wide px-1 py-px rounded-sm ${cls} transition-colors align-middle" data-action="value-list" data-prop="${escapeHtml(p.name)}" data-kind="${kind}" title="${escapeHtml(tip)}">&#x21D2; F4</button>`;
+  return safeHtml` <button type="button" class="text-[9px] font-semibold tracking-wide px-1 py-px rounded-sm ${cls} transition-colors align-middle" data-action="value-list" data-prop="${p.name}" data-kind="${kind}" title="${tip}">&#x21D2; F4</button>`;
 }
 
 // SAP View hint for UI.Criticality declared on a property: a small
@@ -235,10 +234,10 @@ export function criticalityHint(p) {
                   level === 2 ? 'critical' :
                   level === 1 ? 'negative' :
                   level === 5 ? 'info' : 'neutral';
-    return ` <span class="${color} text-[10px]" title="UI.Criticality = ${label}">&#9679;</span>`;
+    return safeHtml` <span class="${color} text-[10px]" title="UI.Criticality = ${label}">&#9679;</span>`;
   }
   if (c.kind === 'path') {
-    return ` <span class="text-ox-blue text-[10px]" title="UI.Criticality Path = ${escapeHtml(c.value)}">&#8680; ${escapeHtml(c.value)}</span>`;
+    return safeHtml` <span class="text-ox-blue text-[10px]" title="UI.Criticality Path = ${c.value}">&#8680; ${c.value}</span>`;
   }
   return '';
 }

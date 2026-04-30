@@ -25,6 +25,8 @@ import {
 } from './trace.js';
 import { renderAnnotationBadge } from './annotations.js';
 import { renderDescribe } from './describe.js';
+import { renderJson, renderResults } from './results.js';
+import { hasCachedQueryResult } from './resultCache.js';
 
 export function createTab(opts = {}) {
   const id = 'tab_' + Date.now() + '_' + Math.random().toString(36).slice(2);
@@ -249,18 +251,28 @@ export function restoreTabUI() {
 
   renderAnnotationBadge(tab.annotationSummary);
 
-  // Stats bar
-  if (tab._statsVisible) {
+  const hasResultCache = hasCachedQueryResult(tab);
+
+  // Stats bar. Cached raw query results re-render below and own the
+  // stats state; the saved DOM text is only a fallback for older tabs.
+  if (!hasResultCache && tab._statsVisible) {
     document.getElementById('statRows').textContent = tab._statRows || '';
     document.getElementById('statSize').textContent = tab._statSize || '';
     document.getElementById('statTiming').innerHTML = tab._statTiming || '';
     document.getElementById('statsBar').classList.remove('hidden');
-  } else {
+  } else if (!hasResultCache) {
     document.getElementById('statsBar').classList.add('hidden');
   }
 
-  // Results
-  if (tab._resultsHtml !== undefined) {
+  // Results. Prefer raw query data so SAP View and formatter changes are
+  // reflected on restore instead of replaying stale DOM HTML.
+  if (hasResultCache) {
+    if (tab._lastQueryAsJson) {
+      renderJson(tab._lastQueryData);
+    } else {
+      renderResults(tab._lastQueryData, tab._lastQueryElapsed, tab._lastQueryParams);
+    }
+  } else if (tab._resultsHtml !== undefined) {
     document.getElementById('resultsArea').innerHTML = tab._resultsHtml;
   } else {
     resetResultsArea();

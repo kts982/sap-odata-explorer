@@ -16,18 +16,14 @@
 //   el.innerHTML =                    // multi-line: backtick on next line
 //     `<div>${x}</div>`;
 //
-// Known limitation — the regex still does NOT catch variable
+// Deliberate limitation — the regex does NOT prove variable
 // indirection:
 //   const html = `<div>${x}</div>`;
 //   el.innerHTML = html;
-// The literal isn't on the RHS of an innerHTML assignment, so a
-// surface-level regex misses it. Closing that gap requires either AST
-// flow analysis (overkill for this project) or — more practically —
-// converting the BUILDER functions across the codebase so every
-// interpolation passes through safeHtml internally. Once that's done
-// the variable RHS is *syntactically* untrusted but the data flow is
-// closed by construction. See project_security_hardening.md, item 1
-// (the 5c stage 3 follow-up).
+// The literal isn't on the RHS of an innerHTML assignment. The project
+// closes that path by convention: renderer builders must assemble
+// variables from safeHtml fragments and pass prebuilt fragments via
+// raw() only after their interpolations have already been escaped.
 //
 // Targets are auto-discovered: every .js file under tauri-app/src/
 // (excluding vendor/) plus index.html. Adding a new module no longer
