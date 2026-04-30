@@ -4,13 +4,13 @@
 // Threat model: SAP `$metadata` (entity names, annotation values, error
 // messages) is untrusted input. Any HTML built with
 // `el.innerHTML = `...${untrusted}...`` without escaping is XSS-shaped.
-// The `safeHtml` tagged-template helper in `tauri-app/src/app.js`
+// The `safeHtml` tagged-template helper in `tauri-app/src/html.js`
 // auto-escapes interpolations; this lint enforces that every innerHTML
 // assignment goes through it (or a literal string, or a pre-built
 // variable that callers built with safeHtml).
 //
 // Replaces the earlier grep-based check in CI which only matched
-// single-line patterns. Reading the file as a single string and
+// single-line patterns. Reading each file as a single string and
 // applying the same regex catches both:
 //   el.innerHTML = `bad ${x}`;        // single-line
 //   el.innerHTML =                    // multi-line: backtick on next line
@@ -22,30 +22,40 @@
 //   el.innerHTML = html;
 // The literal isn't on the RHS of an innerHTML assignment, so a
 // surface-level regex misses it. Closing that gap requires either AST
-// flow analysis (overkill for one project file) or — more practically —
-// converting the remaining BUILDER functions in app.js so every
+// flow analysis (overkill for this project) or — more practically —
+// converting the BUILDER functions across the codebase so every
 // interpolation passes through safeHtml internally. Once that's done
 // the variable RHS is *syntactically* untrusted but the data flow is
-// closed by construction. See project_security_hardening.md, item 1.
+// closed by construction. See project_security_hardening.md, item 1
+// (the 5c stage 3 follow-up).
+//
+// Targets are auto-discovered: every .js file under tauri-app/src/
+// (excluding vendor/) plus index.html. Adding a new module no longer
+// requires updating an allowlist.
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
-const TARGETS = [
-  'tauri-app/src/api.js',
-  'tauri-app/src/app.js',
-  'tauri-app/src/auth.js',
-  'tauri-app/src/favorites.js',
-  'tauri-app/src/fiori.js',
-  'tauri-app/src/format.js',
-  'tauri-app/src/html.js',
-  'tauri-app/src/index.html',
-  'tauri-app/src/query.js',
-  'tauri-app/src/services.js',
-  'tauri-app/src/state.js',
-  'tauri-app/src/status.js',
-  'tauri-app/src/tabs.js',
-  'tauri-app/src/valueList.js',
-];
+const SRC_DIR = 'tauri-app/src';
+const EXCLUDE_DIRS = new Set(['vendor', 'fonts']);
+const EXTRA_TARGETS = [join(SRC_DIR, 'index.html')];
+
+function discoverJsFiles(dir) {
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (EXCLUDE_DIRS.has(entry.name)) continue;
+      out.push(...discoverJsFiles(join(dir, entry.name)));
+    } else if (entry.isFile() && entry.name.endsWith('.js')) {
+      out.push(join(dir, entry.name));
+    }
+  }
+  return out;
+}
+
+const TARGETS = [...discoverJsFiles(SRC_DIR), ...EXTRA_TARGETS]
+  .map(p => p.replace(/\\/g, '/'))
+  .sort();
 
 const RE = /\.innerHTML\s*=\s*`/g;
 
@@ -81,4 +91,4 @@ if (violations > 0) {
   process.exit(1);
 }
 
-console.log('ok: no bare template-literal innerHTML sites');
+console.log(`ok: no bare template-literal innerHTML sites (${TARGETS.length} files scanned)`);
