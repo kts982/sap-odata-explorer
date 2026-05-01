@@ -42,12 +42,16 @@ jobs:
         # Verifies the desktop crate compiles + the frontend assets are
         # produced. `--no-bundle` skips installer/AppImage creation,
         # which we don't gate on (and which needs OS-specific tooling
-        # that's not worth fighting here). Driven via npm because the
-        # repo's beforeBuildCommand expects @tauri-apps/cli, not a
-        # global cargo-tauri.
+        # that's not worth fighting here). Invoked via `npx tauri`
+        # from the tauri-app dir rather than `npm run tauri --`
+        # because npm 10 mis-parses `--ci` (expands it to `--cidr`),
+        # so the `--no-bundle` flag never reaches Tauri and it tries
+        # to build the MSI installer + fails on missing WiX. Going
+        # through npx skips npm's flag-forwarding layer.
+        working-directory: tauri-app
         run: |
-          npm ci --prefix tauri-app
-          npm --prefix tauri-app run tauri -- build --ci --no-bundle
+          npm ci
+          npx tauri build --ci --no-bundle
 
       - name: Run tests
         run: cargo test --workspace
