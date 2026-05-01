@@ -136,14 +136,14 @@ fn headers_for_diagnostics(headers: &HeaderMap, kind: HeaderKind) -> Vec<HttpHea
 fn redact_header(name: &str, value: &str, kind: HeaderKind) -> String {
     // X-CSRF-Token is session-equivalent for SAP — leaking one in a
     // copy-as-curl export is as bad as leaking the cookie.
-    let sensitive = match (kind, name.to_ascii_lowercase().as_str()) {
-        (HeaderKind::Request, "authorization") => true,
-        (HeaderKind::Request, "cookie") => true,
-        (HeaderKind::Request, "x-csrf-token") => true,
-        (HeaderKind::Response, "set-cookie") => true,
-        (HeaderKind::Response, "x-csrf-token") => true,
-        _ => false,
-    };
+    let sensitive = matches!(
+        (kind, name.to_ascii_lowercase().as_str()),
+        (HeaderKind::Request, "authorization")
+            | (HeaderKind::Request, "cookie")
+            | (HeaderKind::Request, "x-csrf-token")
+            | (HeaderKind::Response, "set-cookie")
+            | (HeaderKind::Response, "x-csrf-token")
+    );
 
     if sensitive {
         return "<redacted>".to_string();
@@ -182,14 +182,12 @@ fn body_preview_for_diagnostics(
 
 fn truncate(value: &str, max_chars: usize) -> String {
     let mut out = String::new();
-    let mut count = 0usize;
-    for ch in value.chars() {
+    for (count, ch) in value.chars().enumerate() {
         if count == max_chars {
             out.push_str("... <truncated>");
             return out;
         }
         out.push(ch);
-        count += 1;
     }
     out
 }

@@ -24,6 +24,11 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -33,15 +38,25 @@ jobs:
       - name: Build core + CLI
         run: cargo build --release -p sap-odata-core -p sap-odata-cli
 
+      - name: Build Tauri app (no bundle)
+        # Verifies the desktop crate compiles + the frontend assets are
+        # produced. `--no-bundle` skips installer/AppImage creation,
+        # which we don't gate on (and which needs OS-specific tooling
+        # that's not worth fighting here). Driven via npm because the
+        # repo's beforeBuildCommand expects @tauri-apps/cli, not a
+        # global cargo-tauri.
+        run: |
+          npm ci --prefix tauri-app
+          npm --prefix tauri-app run tauri -- build --ci --no-bundle
+
       - name: Run tests
-        run: cargo test -p sap-odata-core
+        run: cargo test --workspace
 
       - name: Check formatting
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy -p sap-odata-core -p sap-odata-cli -- -D warnings
-        continue-on-error: true
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
   audit:
     name: Security audit

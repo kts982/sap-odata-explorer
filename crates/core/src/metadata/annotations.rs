@@ -54,32 +54,30 @@ pub(super) fn apply_v4_typed_annotations(
             let lower = term.trim_start_matches("SAP__").to_ascii_lowercase();
 
             if lower.ends_with(".headerinfo") && !target.contains('/') {
-                if let Some(et) = entity_types.iter_mut().find(|e| e.name == target) {
-                    if let Some(info) = parse_header_info_record(&annot) {
-                        et.header_info = Some(info);
-                    }
+                if let Some(et) = entity_types.iter_mut().find(|e| e.name == target)
+                    && let Some(info) = parse_header_info_record(&annot)
+                {
+                    et.header_info = Some(info);
                 }
             } else if lower.ends_with(".text") && !lower.ends_with(".textarrangement") {
-                if let Some((et_name, prop_name)) = target.split_once('/') {
-                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
-                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
-                            if prop.text_path.is_none() {
-                                prop.text_path = annot.attribute("Path").map(String::from);
-                            }
-                            // A `UI.TextArrangement` nested inside the
-                            // `Common.Text` annotation is the per-property
-                            // override — takes priority over any type-level
-                            // default set later.
-                            for nested in children_by_tag(&annot, "Annotation") {
-                                let n_term = nested.attribute("Term").unwrap_or("");
-                                let n_lower =
-                                    n_term.trim_start_matches("SAP__").to_ascii_lowercase();
-                                if n_lower.ends_with(".textarrangement") {
-                                    if let Some(ta) = parse_text_arrangement(&nested) {
-                                        prop.text_arrangement = Some(ta);
-                                    }
-                                }
-                            }
+                if let Some((et_name, prop_name)) = target.split_once('/')
+                    && let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name)
+                    && let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name)
+                {
+                    if prop.text_path.is_none() {
+                        prop.text_path = annot.attribute("Path").map(String::from);
+                    }
+                    // A `UI.TextArrangement` nested inside the
+                    // `Common.Text` annotation is the per-property
+                    // override — takes priority over any type-level
+                    // default set later.
+                    for nested in children_by_tag(&annot, "Annotation") {
+                        let n_term = nested.attribute("Term").unwrap_or("");
+                        let n_lower = n_term.trim_start_matches("SAP__").to_ascii_lowercase();
+                        if n_lower.ends_with(".textarrangement")
+                            && let Some(ta) = parse_text_arrangement(&nested)
+                        {
+                            prop.text_arrangement = Some(ta);
                         }
                     }
                 }
@@ -90,14 +88,13 @@ pub(super) fn apply_v4_typed_annotations(
                 // is typically declared *before* a standalone
                 // `UI.TextArrangement` on the type — but we guard against
                 // either order.)
-                if !target.contains('/') {
-                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == target) {
-                        if let Some(ta) = parse_text_arrangement(&annot) {
-                            for prop in et.properties.iter_mut() {
-                                if prop.text_arrangement.is_none() {
-                                    prop.text_arrangement = Some(ta);
-                                }
-                            }
+                if !target.contains('/')
+                    && let Some(et) = entity_types.iter_mut().find(|e| e.name == target)
+                    && let Some(ta) = parse_text_arrangement(&annot)
+                {
+                    for prop in et.properties.iter_mut() {
+                        if prop.text_arrangement.is_none() {
+                            prop.text_arrangement = Some(ta);
                         }
                     }
                 }
@@ -121,36 +118,31 @@ pub(super) fn apply_v4_typed_annotations(
                     }
                 }
             } else if lower.ends_with(".semanticobject") {
-                if let Some((et_name, prop_name)) = target.split_once('/') {
-                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
-                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
-                            if prop.semantic_object.is_none() {
-                                prop.semantic_object = annot.attribute("String").map(String::from);
-                            }
-                        }
-                    }
+                if let Some((et_name, prop_name)) = target.split_once('/')
+                    && let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name)
+                    && let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name)
+                    && prop.semantic_object.is_none()
+                {
+                    prop.semantic_object = annot.attribute("String").map(String::from);
                 }
             } else if lower.ends_with(".masked") {
                 // Marker-only annotation; presence is enough. SAP may
                 // emit it with an `EnumMember` variant for "masked with
                 // stars vs dots" etc. — we collapse to a single boolean
                 // since the explorer just needs a visual warning.
-                if let Some((et_name, prop_name)) = target.split_once('/') {
-                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
-                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
-                            prop.masked = true;
-                        }
-                    }
+                if let Some((et_name, prop_name)) = target.split_once('/')
+                    && let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name)
+                    && let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name)
+                {
+                    prop.masked = true;
                 }
             } else if lower.ends_with(".fieldcontrol") {
-                if let Some((et_name, prop_name)) = target.split_once('/') {
-                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
-                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
-                            if let Some(fc) = parse_field_control(&annot) {
-                                prop.field_control = Some(fc);
-                            }
-                        }
-                    }
+                if let Some((et_name, prop_name)) = target.split_once('/')
+                    && let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name)
+                    && let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name)
+                    && let Some(fc) = parse_field_control(&annot)
+                {
+                    prop.field_control = Some(fc);
                 }
             } else if lower.ends_with(".hidden") && !lower.ends_with(".hiddenfilter") {
                 // UI.Hidden can be marker-only (`<Annotation .../>`) or
@@ -158,50 +150,43 @@ pub(super) fn apply_v4_typed_annotations(
                 // missing value as `true`. Path variants are
                 // runtime-evaluated; we don't resolve them per row, so
                 // a Path here still flips the static marker on.
-                if let Some((et_name, prop_name)) = target.split_once('/') {
-                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
-                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
-                            let explicit = annot.attribute("Bool").map(|v| v == "true");
-                            prop.hidden = explicit.unwrap_or(true);
-                        }
-                    }
+                if let Some((et_name, prop_name)) = target.split_once('/')
+                    && let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name)
+                    && let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name)
+                {
+                    let explicit = annot.attribute("Bool").map(|v| v == "true");
+                    prop.hidden = explicit.unwrap_or(true);
                 }
             } else if lower.ends_with(".hiddenfilter") {
-                if let Some((et_name, prop_name)) = target.split_once('/') {
-                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
-                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
-                            let explicit = annot.attribute("Bool").map(|v| v == "true");
-                            prop.hidden_filter = explicit.unwrap_or(true);
-                        }
-                    }
+                if let Some((et_name, prop_name)) = target.split_once('/')
+                    && let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name)
+                    && let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name)
+                {
+                    let explicit = annot.attribute("Bool").map(|v| v == "true");
+                    prop.hidden_filter = explicit.unwrap_or(true);
                 }
             } else if lower.ends_with(".criticality") {
-                if let Some((et_name, prop_name)) = target.split_once('/') {
-                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
-                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
-                            if let Some(c) = parse_criticality(&annot) {
-                                prop.criticality = Some(c);
-                            }
-                        }
-                    }
+                if let Some((et_name, prop_name)) = target.split_once('/')
+                    && let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name)
+                    && let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name)
+                    && let Some(c) = parse_criticality(&annot)
+                {
+                    prop.criticality = Some(c);
                 }
             } else if lower.ends_with(".unit") && !lower.ends_with(".isunit") {
-                if let Some((et_name, prop_name)) = target.split_once('/') {
-                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
-                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
-                            if prop.unit_path.is_none() {
-                                prop.unit_path = annot.attribute("Path").map(String::from);
-                            }
-                        }
-                    }
+                if let Some((et_name, prop_name)) = target.split_once('/')
+                    && let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name)
+                    && let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name)
+                    && prop.unit_path.is_none()
+                {
+                    prop.unit_path = annot.attribute("Path").map(String::from);
                 }
             } else if lower.ends_with(".isocurrency") {
-                if let Some((et_name, prop_name)) = target.split_once('/') {
-                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
-                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
-                            prop.iso_currency_path = annot.attribute("Path").map(String::from);
-                        }
-                    }
+                if let Some((et_name, prop_name)) = target.split_once('/')
+                    && let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name)
+                    && let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name)
+                {
+                    prop.iso_currency_path = annot.attribute("Path").map(String::from);
                 }
             } else if lower.ends_with(".filterrestrictions")
                 || lower.ends_with(".sortrestrictions")
@@ -210,12 +195,12 @@ pub(super) fn apply_v4_typed_annotations(
             {
                 // Entity-set–scoped capability restriction.
                 // Target looks like "Container/EntitySetName".
-                if let Some((_, set_name)) = target.split_once('/') {
-                    if let Some(type_ref) = entity_sets.iter().find(|s| s.name == set_name) {
-                        let type_name = extract_type_name(&type_ref.entity_type).to_string();
-                        if let Some(et) = entity_types.iter_mut().find(|t| t.name == type_name) {
-                            apply_capability_restriction(&lower, &annot, &mut et.properties);
-                        }
+                if let Some((_, set_name)) = target.split_once('/')
+                    && let Some(type_ref) = entity_sets.iter().find(|s| s.name == set_name)
+                {
+                    let type_name = extract_type_name(&type_ref.entity_type).to_string();
+                    if let Some(et) = entity_types.iter_mut().find(|t| t.name == type_name) {
+                        apply_capability_restriction(&lower, &annot, &mut et.properties);
                     }
                 }
             } else if lower.ends_with(".searchrestrictions")
@@ -225,28 +210,28 @@ pub(super) fn apply_v4_typed_annotations(
                 // Entity-set–scoped. These set flat Option<bool>s and/or
                 // a nav-path list on the EntityType so the frontend
                 // pre-flight validator can catch queries that will 500.
-                if let Some((_, set_name)) = target.split_once('/') {
-                    if let Some(type_ref) = entity_sets.iter().find(|s| s.name == set_name) {
-                        let type_name = extract_type_name(&type_ref.entity_type).to_string();
-                        if let Some(et) = entity_types.iter_mut().find(|t| t.name == type_name) {
-                            apply_entity_set_capability(&lower, &annot, et);
-                        }
+                if let Some((_, set_name)) = target.split_once('/')
+                    && let Some(type_ref) = entity_sets.iter().find(|s| s.name == set_name)
+                {
+                    let type_name = extract_type_name(&type_ref.entity_type).to_string();
+                    if let Some(et) = entity_types.iter_mut().find(|t| t.name == type_name) {
+                        apply_entity_set_capability(&lower, &annot, et);
                     }
                 }
             } else if lower.ends_with(".topsupported") || lower.ends_with(".skipsupported") {
                 // Standalone `<Annotation ... Bool="false"/>` on an entity
                 // set. Default is `true`, so only `false` is informative
                 // (but we store whatever was declared for transparency).
-                if let Some((_, set_name)) = target.split_once('/') {
-                    if let Some(type_ref) = entity_sets.iter().find(|s| s.name == set_name) {
-                        let type_name = extract_type_name(&type_ref.entity_type).to_string();
-                        if let Some(et) = entity_types.iter_mut().find(|t| t.name == type_name) {
-                            let val = annot.attribute("Bool").map(|v| v == "true");
-                            if lower.ends_with(".topsupported") {
-                                et.top_supported = val;
-                            } else {
-                                et.skip_supported = val;
-                            }
+                if let Some((_, set_name)) = target.split_once('/')
+                    && let Some(type_ref) = entity_sets.iter().find(|s| s.name == set_name)
+                {
+                    let type_name = extract_type_name(&type_ref.entity_type).to_string();
+                    if let Some(et) = entity_types.iter_mut().find(|t| t.name == type_name) {
+                        let val = annot.attribute("Bool").map(|v| v == "true");
+                        if lower.ends_with(".topsupported") {
+                            et.top_supported = val;
+                        } else {
+                            et.skip_supported = val;
                         }
                     }
                 }
@@ -262,23 +247,21 @@ pub(super) fn apply_v4_typed_annotations(
                 // `value_list_variants` so the picker can offer a
                 // variant switcher. Dedupe by qualifier so a repeated
                 // annotation on the same target doesn't double-count.
-                if let Some((et_name, prop_name)) = target.split_once('/') {
-                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
-                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
-                            if let Some(mut vl) = parse_value_list_record(&annot) {
-                                vl.qualifier = annot.attribute("Qualifier").map(String::from);
-                                let already_have = prop
-                                    .value_list_variants
-                                    .iter()
-                                    .any(|existing| existing.qualifier == vl.qualifier);
-                                if !already_have {
-                                    if prop.value_list.is_none() {
-                                        prop.value_list = Some(vl.clone());
-                                    }
-                                    prop.value_list_variants.push(vl);
-                                }
-                            }
+                if let Some((et_name, prop_name)) = target.split_once('/')
+                    && let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name)
+                    && let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name)
+                    && let Some(mut vl) = parse_value_list_record(&annot)
+                {
+                    vl.qualifier = annot.attribute("Qualifier").map(String::from);
+                    let already_have = prop
+                        .value_list_variants
+                        .iter()
+                        .any(|existing| existing.qualifier == vl.qualifier);
+                    if !already_have {
+                        if prop.value_list.is_none() {
+                            prop.value_list = Some(vl.clone());
                         }
+                        prop.value_list_variants.push(vl);
                     }
                 }
             } else if lower.ends_with(".valuelistreferences") {
@@ -288,22 +271,18 @@ pub(super) fn apply_v4_typed_annotations(
                 // an F4 service whose `$metadata` contains the real
                 // `Common.ValueList` mapping. Capture all URLs so the
                 // frontend can try multiple references if needed.
-                if let Some((et_name, prop_name)) = target.split_once('/') {
-                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
-                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
-                            for coll in children_by_tag(&annot, "Collection") {
-                                for s in children_by_tag(&coll, "String") {
-                                    if let Some(text) = s.text() {
-                                        let trimmed = text.trim();
-                                        if !trimmed.is_empty()
-                                            && !prop
-                                                .value_list_references
-                                                .iter()
-                                                .any(|u| u == trimmed)
-                                        {
-                                            prop.value_list_references.push(trimmed.to_string());
-                                        }
-                                    }
+                if let Some((et_name, prop_name)) = target.split_once('/')
+                    && let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name)
+                    && let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name)
+                {
+                    for coll in children_by_tag(&annot, "Collection") {
+                        for s in children_by_tag(&coll, "String") {
+                            if let Some(text) = s.text() {
+                                let trimmed = text.trim();
+                                if !trimmed.is_empty()
+                                    && !prop.value_list_references.iter().any(|u| u == trimmed)
+                                {
+                                    prop.value_list_references.push(trimmed.to_string());
                                 }
                             }
                         }
@@ -314,12 +293,11 @@ pub(super) fn apply_v4_typed_annotations(
                 // property. The term is almost always written as an
                 // empty `<Annotation .../>`; we don't inspect any
                 // attributes.
-                if let Some((et_name, prop_name)) = target.split_once('/') {
-                    if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
-                        if let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name) {
-                            prop.value_list_fixed = true;
-                        }
-                    }
+                if let Some((et_name, prop_name)) = target.split_once('/')
+                    && let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name)
+                    && let Some(prop) = et.properties.iter_mut().find(|p| p.name == prop_name)
+                {
+                    prop.value_list_fixed = true;
                 }
             } else if lower.ends_with(".selectionpresentationvariant") {
                 // UI.SelectionPresentationVariant wraps a named view:
@@ -342,15 +320,11 @@ pub(super) fn apply_v4_typed_annotations(
                 for pv in children_by_tag(&record, "PropertyValue") {
                     match pv.attribute("Property") {
                         Some("Text") => spv_text = pv.attribute("String").map(String::from),
-                        Some("SelectionVariant") => {
-                            if pv.attribute("Path").is_none() {
-                                inline_sv = children_by_tag(&pv, "Record").into_iter().next();
-                            }
+                        Some("SelectionVariant") if pv.attribute("Path").is_none() => {
+                            inline_sv = children_by_tag(&pv, "Record").into_iter().next();
                         }
-                        Some("PresentationVariant") => {
-                            if pv.attribute("Path").is_none() {
-                                inline_pv = children_by_tag(&pv, "Record").into_iter().next();
-                            }
+                        Some("PresentationVariant") if pv.attribute("Path").is_none() => {
+                            inline_pv = children_by_tag(&pv, "Record").into_iter().next();
                         }
                         _ => {}
                     }
@@ -363,100 +337,98 @@ pub(super) fn apply_v4_typed_annotations(
                 } else {
                     Some(target.to_string())
                 };
-                if let Some(name) = type_name {
-                    if let Some(et) = entity_types.iter_mut().find(|t| t.name == name) {
-                        // Inline SelectionVariant → materialize and add,
-                        // deduped by qualifier against existing variants.
-                        if let Some(sv_record) = inline_sv {
-                            let already_have = qualifier.is_some()
-                                && et
-                                    .selection_variants
-                                    .iter()
-                                    .any(|v| v.qualifier == qualifier);
-                            if !already_have {
-                                let fake_annot = sv_record.parent().unwrap_or(sv_record);
-                                // Build a variant from the inline record
-                                // directly. We can't reuse
-                                // parse_selection_variant_record since
-                                // it expects the outer <Annotation> as
-                                // input — just walk the Record here.
-                                let mut variant = SelectionVariant {
-                                    qualifier: qualifier.clone(),
-                                    text: spv_text.clone(),
-                                    parameters: Vec::new(),
-                                    select_options: Vec::new(),
-                                };
-                                for pv in children_by_tag(&sv_record, "PropertyValue") {
-                                    match pv.attribute("Property") {
-                                        Some("Text") if variant.text.is_none() => {
-                                            variant.text = pv.attribute("String").map(String::from);
-                                        }
-                                        Some("Parameters") => {
-                                            for coll in children_by_tag(&pv, "Collection") {
-                                                for rec in children_by_tag(&coll, "Record") {
-                                                    if let Some(p) = parse_selection_parameter(&rec)
-                                                    {
-                                                        variant.parameters.push(p);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        Some("SelectOptions") => {
-                                            for coll in children_by_tag(&pv, "Collection") {
-                                                for rec in children_by_tag(&coll, "Record") {
-                                                    if let Some(o) = parse_select_option(&rec) {
-                                                        variant.select_options.push(o);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                                if qualifier.is_none() {
-                                    et.selection_variants.insert(0, variant);
-                                } else {
-                                    et.selection_variants.push(variant);
-                                }
-                                let _ = fake_annot; // silence unused-hint lints
-                            }
-                        }
-                        // Inline PresentationVariant → reuse existing
-                        // parser on the outer-ish record by synthesizing
-                        // an annotation wrapping it. Simpler path: walk
-                        // the record directly since we control the shape.
-                        if let Some(pv_record) = inline_pv {
-                            for pv in children_by_tag(&pv_record, "PropertyValue") {
+                if let Some(name) = type_name
+                    && let Some(et) = entity_types.iter_mut().find(|t| t.name == name)
+                {
+                    // Inline SelectionVariant → materialize and add,
+                    // deduped by qualifier against existing variants.
+                    if let Some(sv_record) = inline_sv {
+                        let already_have = qualifier.is_some()
+                            && et
+                                .selection_variants
+                                .iter()
+                                .any(|v| v.qualifier == qualifier);
+                        if !already_have {
+                            let fake_annot = sv_record.parent().unwrap_or(sv_record);
+                            // Build a variant from the inline record
+                            // directly. We can't reuse
+                            // parse_selection_variant_record since
+                            // it expects the outer <Annotation> as
+                            // input — just walk the Record here.
+                            let mut variant = SelectionVariant {
+                                qualifier: qualifier.clone(),
+                                text: spv_text.clone(),
+                                parameters: Vec::new(),
+                                select_options: Vec::new(),
+                            };
+                            for pv in children_by_tag(&sv_record, "PropertyValue") {
                                 match pv.attribute("Property") {
-                                    Some("RequestAtLeast") if et.request_at_least.is_empty() => {
-                                        for coll in children_by_tag(&pv, "Collection") {
-                                            for pp in children_by_tag(&coll, "PropertyPath") {
-                                                if let Some(text) = pp.text() {
-                                                    let trimmed = text.trim();
-                                                    if !trimmed.is_empty()
-                                                        && !et
-                                                            .request_at_least
-                                                            .iter()
-                                                            .any(|x| x == trimmed)
-                                                    {
-                                                        et.request_at_least
-                                                            .push(trimmed.to_string());
-                                                    }
-                                                }
-                                            }
-                                        }
+                                    Some("Text") if variant.text.is_none() => {
+                                        variant.text = pv.attribute("String").map(String::from);
                                     }
-                                    Some("SortOrder") if et.sort_order.is_empty() => {
+                                    Some("Parameters") => {
                                         for coll in children_by_tag(&pv, "Collection") {
                                             for rec in children_by_tag(&coll, "Record") {
-                                                if let Some(so) = parse_sort_order_record(&rec) {
-                                                    et.sort_order.push(so);
+                                                if let Some(p) = parse_selection_parameter(&rec) {
+                                                    variant.parameters.push(p);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Some("SelectOptions") => {
+                                        for coll in children_by_tag(&pv, "Collection") {
+                                            for rec in children_by_tag(&coll, "Record") {
+                                                if let Some(o) = parse_select_option(&rec) {
+                                                    variant.select_options.push(o);
                                                 }
                                             }
                                         }
                                     }
                                     _ => {}
                                 }
+                            }
+                            if qualifier.is_none() {
+                                et.selection_variants.insert(0, variant);
+                            } else {
+                                et.selection_variants.push(variant);
+                            }
+                            let _ = fake_annot; // silence unused-hint lints
+                        }
+                    }
+                    // Inline PresentationVariant → reuse existing
+                    // parser on the outer-ish record by synthesizing
+                    // an annotation wrapping it. Simpler path: walk
+                    // the record directly since we control the shape.
+                    if let Some(pv_record) = inline_pv {
+                        for pv in children_by_tag(&pv_record, "PropertyValue") {
+                            match pv.attribute("Property") {
+                                Some("RequestAtLeast") if et.request_at_least.is_empty() => {
+                                    for coll in children_by_tag(&pv, "Collection") {
+                                        for pp in children_by_tag(&coll, "PropertyPath") {
+                                            if let Some(text) = pp.text() {
+                                                let trimmed = text.trim();
+                                                if !trimmed.is_empty()
+                                                    && !et
+                                                        .request_at_least
+                                                        .iter()
+                                                        .any(|x| x == trimmed)
+                                                {
+                                                    et.request_at_least.push(trimmed.to_string());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Some("SortOrder") if et.sort_order.is_empty() => {
+                                    for coll in children_by_tag(&pv, "Collection") {
+                                        for rec in children_by_tag(&coll, "Record") {
+                                            if let Some(so) = parse_sort_order_record(&rec) {
+                                                et.sort_order.push(so);
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -477,17 +449,17 @@ pub(super) fn apply_v4_typed_annotations(
                     } else {
                         Some(target.to_string())
                     };
-                    if let Some(name) = type_name {
-                        if let Some(et) = entity_types.iter_mut().find(|t| t.name == name) {
-                            // Default (no-qualifier) variant goes first so
-                            // the frontend's "pick one" logic can grab it
-                            // with .first(). Qualified variants preserve
-                            // their parse order after.
-                            if variant.qualifier.is_none() {
-                                et.selection_variants.insert(0, variant);
-                            } else {
-                                et.selection_variants.push(variant);
-                            }
+                    if let Some(name) = type_name
+                        && let Some(et) = entity_types.iter_mut().find(|t| t.name == name)
+                    {
+                        // Default (no-qualifier) variant goes first so
+                        // the frontend's "pick one" logic can grab it
+                        // with .first(). Qualified variants preserve
+                        // their parse order after.
+                        if variant.qualifier.is_none() {
+                            et.selection_variants.insert(0, variant);
+                        } else {
+                            et.selection_variants.push(variant);
                         }
                     }
                 }
@@ -509,14 +481,14 @@ pub(super) fn apply_v4_typed_annotations(
                 } else {
                     Some(target.to_string())
                 };
-                if let Some(name) = type_name {
-                    if let Some(et) = entity_types.iter_mut().find(|t| t.name == name) {
-                        if !paths.is_empty() && et.request_at_least.is_empty() {
-                            et.request_at_least = paths;
-                        }
-                        if !sort.is_empty() && et.sort_order.is_empty() {
-                            et.sort_order = sort;
-                        }
+                if let Some(name) = type_name
+                    && let Some(et) = entity_types.iter_mut().find(|t| t.name == name)
+                {
+                    if !paths.is_empty() && et.request_at_least.is_empty() {
+                        et.request_at_least = paths;
+                    }
+                    if !sort.is_empty() && et.sort_order.is_empty() {
+                        et.sort_order = sort;
                     }
                 }
             } else if lower.ends_with(".lineitem") {
@@ -535,18 +507,18 @@ pub(super) fn apply_v4_typed_annotations(
                 } else {
                     Some(target.to_string())
                 };
-                if let Some(name) = type_name {
-                    if let Some(et) = entity_types.iter_mut().find(|t| t.name == name) {
-                        // Prefer the no-qualifier (default) variant
-                        // regardless of source order: fill when empty,
-                        // and always overwrite with the unqualified
-                        // one. A qualified variant never displaces an
-                        // already-stored unqualified one. Mirrors how
-                        // we handle UI.SelectionVariant.
-                        let is_qualified = annot.attribute("Qualifier").is_some();
-                        if et.line_item.is_empty() || !is_qualified {
-                            et.line_item = fields;
-                        }
+                if let Some(name) = type_name
+                    && let Some(et) = entity_types.iter_mut().find(|t| t.name == name)
+                {
+                    // Prefer the no-qualifier (default) variant
+                    // regardless of source order: fill when empty,
+                    // and always overwrite with the unqualified
+                    // one. A qualified variant never displaces an
+                    // already-stored unqualified one. Mirrors how
+                    // we handle UI.SelectionVariant.
+                    let is_qualified = annot.attribute("Qualifier").is_some();
+                    if et.line_item.is_empty() || !is_qualified {
+                        et.line_item = fields;
                     }
                 }
             } else if lower.ends_with(".selectionfields") {
@@ -566,15 +538,15 @@ pub(super) fn apply_v4_typed_annotations(
                 } else {
                     Some(target.to_string())
                 };
-                if let Some(name) = type_name {
-                    if let Some(et) = entity_types.iter_mut().find(|t| t.name == name) {
-                        // Same precedence rule as UI.LineItem: the
-                        // unqualified variant wins regardless of
-                        // source order.
-                        let is_qualified = annot.attribute("Qualifier").is_some();
-                        if et.selection_fields.is_empty() || !is_qualified {
-                            et.selection_fields = paths;
-                        }
+                if let Some(name) = type_name
+                    && let Some(et) = entity_types.iter_mut().find(|t| t.name == name)
+                {
+                    // Same precedence rule as UI.LineItem: the
+                    // unqualified variant wins regardless of
+                    // source order.
+                    let is_qualified = annot.attribute("Qualifier").is_some();
+                    if et.selection_fields.is_empty() || !is_qualified {
+                        et.selection_fields = paths;
                     }
                 }
             }
@@ -1093,17 +1065,17 @@ fn parse_field_control(annot: &roxmltree::Node) -> Option<FieldControl> {
             _ => None,
         };
     }
-    if let Some(int_str) = annot.attribute("Int") {
-        if let Ok(n) = int_str.parse::<u8>() {
-            return match n {
-                7 => Some(FieldControl::Mandatory),
-                3 => Some(FieldControl::Optional),
-                1 => Some(FieldControl::ReadOnly),
-                0 => Some(FieldControl::Inapplicable),
-                5 => Some(FieldControl::Hidden),
-                _ => None,
-            };
-        }
+    if let Some(int_str) = annot.attribute("Int")
+        && let Ok(n) = int_str.parse::<u8>()
+    {
+        return match n {
+            7 => Some(FieldControl::Mandatory),
+            3 => Some(FieldControl::Optional),
+            1 => Some(FieldControl::ReadOnly),
+            0 => Some(FieldControl::Inapplicable),
+            5 => Some(FieldControl::Hidden),
+            _ => None,
+        };
     }
     None
 }
@@ -1133,10 +1105,10 @@ fn parse_criticality(annot: &roxmltree::Node) -> Option<Criticality> {
     if let Some(path) = annot.attribute("Path") {
         return Some(Criticality::Path(path.to_string()));
     }
-    if let Some(int_str) = annot.attribute("Int") {
-        if let Ok(n) = int_str.parse::<u8>() {
-            return Some(Criticality::Fixed(n));
-        }
+    if let Some(int_str) = annot.attribute("Int")
+        && let Ok(n) = int_str.parse::<u8>()
+    {
+        return Some(Criticality::Fixed(n));
     }
     if let Some(em) = annot.attribute("EnumMember") {
         // "UI.CriticalityType/Positive" (or SAP-aliased). Take the last segment.

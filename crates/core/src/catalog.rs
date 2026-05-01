@@ -218,12 +218,12 @@ pub async fn resolve_service_by_name(client: &SapClient, name: &str) -> Result<S
     match fetch_v2_catalog(client).await {
         Ok(v2_entries) => {
             for entry in &v2_entries {
-                if entry.technical_name.to_lowercase() == name_lower {
-                    if !entry.service_url.is_empty() {
-                        let path = extract_path_from_url(&entry.service_url);
-                        debug!("Resolved '{name}' via V2 catalog: {path}");
-                        return Ok(path);
-                    }
+                if entry.technical_name.to_lowercase() == name_lower
+                    && !entry.service_url.is_empty()
+                {
+                    let path = extract_path_from_url(&entry.service_url);
+                    debug!("Resolved '{name}' via V2 catalog: {path}");
+                    return Ok(path);
                 }
             }
         }

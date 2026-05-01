@@ -349,19 +349,17 @@ async fn main() -> Result<()> {
 
     // For Browser SSO profiles, try to load persisted cookies from keyring.
     // If none are present, fail early with a clear message.
-    if uses_browser_sso {
-        if let Some(ref profile_name) = cli.profile {
-            let loaded = sap_client
-                .try_load_persisted_session(profile_name)
-                .context("failed to load persisted session")?;
-            if !loaded {
-                anyhow::bail!(
-                    "Browser SSO profile '{}' has no active session.\n\
+    if uses_browser_sso && let Some(ref profile_name) = cli.profile {
+        let loaded = sap_client
+            .try_load_persisted_session(profile_name)
+            .context("failed to load persisted session")?;
+        if !loaded {
+            anyhow::bail!(
+                "Browser SSO profile '{}' has no active session.\n\
                      Open the desktop app, select this profile and click 'Sign In',\n\
                      then re-run your command.",
-                    profile_name
-                );
-            }
+                profile_name
+            );
         }
     }
 
@@ -1078,6 +1076,7 @@ fn cmd_profile_list() -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_profile_add(
     name: &str,
     url: &str,
@@ -1195,10 +1194,10 @@ fn cmd_profile_remove(name: &str) -> Result<()> {
     // Remove password from keyring (basic auth). If the keyring is unavailable
     // the credential stays stored — warn the user so they can clean it up.
     let mut warnings: Vec<String> = Vec::new();
-    if !profile.username.is_empty() {
-        if let Err(e) = config::delete_password_from_keyring(name, &profile.username) {
-            warnings.push(format!("password (user: {}) — {e}", profile.username));
-        }
+    if !profile.username.is_empty()
+        && let Err(e) = config::delete_password_from_keyring(name, &profile.username)
+    {
+        warnings.push(format!("password (user: {}) — {e}", profile.username));
     }
     // Remove any persisted Browser SSO session — critical so that recreating
     // a profile with the same name doesn't resurrect the old session.
@@ -1275,6 +1274,7 @@ fn cmd_profile_where() -> Result<()> {
 
 // ── Query builder ──
 
+#[allow(clippy::too_many_arguments)]
 fn build_query(
     entity_set: &str,
     select: Option<String>,
@@ -1636,10 +1636,10 @@ async fn cmd_annotations(
         .annotations
         .into_iter()
         .filter(|a| {
-            if let Some(ns) = &ns_needle {
-                if a.namespace.to_ascii_lowercase() != *ns {
-                    return false;
-                }
+            if let Some(ns) = &ns_needle
+                && a.namespace.to_ascii_lowercase() != *ns
+            {
+                return false;
             }
             if let Some(n) = &text_needle {
                 let hay = format!(
@@ -1755,7 +1755,7 @@ async fn cmd_lint(
         let has_actionable = findings.iter().any(|f| f.code != "profile");
         if has_actionable {
             reports.push(Report {
-                entity: *name,
+                entity: name,
                 findings,
             });
         }

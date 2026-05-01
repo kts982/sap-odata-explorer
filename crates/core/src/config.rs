@@ -69,16 +69,16 @@ pub struct ConfigDir {
 /// 2. Fall back to OS-standard config dir (~/.config/sap-odata-explorer or AppData)
 pub fn find_config_dir() -> Option<ConfigDir> {
     // Try portable: next to the executable
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            let portable_config = exe_dir.join(CONFIG_FILENAME);
-            if portable_config.exists() {
-                debug!("Using portable config at {}", exe_dir.display());
-                return Some(ConfigDir {
-                    path: exe_dir.to_path_buf(),
-                    is_portable: true,
-                });
-            }
+    if let Ok(exe_path) = std::env::current_exe()
+        && let Some(exe_dir) = exe_path.parent()
+    {
+        let portable_config = exe_dir.join(CONFIG_FILENAME);
+        if portable_config.exists() {
+            debug!("Using portable config at {}", exe_dir.display());
+            return Some(ConfigDir {
+                path: exe_dir.to_path_buf(),
+                is_portable: true,
+            });
         }
     }
 
@@ -99,15 +99,15 @@ pub fn find_config_dir() -> Option<ConfigDir> {
 /// If portable config exists next to exe, use that. Otherwise use OS config dir.
 pub fn get_or_create_config_dir() -> anyhow::Result<ConfigDir> {
     // Check portable first
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            let portable_config = exe_dir.join(CONFIG_FILENAME);
-            if portable_config.exists() {
-                return Ok(ConfigDir {
-                    path: exe_dir.to_path_buf(),
-                    is_portable: true,
-                });
-            }
+    if let Ok(exe_path) = std::env::current_exe()
+        && let Some(exe_dir) = exe_path.parent()
+    {
+        let portable_config = exe_dir.join(CONFIG_FILENAME);
+        if portable_config.exists() {
+            return Ok(ConfigDir {
+                path: exe_dir.to_path_buf(),
+                is_portable: true,
+            });
         }
     }
 
@@ -201,10 +201,7 @@ pub fn clear_session_if_connection_changed(
 pub fn get_password_from_keyring(profile_name: &str, username: &str) -> Option<String> {
     let target = format!("{KEYRING_SERVICE}:{profile_name}:{username}");
     match keyring::Entry::new(&target, username) {
-        Ok(entry) => match entry.get_password() {
-            Ok(pw) => Some(pw),
-            Err(_) => None,
-        },
+        Ok(entry) => entry.get_password().ok(),
         Err(_) => None,
     }
 }

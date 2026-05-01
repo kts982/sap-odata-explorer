@@ -95,16 +95,16 @@ pub fn parse_metadata(xml: &str) -> Result<ServiceMetadata, crate::error::ODataE
 fn detect_version(doc: &roxmltree::Document) -> ODataVersion {
     for node in doc.descendants() {
         if node.has_tag_name("Edmx") {
-            if let Some(ver) = node.attribute("Version") {
-                if ver.starts_with("4") {
-                    return ODataVersion::V4;
-                }
+            if let Some(ver) = node.attribute("Version")
+                && ver.starts_with("4")
+            {
+                return ODataVersion::V4;
             }
             // Also check namespace on the tag
-            if let Some(ns) = node.tag_name().namespace() {
-                if ns.contains("oasis-open.org") {
-                    return ODataVersion::V4;
-                }
+            if let Some(ns) = node.tag_name().namespace()
+                && ns.contains("oasis-open.org")
+            {
+                return ODataVersion::V4;
             }
         }
     }
@@ -457,10 +457,11 @@ fn parse_v4_annotation_labels(schema: &roxmltree::Node) -> HashMap<String, Strin
         for annot in children_by_tag(&annots_node, "Annotation") {
             let term = annot.attribute("Term").unwrap_or("");
             // Look for common.Label or SAP__common.Label
-            if term.ends_with(".Label") && (term.contains("common") || term.contains("Common")) {
-                if let Some(value) = annot.attribute("String") {
-                    labels.insert(target.to_string(), value.to_string());
-                }
+            if term.ends_with(".Label")
+                && (term.contains("common") || term.contains("Common"))
+                && let Some(value) = annot.attribute("String")
+            {
+                labels.insert(target.to_string(), value.to_string());
             }
         }
     }
@@ -470,10 +471,10 @@ fn parse_v4_annotation_labels(schema: &roxmltree::Node) -> HashMap<String, Strin
 
 /// Strip alias prefix: "SAP__self.TypeName" → "TypeName", "SAP__self.TypeName/Prop" → "TypeName/Prop"
 pub(super) fn strip_alias_prefix<'a>(target: &'a str, alias: &str) -> &'a str {
-    if !alias.is_empty() {
-        if let Some(rest) = target.strip_prefix(alias) {
-            return rest.strip_prefix('.').unwrap_or(rest);
-        }
+    if !alias.is_empty()
+        && let Some(rest) = target.strip_prefix(alias)
+    {
+        return rest.strip_prefix('.').unwrap_or(rest);
     }
     // Fallback: strip first dot-segment if it looks like a namespace
     if let Some(dot_pos) = target.find('.') {
