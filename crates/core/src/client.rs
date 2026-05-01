@@ -89,7 +89,7 @@ impl SapClient {
                 let host = extract_host(&self.connection.base_url);
                 let token =
                     crate::sspi::generate_negotiate_token(&host, self.connection.sso_delegate)
-                        .map_err(|e| ODataError::AuthFailed(e))?;
+                        .map_err(ODataError::AuthFailed)?;
                 Ok(builder.header("Authorization", format!("Negotiate {token}")))
             }
             AuthConfig::Browser => Ok(builder),
@@ -220,11 +220,10 @@ impl SapClient {
             .headers()
             .get("x-csrf-token")
             .and_then(|v| v.to_str().ok())
+            && token != "Required"
         {
-            if token != "Required" {
-                *self.csrf_token.lock().await = Some(token.to_string());
-                debug!("Got CSRF token");
-            }
+            *self.csrf_token.lock().await = Some(token.to_string());
+            debug!("Got CSRF token");
         }
 
         if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
@@ -361,15 +360,15 @@ impl SapClient {
 
             // For SPNEGO SSO: add Negotiate token to each redirect hop
             // For Browser SSO: cookies from the jar are sent automatically
-            if matches!(&self.connection.auth, AuthConfig::Sso) && !redirect_host.is_empty() {
-                if let Ok(token) = crate::sspi::generate_negotiate_token(
+            if matches!(&self.connection.auth, AuthConfig::Sso)
+                && !redirect_host.is_empty()
+                && let Ok(token) = crate::sspi::generate_negotiate_token(
                     &redirect_host,
                     self.connection.sso_delegate,
-                ) {
-                    debug!("SSO: Negotiate -> {redirect_host}");
-                    redirect_req =
-                        redirect_req.header("Authorization", format!("Negotiate {token}"));
-                }
+                )
+            {
+                debug!("SSO: Negotiate -> {redirect_host}");
+                redirect_req = redirect_req.header("Authorization", format!("Negotiate {token}"));
             }
 
             let request = redirect_req.build()?;
@@ -611,23 +610,22 @@ fn response_hint(
 /// Try to extract a meaningful error message from a SAP error response body.
 fn extract_sap_error(body: &str) -> Option<String> {
     // Try JSON: { "error": { "message": { "value": "..." } } }
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
-        if let Some(msg) = json
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(body)
+        && let Some(msg) = json
             .get("error")
             .and_then(|e| e.get("message"))
             .and_then(|m| m.get("value"))
             .and_then(|v| v.as_str())
-        {
-            return Some(msg.to_string());
-        }
+    {
+        return Some(msg.to_string());
     }
     // Try XML: look for <message>...</message>
     if let Ok(doc) = roxmltree::Document::parse(body) {
         for node in doc.descendants() {
-            if node.has_tag_name("message") {
-                if let Some(text) = node.text() {
-                    return Some(text.to_string());
-                }
+            if node.has_tag_name("message")
+                && let Some(text) = node.text()
+            {
+                return Some(text.to_string());
             }
         }
     }

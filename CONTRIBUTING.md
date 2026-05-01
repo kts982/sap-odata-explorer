@@ -67,7 +67,7 @@ The frontend is split into focused ES modules — `app.js` is wiring only (DOM r
 - **Rust**: run `cargo fmt` before committing
 - **JS**: ES modules, no framework, no TypeScript, no bundler (vendored Tauri API loaded directly). Keep it simple. Add new feature logic in a dedicated module — `app.js` is the entry/wiring file and stays small.
 - **HTML/CSS**: Tailwind utility classes, no inline event handlers (CSP forbids them)
-- **Clippy**: `cargo clippy --workspace --all-targets -- -D warnings` is the desired long-term gate, but the current codebase still has existing style-only lints. Do not introduce new clippy warnings in touched code.
+- **Clippy**: `cargo clippy --workspace --all-targets -- -D warnings` runs in CI as a hard gate. Don't introduce warnings; if a clippy lint is genuinely wrong for a specific case, suppress it locally with a narrowly-scoped `#[allow(clippy::xxx)]` attribute and a comment explaining why.
 
 ### Release hygiene
 

@@ -377,10 +377,11 @@ async fn browser_sign_in_for_connection(
 
             // Only signal completion if we've visited an IdP and returned to SAP
             let was_at_idp = *visited_idp.lock().unwrap();
-            if was_at_idp && is_browser_auth_complete(url, &expected_url) {
-                if let Some(tx) = tx.lock().unwrap().take() {
-                    let _ = tx.send(Ok(()));
-                }
+            if was_at_idp
+                && is_browser_auth_complete(url, &expected_url)
+                && let Some(tx) = tx.lock().unwrap().take()
+            {
+                let _ = tx.send(Ok(()));
             }
             true
         }
@@ -394,10 +395,9 @@ async fn browser_sign_in_for_connection(
             if matches!(
                 event,
                 WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed
-            ) {
-                if let Some(tx) = tx.lock().unwrap().take() {
-                    let _ = tx.send(Err("Sign-in cancelled".to_string()));
-                }
+            ) && let Some(tx) = tx.lock().unwrap().take()
+            {
+                let _ = tx.send(Err("Sign-in cancelled".to_string()));
             }
         }
     });
@@ -813,6 +813,7 @@ async fn run_query(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn add_profile(
     name: String,
     base_url: String,
@@ -922,10 +923,12 @@ fn remove_profile(state: tauri::State<'_, AppState>, name: String) -> Result<Str
         .ok_or_else(|| format!("Profile '{}' not found", name))?;
 
     let mut warnings: Vec<String> = Vec::new();
-    if !profile.sso && !profile.browser_sso && !profile.username.is_empty() {
-        if let Err(e) = config::delete_password_from_keyring(&name, &profile.username) {
-            warnings.push(format!("password (user: {}) — {e}", profile.username));
-        }
+    if !profile.sso
+        && !profile.browser_sso
+        && !profile.username.is_empty()
+        && let Err(e) = config::delete_password_from_keyring(&name, &profile.username)
+    {
+        warnings.push(format!("password (user: {}) — {e}", profile.username));
     }
     let key = browser_session_key(&profile.base_url, &profile.client, &profile.language);
     state.browser_sessions.lock().unwrap().remove(&key);
@@ -946,6 +949,7 @@ fn remove_profile(state: tauri::State<'_, AppState>, name: String) -> Result<Str
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn test_connection(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
@@ -1090,10 +1094,10 @@ async fn sign_out_profile(
         // we can't guess (e.g. tenant-scoped Azure AD subdomains).
         if let Ok(all) = main_window.cookies() {
             for c in all {
-                if let Some(domain) = c.domain() {
-                    if sap_odata_core::session::is_idp_host(domain) {
-                        to_delete.push(c);
-                    }
+                if let Some(domain) = c.domain()
+                    && sap_odata_core::session::is_idp_host(domain)
+                {
+                    to_delete.push(c);
                 }
             }
         }
@@ -1221,14 +1225,12 @@ async fn resolve_value_list_reference(
     // visibility check works uniformly for both shapes. Parse errors
     // here are swallowed — they don't invalidate the mapping we already
     // parsed successfully.
-    if vl.search_supported.is_none() {
-        if let Ok(f4_meta) = metadata::parse_metadata(&xml) {
-            if let Some(et) = f4_meta.entity_type_for_set(&vl.collection_path) {
-                if et.searchable == Some(true) {
-                    vl.search_supported = Some(true);
-                }
-            }
-        }
+    if vl.search_supported.is_none()
+        && let Ok(f4_meta) = metadata::parse_metadata(&xml)
+        && let Some(et) = f4_meta.entity_type_for_set(&vl.collection_path)
+        && et.searchable == Some(true)
+    {
+        vl.search_supported = Some(true);
     }
     Ok(CommandOk {
         data: ResolvedValueList {

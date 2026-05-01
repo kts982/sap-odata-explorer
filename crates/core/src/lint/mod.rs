@@ -455,22 +455,21 @@ pub fn evaluate_entity_type_with_profile(
             ));
         }
     }
-    if let Some(hi) = &et.header_info {
-        if let Some(title) = &hi.title_path {
-            if !prop_names.contains(title.as_str()) {
-                out.push(actionable(
-                    LintSeverity::Warn,
-                    LintCategory::Integrity,
-                    "header_info_title_missing",
-                    format!(
-                        "UI.HeaderInfo.Title references a column that doesn't exist: {}",
-                        title,
-                    ),
-                    "@UI.headerInfo.title.value",
-                    "Object-page title won't resolve — Fiori will fall back to the technical type name.",
-                ));
-            }
-        }
+    if let Some(hi) = &et.header_info
+        && let Some(title) = &hi.title_path
+        && !prop_names.contains(title.as_str())
+    {
+        out.push(actionable(
+            LintSeverity::Warn,
+            LintCategory::Integrity,
+            "header_info_title_missing",
+            format!(
+                "UI.HeaderInfo.Title references a column that doesn't exist: {}",
+                title,
+            ),
+            "@UI.headerInfo.title.value",
+            "Object-page title won't resolve — Fiori will fall back to the technical type name.",
+        ));
     }
     {
         let bad: Vec<&str> = et
@@ -917,7 +916,7 @@ mod tests {
             "dangling SelectionField target should be flagged",
         );
         // All integrity findings should be warns.
-        for (_, f) in &by_code {
+        for f in by_code.values() {
             if f.category == LintCategory::Integrity {
                 assert_eq!(f.severity, LintSeverity::Warn);
             }
