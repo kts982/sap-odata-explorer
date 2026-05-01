@@ -229,7 +229,7 @@ Legend: `[x]` done · `[-]` partial / in progress · `[ ]` planned
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports, PRs, and discussions welcome.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports, PRs, and discussions are welcome.
 
 ## License
 
