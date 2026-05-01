@@ -31,7 +31,7 @@ Run from `tauri-app/`:
 npm run css
 ```
 
-`cargo clippy --workspace --all-targets -- -D warnings` is the desired long-term gate, but it currently requires a broader cleanup pass before it can be mandatory.
+`cargo clippy --workspace --all-targets -- -D warnings` runs in CI as a hard gate; release builds inherit the same constraint.
 
 ## Desktop security
 

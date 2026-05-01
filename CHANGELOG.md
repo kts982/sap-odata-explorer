@@ -17,6 +17,13 @@ Post-alpha hardening and internal refactors. No new user-facing features yet —
 
 - New integration-test corpus (131 tests total) covering V4 CSDL annotations, V2 EDMX `sap:*` attributes, CSRF roundtrip, browser-SSO redirect detection, error-envelope edge cases, malformed XML, composite keys, and a synthetic 1500-entity perf-regression test (#[ignore]'d by default).
 
+### CI / Build
+
+- **Clippy is now a hard gate**: `cargo clippy --workspace --all-targets -- -D warnings` (was per-crate with `continue-on-error: true`). The 77 alpha.1 warnings cleared via `cargo clippy --fix` + `cargo fmt`; four boundary functions (Tauri command handlers, CLI plumbing) carry narrowly-scoped `#[allow(clippy::too_many_arguments)]`.
+- **Workspace tests**: `cargo test --workspace` (was `-p sap-odata-core` only — now also covers the CLI + the Tauri-app crate).
+- **Tauri build gated**: new CI step compiles the desktop app on both `ubuntu-latest` and `windows-latest` matrix entries (`npx tauri build --ci --no-bundle`) so a desktop-side regression can't slip through.
+- **innerHTML lint**: the existing `frontend-lint` job remains a required gate; auto-discovers every `tauri-app/src/**/*.js` so new modules don't escape coverage.
+
 ### Internal
 
 - `crates/core/src/metadata.rs` (3926 LOC) split into `metadata/{mod,model,annotations}.rs`.
