@@ -22,6 +22,7 @@ export function showAddProfileModal() {
   document.getElementById('mpAuthMode').value = 'basic';
   document.getElementById('mpUser').value = '';
   document.getElementById('mpPass').value = '';
+  document.getElementById('mpAllowSsoDelegate').checked = false;
   updateAuthModeFields();
   document.getElementById('mpError').classList.add('hidden');
   document.getElementById('mpSuccess').classList.add('hidden');
@@ -31,6 +32,7 @@ export function showAddProfileModal() {
 export function updateAuthModeFields() {
   const mode = document.getElementById('mpAuthMode').value;
   document.getElementById('mpCredFields').style.display = mode === 'basic' ? '' : 'none';
+  document.getElementById('mpSsoDelegateField').classList.toggle('hidden', mode !== 'sso');
 
   const hint = document.getElementById('mpAuthHint');
   if (mode === 'sso') {
@@ -54,6 +56,8 @@ export async function saveProfileModal() {
   const authMode = document.getElementById('mpAuthMode').value;
   const user     = authMode === 'basic' ? document.getElementById('mpUser').value.trim() : '';
   const pass     = authMode === 'basic' ? document.getElementById('mpPass').value : '';
+  const allowSsoDelegate = authMode === 'sso'
+    && document.getElementById('mpAllowSsoDelegate').checked;
 
   const errEl = document.getElementById('mpError');
   const okEl  = document.getElementById('mpSuccess');
@@ -74,7 +78,7 @@ export async function saveProfileModal() {
   const doSave = async (allowPlaintextFallback) => {
     return await invoke('add_profile', {
       name, baseUrl: url, client, language, authMode, username: user, password: pass,
-      allowPlaintextFallback,
+      allowPlaintextFallback, allowSsoDelegate,
     });
   };
 

@@ -681,6 +681,15 @@
           </select>
           <div id="mpAuthHint" class="text-[10px] text-ox-dim mt-1">Stores the password in Windows Credential Manager.</div>
         </div>
+        <div id="mpSsoDelegateField" class="hidden">
+          <label class="flex items-start gap-2 text-[11px] text-ox-text cursor-pointer">
+            <input id="mpAllowSsoDelegate" type="checkbox" class="mt-0.5" />
+            <span>
+              Allow Kerberos delegation
+              <span class="block text-[10px] text-ox-dim">Lets the SAP server impersonate you to downstream backends. Only enable for reverse-proxy &rarr; Gateway &rarr; backend R/3 setups that need multi-hop auth.</span>
+            </span>
+          </label>
+        </div>
         <div id="mpCredFields">
           <div class="mb-3">
             <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Username</label>
