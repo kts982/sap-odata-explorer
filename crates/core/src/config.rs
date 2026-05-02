@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::auth::{AuthConfig, SapConnection};
 
@@ -198,11 +198,37 @@ pub fn clear_session_if_connection_changed(
 }
 
 /// Try to get a password from the OS keyring.
+///
+/// Returns `None` on any failure to keep the public signature stable, but logs
+/// a `tracing::warn!` for real errors (locked keystore, permission denied,
+/// dbus failure, corrupted entry) so they can be distinguished from the
+/// expected "no entry yet" case in trace output. `NoEntry` is silenced — it's
+/// the normal shape of a profile that hasn't stored a password yet, and the
+/// write path already fails closed if the keyring is unreachable.
 pub fn get_password_from_keyring(profile_name: &str, username: &str) -> Option<String> {
     let target = format!("{KEYRING_SERVICE}:{profile_name}:{username}");
-    match keyring::Entry::new(&target, username) {
-        Ok(entry) => entry.get_password().ok(),
-        Err(_) => None,
+    let entry = match keyring::Entry::new(&target, username) {
+        Ok(entry) => entry,
+        Err(e) => {
+            warn!(
+                profile = profile_name,
+                error = %e,
+                "keyring unavailable while reading password",
+            );
+            return None;
+        }
+    };
+    match entry.get_password() {
+        Ok(pw) => Some(pw),
+        Err(keyring::Error::NoEntry) => None,
+        Err(e) => {
+            warn!(
+                profile = profile_name,
+                error = %e,
+                "keyring read failed (treating as no password)",
+            );
+            None
+        }
     }
 }
 
