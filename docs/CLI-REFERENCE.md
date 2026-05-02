@@ -118,7 +118,7 @@ Non-interactive alternative to `setup`. Good for scripting.
 
 > Browser SSO isn't available on `profile add` directly — use `setup` or create the profile from the desktop app, which handles the interactive sign-in and cookie capture.
 >
-> `--sso-delegate` is CLI-only today. Desktop users who need it can edit `connections.toml` and set `sso_delegate = true` on the profile; surfacing it in the desktop profile editor is a follow-up.
+> `--sso-delegate` is also exposed in the desktop add-profile modal as the **Allow Kerberos delegation** checkbox (only shown when auth mode is SSO). Editing `connections.toml` directly is no longer required.
 
 Examples:
 

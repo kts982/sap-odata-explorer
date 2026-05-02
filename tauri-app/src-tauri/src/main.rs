@@ -828,6 +828,10 @@ fn add_profile(
     // a keyring failure surfaces an actionable error rather than silently
     // downgrading credential protection.
     #[allow(non_snake_case)] allow_plaintext_fallback: Option<bool>,
+    // Opt-in to Kerberos delegation when auth_mode == "sso". Mirrors the CLI's
+    // --sso-delegate flag. Option<bool> so older callers that don't pass it
+    // continue to work; treated as false when absent.
+    #[allow(non_snake_case)] allow_sso_delegate: Option<bool>,
 ) -> Result<String, String> {
     let (mut cfg, _) = config::load_config().map_err(|e| format!("Config error: {e}"))?;
 
@@ -871,7 +875,7 @@ fn add_profile(
         sso,
         browser_sso,
         insecure_tls: false,
-        sso_delegate: false,
+        sso_delegate: sso && allow_sso_delegate.unwrap_or(false),
         aliases: existing_aliases,
     };
 
@@ -959,6 +963,7 @@ async fn test_connection(
     auth_mode: String,
     username: String,
     password: String,
+    allow_sso_delegate: Option<bool>,
 ) -> CmdResult<String> {
     if auth_mode == "browser" {
         return browser_sign_in_for_connection(
@@ -980,7 +985,7 @@ async fn test_connection(
         language,
         auth,
         insecure_tls: false,
-        sso_delegate: false,
+        sso_delegate: auth_mode == "sso" && allow_sso_delegate.unwrap_or(false),
     };
 
     let sap_client =
@@ -1271,6 +1276,14 @@ fn resolve_reference_path(base: &str, relative: &str) -> String {
 }
 
 fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("sap_odata=warn".parse().unwrap()),
+        )
+        .with_target(false)
+        .init();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(AppState::default())
