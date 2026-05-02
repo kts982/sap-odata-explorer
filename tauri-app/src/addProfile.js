@@ -121,6 +121,8 @@ export async function testProfileModal() {
   const authMode = document.getElementById('mpAuthMode').value;
   const user   = authMode === 'basic' ? document.getElementById('mpUser').value.trim() : '';
   const pass   = authMode === 'basic' ? document.getElementById('mpPass').value : '';
+  const allowSsoDelegate = authMode === 'sso'
+    && document.getElementById('mpAllowSsoDelegate').checked;
   const name   = document.getElementById('mpName').value.trim();
 
   const errEl = document.getElementById('mpError');
@@ -137,6 +139,7 @@ export async function testProfileModal() {
   try {
     const msg = await timedInvoke('test_connection', {
       baseUrl: url, client, language, authMode, username: user, password: pass,
+      allowSsoDelegate,
     });
     okEl.textContent = msg;
     okEl.classList.remove('hidden');
