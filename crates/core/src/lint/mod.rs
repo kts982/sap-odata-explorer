@@ -924,6 +924,334 @@ mod tests {
     }
 
     #[test]
+    fn explicit_list_report_profile_emits_full_miss_set() {
+        // Locks down what `LintProfile::ListReport` means when nothing is
+        // declared: every list-report-shaped Miss should fire. Uses the
+        // explicit-profile API so this test stays stable even if the
+        // auto-detection heuristics change.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let et = meta.find_entity_type("OrderType").unwrap();
+        let findings = evaluate_entity_type_with_profile(et, LintProfile::ListReport);
+        assert_eq!(findings[0].code, "profile");
+        assert!(findings[0].message.contains("list_report"));
+        let miss_codes: Vec<_> = findings
+            .iter()
+            .filter(|f| f.severity == LintSeverity::Miss)
+            .map(|f| f.code)
+            .collect();
+        assert!(miss_codes.contains(&"header_info"));
+        assert!(miss_codes.contains(&"line_item"));
+        assert!(miss_codes.contains(&"selection_fields"));
+    }
+
+    #[test]
+    fn explicit_object_page_profile_skips_line_item_and_selection_fields() {
+        // Object-page roots defer LineItem to their item child and don't
+        // surface a filter bar, so neither miss should fire — but
+        // header_info still matters for the page title.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let et = meta.find_entity_type("OrderType").unwrap();
+        let findings = evaluate_entity_type_with_profile(et, LintProfile::ObjectPage);
+        assert_eq!(findings[0].code, "profile");
+        assert!(findings[0].message.contains("object_page"));
+        let miss_codes: Vec<_> = findings
+            .iter()
+            .filter(|f| f.severity == LintSeverity::Miss)
+            .map(|f| f.code)
+            .collect();
+        assert!(
+            miss_codes.contains(&"header_info"),
+            "object-page roots still need HeaderInfo for the page title"
+        );
+        assert!(
+            !miss_codes.contains(&"line_item"),
+            "object-page roots defer LineItem to the item child; should not miss"
+        );
+        assert!(
+            !miss_codes.contains(&"selection_fields"),
+            "object-page roots don't surface a filter bar; should not miss"
+        );
+    }
+
+    #[test]
+    fn consistency_rule_selection_hidden_fires_on_hidden_in_selection() {
+        // UI.Hidden + SelectionFields contradict — the column would be
+        // hidden in the table but still offered as a filter chip.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="Warehouse" Type="Edm.String"/>
+        <Property Name="InternalNote" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType/InternalNote">
+        <Annotation Term="SAP__UI.Hidden" Bool="true"/>
+      </Annotations>
+      <Annotations Target="SAP__self.OrderType">
+        <Annotation Term="SAP__UI.SelectionFields">
+          <Collection>
+            <PropertyPath>Warehouse</PropertyPath>
+            <PropertyPath>InternalNote</PropertyPath>
+          </Collection>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let et = meta.find_entity_type("OrderType").unwrap();
+        let findings = evaluate_entity_type(et);
+        let hit = findings
+            .iter()
+            .find(|f| f.code == "selection_hidden")
+            .expect(
+                "selection_hidden should fire when a UI.Hidden property appears in SelectionFields",
+            );
+        assert_eq!(hit.severity, LintSeverity::Warn);
+        assert!(hit.message.contains("InternalNote"));
+        // The visible Warehouse field should not appear in the message.
+        assert!(!hit.message.contains("Warehouse"));
+    }
+
+    #[test]
+    fn consistency_rule_value_list_no_out_fires_on_in_only_picker() {
+        // A ValueList with only In parameters can show a list but has no
+        // Out/InOut binding to write the picked value back to the local
+        // property — the picker can browse but not select.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="Warehouse" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType/Warehouse">
+        <Annotation Term="SAP__common.ValueList">
+          <Record>
+            <PropertyValue Property="CollectionPath" String="WarehouseVH"/>
+            <PropertyValue Property="Parameters">
+              <Collection>
+                <Record Type="SAP__common.ValueListParameterIn">
+                  <PropertyValue Property="LocalDataProperty" PropertyPath="Warehouse"/>
+                  <PropertyValue Property="ValueListProperty" String="Warehouse"/>
+                </Record>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let et = meta.find_entity_type("OrderType").unwrap();
+        let findings = evaluate_entity_type(et);
+        let hit = findings
+            .iter()
+            .find(|f| f.code == "value_list_no_out")
+            .expect("value_list_no_out should fire on a picker with no Out/InOut parameter");
+        assert_eq!(hit.severity, LintSeverity::Warn);
+        assert!(hit.message.contains("Warehouse"));
+    }
+
+    #[test]
+    fn consistency_rules_emit_in_canonical_order() {
+        // Locks the relative order of consistency findings so a future
+        // edit can't silently re-shuffle them. The CLI and desktop both
+        // render findings in stream order; a re-order would change the
+        // user-visible report.
+        //
+        // Triggers (in expected order): selection_non_filterable,
+        // selection_hidden, value_list_no_out, text_arrangement_lonely.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="Warehouse" Type="Edm.String"/>
+        <Property Name="InternalNote" Type="Edm.String"/>
+        <Property Name="Product" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType/InternalNote">
+        <Annotation Term="SAP__UI.Hidden" Bool="true"/>
+      </Annotations>
+      <Annotations Target="SAP__self.OrderType/Warehouse">
+        <Annotation Term="SAP__common.ValueList">
+          <Record>
+            <PropertyValue Property="CollectionPath" String="WarehouseVH"/>
+            <PropertyValue Property="Parameters">
+              <Collection>
+                <Record Type="SAP__common.ValueListParameterIn">
+                  <PropertyValue Property="LocalDataProperty" PropertyPath="Warehouse"/>
+                  <PropertyValue Property="ValueListProperty" String="Warehouse"/>
+                </Record>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+      </Annotations>
+      <Annotations Target="SAP__self.OrderType">
+        <Annotation Term="SAP__UI.SelectionFields">
+          <Collection>
+            <PropertyPath>Warehouse</PropertyPath>
+            <PropertyPath>InternalNote</PropertyPath>
+          </Collection>
+        </Annotation>
+        <!-- Type-level TextArrangement applies to all properties without
+             their own override (per-property TextArrangement only parses
+             when nested inside Common.Text). None of these properties has
+             a Common.Text, so text_arrangement_lonely fires. -->
+        <Annotation Term="SAP__UI.TextArrangement" EnumMember="UI.TextArrangementType/TextFirst"/>
+      </Annotations>
+      <Annotations Target="SAP__self.Container/Orders">
+        <Annotation Term="SAP__capabilities.FilterRestrictions">
+          <Record>
+            <PropertyValue Property="NonFilterableProperties">
+              <Collection>
+                <PropertyPath>InternalNote</PropertyPath>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let et = meta.find_entity_type("OrderType").unwrap();
+        let findings = evaluate_entity_type(et);
+        let consistency_codes: Vec<&str> = findings
+            .iter()
+            .filter(|f| {
+                matches!(
+                    f.code,
+                    "selection_non_filterable"
+                        | "selection_hidden"
+                        | "value_list_no_out"
+                        | "text_arrangement_lonely"
+                )
+            })
+            .map(|f| f.code)
+            .collect();
+        assert_eq!(
+            consistency_codes,
+            vec![
+                "selection_non_filterable",
+                "selection_hidden",
+                "value_list_no_out",
+                "text_arrangement_lonely",
+            ],
+            "consistency rules must stream in the canonical order rendered by CLI/desktop",
+        );
+    }
+
+    #[test]
+    fn integrity_rules_emit_in_canonical_order() {
+        // Locks integrity-rule order: text_target_missing, then
+        // semantic_key_target_missing, then selection_field_target_missing,
+        // then line_item_target_missing, then sort_order_target_missing.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="Product" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType/Product">
+        <Annotation Term="SAP__common.Text" Path="MissingText"/>
+      </Annotations>
+      <Annotations Target="SAP__self.OrderType">
+        <Annotation Term="SAP__common.SemanticKey">
+          <Collection>
+            <PropertyPath>MissingKey</PropertyPath>
+          </Collection>
+        </Annotation>
+        <Annotation Term="SAP__UI.SelectionFields">
+          <Collection>
+            <PropertyPath>MissingFilter</PropertyPath>
+          </Collection>
+        </Annotation>
+        <Annotation Term="SAP__UI.LineItem">
+          <Collection>
+            <Record Type="UI.DataField">
+              <PropertyValue Property="Value" Path="MissingColumn"/>
+            </Record>
+          </Collection>
+        </Annotation>
+        <Annotation Term="SAP__UI.PresentationVariant">
+          <Record>
+            <PropertyValue Property="SortOrder">
+              <Collection>
+                <Record Type="Common.SortOrderType">
+                  <PropertyValue Property="Property" PropertyPath="MissingSort"/>
+                </Record>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let et = meta.find_entity_type("OrderType").unwrap();
+        let findings = evaluate_entity_type(et);
+        let integrity_codes: Vec<&str> = findings
+            .iter()
+            .filter(|f| f.category == LintCategory::Integrity)
+            .map(|f| f.code)
+            .collect();
+        assert_eq!(
+            integrity_codes,
+            vec![
+                "text_target_missing",
+                "semantic_key_target_missing",
+                "selection_field_target_missing",
+                "line_item_target_missing",
+                "sort_order_target_missing",
+            ],
+            "integrity rules must stream in the canonical order rendered by CLI/desktop",
+        );
+    }
+
+    #[test]
     fn passes_when_header_and_line_item_declared() {
         let xml = r#"<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
