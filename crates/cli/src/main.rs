@@ -1042,7 +1042,14 @@ fn cmd_profile_list() -> Result<()> {
     ]);
 
     for (name, profile) in &cfg.connections {
-        let auth_info = if profile.sso {
+        // Order matches Tauri's get_profiles: browser_sso and sso both have
+        // empty usernames and no Basic password, so they must short-circuit
+        // before the keyring lookup — otherwise Entry::new(target, "") can
+        // surface a misleading "keyring error" on a profile that legitimately
+        // has no password at all.
+        let auth_info = if profile.browser_sso {
+            "Browser SSO".to_string()
+        } else if profile.sso {
             "SSO (Windows)".to_string()
         } else if profile.password.is_some() {
             "config (plaintext)".to_string()
@@ -1060,7 +1067,9 @@ fn cmd_profile_list() -> Result<()> {
             Cell::new(name),
             Cell::new(&profile.base_url),
             Cell::new(&profile.client),
-            Cell::new(if profile.sso {
+            Cell::new(if profile.browser_sso {
+                "(Browser)"
+            } else if profile.sso {
                 "(SSO)"
             } else {
                 &profile.username

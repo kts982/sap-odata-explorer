@@ -97,7 +97,14 @@ Manage saved connection profiles.
 sap-odata profile list
 ```
 
-Shows each profile with its base URL, client, language, auth mode, and where the password came from (keyring / config / none).
+Shows each profile with its base URL, client, language, auth mode, and the password column. The password column is one of:
+
+- `Browser SSO` — interactive SAML / OIDC sign-in handled by the desktop app; no stored password.
+- `SSO (Windows)` — Kerberos / SPNEGO; no stored password.
+- `config (plaintext)` — password lives in `connections.toml`. Discouraged.
+- `OS keyring` — password stored in the OS credential store.
+- `NOT SET` — Basic-auth profile but no password is stored anywhere.
+- `keyring locked` / `keyring corrupt` / `keyring error` — the credential store rejected the read. The fix is to unlock / repair the OS credential store, not to re-add the profile. Use `--verbose` for the underlying diagnostic.
 
 #### `profile add`
 
