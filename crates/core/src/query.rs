@@ -17,8 +17,27 @@ const COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'(')
     .remove(b')');
 
+/// Percent-encoding set for the entity-key path segment between `(` and `)`.
+/// Same RFC 3986 unreserved core as `COMPONENT`, plus the three characters
+/// OData key syntax requires verbatim: `'` (string delimiter, doubled to
+/// escape), `=` (composite-key name/value), `,` (composite-key separator).
+/// Everything else — including spaces, `/`, `?`, `#`, and non-ASCII — is
+/// percent-encoded so SAP-realistic keys round-trip into a valid URL path.
+const KEY_PATH: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~')
+    .remove(b'\'')
+    .remove(b'=')
+    .remove(b',');
+
 fn enc(s: &str) -> String {
     utf8_percent_encode(s, COMPONENT).to_string()
+}
+
+fn enc_key(s: &str) -> String {
+    utf8_percent_encode(s, KEY_PATH).to_string()
 }
 
 /// OData query builder that constructs URL query parameters.
@@ -128,7 +147,7 @@ impl ODataQuery {
 
         if let Some(ref key) = self.key {
             path.push('(');
-            path.push_str(key);
+            path.push_str(&enc_key(key));
             path.push(')');
         }
 
@@ -300,5 +319,74 @@ mod tests {
     fn test_custom_param_encodes_value() {
         let q = ODataQuery::new("X").custom("note", "a=b&c");
         assert_eq!(q.build(), "X?note=a%3Db%26c");
+    }
+
+    // ── Entity key path encoding ──
+    //
+    // The key segment between `(` and `)` is part of the URL path, not the
+    // query string, so unsafe characters must be percent-encoded — but OData
+    // key syntax requires `'`, `=`, and `,` to stay literal so string
+    // delimiters and composite-key separators round-trip. The user passes raw
+    // OData key syntax (e.g. `--key "SalesOrder='A 1',Item=10"`); already
+    // percent-encoded input is treated as opaque and re-encoded.
+
+    #[test]
+    fn test_key_string_with_space_is_encoded() {
+        let q = ODataQuery::new("CustomerSet").key("'A B'");
+        assert_eq!(q.build(), "CustomerSet('A%20B')");
+    }
+
+    #[test]
+    fn test_key_doubled_apostrophe_preserved() {
+        // OData escapes `'` inside a string literal by doubling it.
+        // Apostrophes are syntactic, must survive verbatim.
+        let q = ODataQuery::new("PersonSet").key("'O''Brien'");
+        assert_eq!(q.build(), "PersonSet('O''Brien')");
+    }
+
+    #[test]
+    fn test_key_string_with_slash_is_encoded() {
+        // `/` would otherwise terminate the path segment.
+        let q = ODataQuery::new("FileSet").key("'A/B'");
+        assert_eq!(q.build(), "FileSet('A%2FB')");
+    }
+
+    #[test]
+    fn test_key_integer_unchanged() {
+        let q = ODataQuery::new("OrderSet").key("12345");
+        assert_eq!(q.build(), "OrderSet(12345)");
+    }
+
+    #[test]
+    fn test_key_composite_preserves_delimiters() {
+        // Composite key: `=` separates name from value, `,` separates pairs,
+        // `'` wraps strings. All three must stay literal; only the space
+        // inside `'A 1'` should be encoded.
+        let q = ODataQuery::new("ItemSet").key("SalesOrder='A 1',Item=10");
+        assert_eq!(q.build(), "ItemSet(SalesOrder='A%201',Item=10)");
+    }
+
+    #[test]
+    fn test_key_encodes_path_unsafe_chars() {
+        // `?`, `#`, `&` would all break the URL if left raw inside the path.
+        let q = ODataQuery::new("X").key("'a?b#c&d'");
+        assert_eq!(q.build(), "X('a%3Fb%23c%26d')");
+    }
+
+    #[test]
+    fn test_key_encodes_non_ascii() {
+        // Non-ASCII must be UTF-8 percent-encoded. `ü` = 0xC3 0xBC.
+        let q = ODataQuery::new("CitySet").key("'München'");
+        assert_eq!(q.build(), "CitySet('M%C3%BCnchen')");
+    }
+
+    #[test]
+    fn test_key_already_encoded_input_is_re_encoded() {
+        // Documented behavior: input is treated as raw OData key syntax,
+        // not pre-encoded. A literal `%` becomes `%25`. Users who pre-encode
+        // get double-encoding; this is safer than silently de-coding values
+        // that legitimately contain `%`.
+        let q = ODataQuery::new("X").key("'A%20B'");
+        assert_eq!(q.build(), "X('A%2520B')");
     }
 }
