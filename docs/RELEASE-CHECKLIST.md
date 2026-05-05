@@ -23,6 +23,8 @@ Run from the repository root unless noted:
 cargo fmt --check
 cargo test --workspace
 git diff --check
+node scripts/lint-innerhtml.mjs
+node scripts/test-safe-html.mjs
 ```
 
 Run from `tauri-app/`:
@@ -31,7 +33,7 @@ Run from `tauri-app/`:
 npm run css
 ```
 
-`cargo clippy --workspace --all-targets -- -D warnings` runs in CI as a hard gate; release builds inherit the same constraint.
+`cargo clippy --workspace --all-targets -- -D warnings` runs in CI as a hard gate; release builds inherit the same constraint. `scripts/test-safe-html.mjs` is local-only for now — it pins the parser-vs-renderer escaping contract; CI wiring is a follow-up.
 
 ## Desktop security
 

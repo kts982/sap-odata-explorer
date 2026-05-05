@@ -95,6 +95,13 @@ Bare template literals (`el.innerHTML = \`...${x}...\``) are forbidden — `scri
 
 If a renderer builds HTML in a variable before assignment, build each dynamic fragment with `safeHtml` and join only those safe fragments. Do not build `let html = \`...\`` or append unescaped interpolated template literals before assigning `el.innerHTML = html`.
 
+The escape boundary is **parser keeps data intact → renderer escapes**. The parser surfaces SAP-controlled strings (entity names, labels, HeaderInfo titles, SemanticObject names, qualifiers, …) byte-for-byte; sanitization is the renderer's job. Both halves are pinned by tests:
+
+- `cargo test -p sap-odata-core --test malicious_content` proves the parser preserves HTML-shaped strings verbatim.
+- `node scripts/test-safe-html.mjs` proves `escapeHtml` / `safeHtml` / `raw()` neutralise those strings on output, including the JSON-shaped `__rawHtml` forgery defence (the marker is a closure-private `Symbol`, which JSON cannot construct).
+
+Run both before any change touching the parser or `tauri-app/src/html.js`.
+
 ## What's welcome
 
 - Bug fixes
