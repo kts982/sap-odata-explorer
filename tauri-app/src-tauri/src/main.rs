@@ -505,10 +505,17 @@ fn get_profiles() -> Result<Vec<ProfileInfo>, String> {
                 "none".to_string()
             } else if profile.password.is_some() {
                 "config".to_string()
-            } else if config::get_password_from_keyring(name, &profile.username).is_some() {
-                "keyring".to_string()
             } else {
-                "none".to_string()
+                match config::try_get_password_from_keyring(name, &profile.username) {
+                    Ok(Some(_)) => "keyring".to_string(),
+                    Ok(None) => "none".to_string(),
+                    // Distinct states so the frontend (now or later) can
+                    // tell users to unlock the credential store rather than
+                    // re-add the profile.
+                    Err(config::KeyringReadError::Locked(_)) => "keyring_locked".to_string(),
+                    Err(config::KeyringReadError::Corrupt(_)) => "keyring_corrupt".to_string(),
+                    Err(config::KeyringReadError::Backend(_)) => "keyring_error".to_string(),
+                }
             };
 
             let aliases = profile

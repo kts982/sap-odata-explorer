@@ -2,9 +2,50 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tracing::{debug, warn};
 
 use crate::auth::{AuthConfig, SapConnection};
+
+/// Why a keyring read failed. Distinguishes "the user can fix this by
+/// unlocking the OS credential store" from "the credential blob is broken"
+/// from "something else went wrong" — the catch-all `Backend` is honest
+/// about cases the underlying crate can't classify cleanly.
+///
+/// `NoEntry` is *not* an error in this enum: missing entries surface as
+/// `Ok(None)` from `try_get_password_from_keyring` so the call site can
+/// keep the existing "no password found" guidance for fresh profiles.
+#[derive(Debug, Error)]
+pub enum KeyringReadError {
+    /// The OS credential store is reachable but refused access — typically
+    /// a locked Windows Credential Manager / macOS Keychain, or a Linux
+    /// session without a running secret service. User-actionable: unlock
+    /// or sign in to the credential store.
+    #[error("keyring is locked or access was denied: {0}")]
+    Locked(String),
+    /// The stored credential blob exists but is corrupt (not valid UTF-8).
+    /// Re-saving the password will overwrite it.
+    #[error("stored credential is corrupt: {0}")]
+    Corrupt(String),
+    /// Catch-all for platform-runtime errors and credential-attribute
+    /// validation failures (TooLong / Invalid / Ambiguous). The underlying
+    /// message is preserved for diagnostics.
+    #[error("keyring backend failure: {0}")]
+    Backend(String),
+}
+
+fn classify_keyring_error(err: keyring::Error) -> KeyringReadError {
+    match err {
+        keyring::Error::NoStorageAccess(inner) => KeyringReadError::Locked(inner.to_string()),
+        keyring::Error::BadEncoding(_) => {
+            KeyringReadError::Corrupt("stored bytes are not valid UTF-8".to_string())
+        }
+        // PlatformFailure, TooLong, Invalid, Ambiguous, and any future
+        // variants fold into Backend with the crate's own Display string
+        // so operators still see the underlying reason in trace output.
+        other => KeyringReadError::Backend(other.to_string()),
+    }
+}
 
 const CONFIG_FILENAME: &str = "connections.toml";
 const KEYRING_SERVICE: &str = "sap-odata-explorer";
@@ -197,30 +238,36 @@ pub fn clear_session_if_connection_changed(
     }
 }
 
-/// Try to get a password from the OS keyring.
+/// Read a password from the OS keyring, distinguishing missing entries from
+/// real failures.
 ///
-/// Returns `None` on any failure to keep the public signature stable, but logs
-/// a `tracing::warn!` for real errors (locked keystore, permission denied,
-/// dbus failure, corrupted entry) so they can be distinguished from the
-/// expected "no entry yet" case in trace output. `NoEntry` is silenced — it's
-/// the normal shape of a profile that hasn't stored a password yet, and the
-/// write path already fails closed if the keyring is unreachable.
-pub fn get_password_from_keyring(profile_name: &str, username: &str) -> Option<String> {
+/// - `Ok(Some(pw))` — entry found.
+/// - `Ok(None)` — no entry stored. Normal for a fresh profile or a basic-auth
+///   profile whose password lives in `connections.toml` instead.
+/// - `Err(KeyringReadError)` — the credential store rejected the read.
+///   Callers should surface a category-specific message rather than treating
+///   this as "no password" (which would prompt the user to re-add the
+///   profile when the real fix is to unlock the OS credential store).
+pub fn try_get_password_from_keyring(
+    profile_name: &str,
+    username: &str,
+) -> Result<Option<String>, KeyringReadError> {
     let target = format!("{KEYRING_SERVICE}:{profile_name}:{username}");
-    let entry = match keyring::Entry::new(&target, username) {
-        Ok(entry) => entry,
-        Err(e) => {
-            warn!(
-                profile = profile_name,
-                error = %e,
-                "keyring unavailable while reading password",
-            );
-            return None;
-        }
-    };
+    let entry = keyring::Entry::new(&target, username).map_err(classify_keyring_error)?;
     match entry.get_password() {
-        Ok(pw) => Some(pw),
-        Err(keyring::Error::NoEntry) => None,
+        Ok(pw) => Ok(Some(pw)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(classify_keyring_error(e)),
+    }
+}
+
+/// Compatibility wrapper that collapses any failure to `None` and emits a
+/// `tracing::warn!` so trace logs still distinguish "no entry" (silent) from
+/// real backend errors. New callers should prefer `try_get_password_from_keyring`
+/// so they can show users the difference.
+pub fn get_password_from_keyring(profile_name: &str, username: &str) -> Option<String> {
+    match try_get_password_from_keyring(profile_name, username) {
+        Ok(value) => value,
         Err(e) => {
             warn!(
                 profile = profile_name,
@@ -292,15 +339,36 @@ pub fn resolve_connection(
 
     let password = if let Some(ref pw) = profile.password {
         pw.clone()
-    } else if let Some(pw) = get_password_from_keyring(profile_name, &profile.username) {
-        pw
     } else {
-        anyhow::bail!(
-            "no password found for profile '{}' (user: {}). \
-             Use 'sap-odata profile add' to set one, or set SAP_PASSWORD env var.",
-            profile_name,
-            profile.username
-        );
+        match try_get_password_from_keyring(profile_name, &profile.username) {
+            Ok(Some(pw)) => pw,
+            Ok(None) => anyhow::bail!(
+                "no password found for profile '{}' (user: {}). \
+                 Use 'sap-odata profile add' to set one, or set SAP_PASSWORD env var.",
+                profile_name,
+                profile.username
+            ),
+            // Distinct messaging for read failures: re-adding the profile
+            // wouldn't help if the OS credential store itself is unreachable.
+            Err(KeyringReadError::Locked(msg)) => anyhow::bail!(
+                "cannot read keyring for profile '{}': {}. \
+                 Unlock your OS credential store (e.g. sign in to the keychain / Credential Manager) and retry.",
+                profile_name,
+                msg
+            ),
+            Err(KeyringReadError::Corrupt(msg)) => anyhow::bail!(
+                "stored password for profile '{}' is corrupt: {}. \
+                 Re-save the password with 'sap-odata profile add' to overwrite it.",
+                profile_name,
+                msg
+            ),
+            Err(KeyringReadError::Backend(msg)) => anyhow::bail!(
+                "keyring backend error for profile '{}': {}. \
+                 Check the OS credential store status; this is not a missing-password issue.",
+                profile_name,
+                msg
+            ),
+        }
     };
 
     Ok(SapConnection {
@@ -323,4 +391,69 @@ pub fn init_portable_config(config: &ConfigFile) -> anyhow::Result<PathBuf> {
         .parent()
         .ok_or_else(|| anyhow::anyhow!("cannot determine exe directory"))?;
     save_config(config, exe_dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_no_storage_access_maps_to_locked() {
+        let inner: Box<dyn std::error::Error + Send + Sync> = "credential store is locked".into();
+        let classified = classify_keyring_error(keyring::Error::NoStorageAccess(inner));
+        match classified {
+            KeyringReadError::Locked(msg) => assert!(msg.contains("locked")),
+            other => panic!("expected Locked, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_bad_encoding_maps_to_corrupt() {
+        let classified = classify_keyring_error(keyring::Error::BadEncoding(vec![0xff, 0xfe]));
+        assert!(matches!(classified, KeyringReadError::Corrupt(_)));
+    }
+
+    #[test]
+    fn classify_platform_failure_maps_to_backend() {
+        let inner: Box<dyn std::error::Error + Send + Sync> = "dbus connect failed".into();
+        let classified = classify_keyring_error(keyring::Error::PlatformFailure(inner));
+        match classified {
+            KeyringReadError::Backend(msg) => assert!(msg.contains("dbus")),
+            other => panic!("expected Backend, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_invalid_attribute_maps_to_backend() {
+        // Invalid is a credential-attribute validation error — fold into
+        // Backend so users still get the underlying reason without us adding
+        // a one-off enum variant that callers would need to handle.
+        let classified = classify_keyring_error(keyring::Error::Invalid(
+            "username".to_string(),
+            "empty".to_string(),
+        ));
+        assert!(matches!(classified, KeyringReadError::Backend(_)));
+    }
+
+    #[test]
+    fn classify_too_long_maps_to_backend() {
+        let classified =
+            classify_keyring_error(keyring::Error::TooLong("password".to_string(), 256));
+        assert!(matches!(classified, KeyringReadError::Backend(_)));
+    }
+
+    #[test]
+    fn keyring_read_error_display_is_actionable() {
+        // The Display strings are what end up in user-facing CLI/Tauri text,
+        // so they need to point at the OS credential store rather than at
+        // the profile, which is the classification's whole point.
+        let locked = KeyringReadError::Locked("session timeout".to_string());
+        assert!(locked.to_string().contains("locked"));
+
+        let corrupt = KeyringReadError::Corrupt("UTF-8 decode failed".to_string());
+        assert!(corrupt.to_string().contains("corrupt"));
+
+        let backend = KeyringReadError::Backend("dbus dropped".to_string());
+        assert!(backend.to_string().contains("backend"));
+    }
 }

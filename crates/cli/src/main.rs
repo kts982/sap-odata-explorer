@@ -1046,10 +1046,14 @@ fn cmd_profile_list() -> Result<()> {
             "SSO (Windows)".to_string()
         } else if profile.password.is_some() {
             "config (plaintext)".to_string()
-        } else if config::get_password_from_keyring(name, &profile.username).is_some() {
-            "OS keyring".to_string()
         } else {
-            "NOT SET".to_string()
+            match config::try_get_password_from_keyring(name, &profile.username) {
+                Ok(Some(_)) => "OS keyring".to_string(),
+                Ok(None) => "NOT SET".to_string(),
+                Err(config::KeyringReadError::Locked(_)) => "keyring locked".to_string(),
+                Err(config::KeyringReadError::Corrupt(_)) => "keyring corrupt".to_string(),
+                Err(config::KeyringReadError::Backend(_)) => "keyring error".to_string(),
+            }
         };
 
         table.add_row(vec![
