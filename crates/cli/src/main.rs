@@ -1807,14 +1807,22 @@ async fn cmd_lint(
             .collect(),
     };
 
-    // Top-level `detected_profile` is intentionally separate from the
+    // Top-level profile fields are intentionally separate from the
     // per-finding banner: programmatic consumers (CI, agents) read the
-    // structured field, while the banner stays in `findings` so the
+    // structured fields, while the banner stays in `findings` so the
     // text-rendering path keeps its current shape.
+    //
+    // `detected_profile` is always the heuristic auto-detection — it
+    // reflects what the linter would pick if no override were supplied.
+    // `effective_profile` is what the rules actually ran against. Without
+    // `--profile` they match. With `--profile`, callers can compare the
+    // two to report "we auto-detected X but you forced Y" without losing
+    // either signal.
     #[derive(serde::Serialize)]
     struct Report<'a> {
         entity: &'a str,
         detected_profile: lint::LintProfile,
+        effective_profile: lint::LintProfile,
         findings: Vec<lint::LintFinding>,
     }
     let mut reports: Vec<Report> = Vec::new();
@@ -1823,10 +1831,9 @@ async fn cmd_lint(
         let et = meta
             .find_entity_type(name)
             .ok_or_else(|| anyhow::anyhow!("entity '{name}' vanished"))?;
-        let resolved_profile = profile_override
-            .map(Into::into)
-            .unwrap_or_else(|| lint::detect_profile(et));
-        let mut findings = lint::evaluate_entity_type_with_profile(et, resolved_profile);
+        let detected_profile = lint::detect_profile(et);
+        let effective_profile = profile_override.map(Into::into).unwrap_or(detected_profile);
+        let mut findings = lint::evaluate_entity_type_with_profile(et, effective_profile);
         // Compute fail-on hit BEFORE the min-severity retain — fail-on
         // is an exit-code gate, not a display gate, and a user who runs
         // `--min-severity miss --fail-on warn` still wants warns to
@@ -1854,7 +1861,8 @@ async fn cmd_lint(
         if has_actionable {
             reports.push(Report {
                 entity: name,
-                detected_profile: resolved_profile,
+                detected_profile,
+                effective_profile,
                 findings,
             });
         }

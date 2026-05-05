@@ -346,7 +346,7 @@ sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 lint WarehouseVHType --profile list-repor
 sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 lint --fail-on miss
 ```
 
-JSON output is shaped per-entity as `{ entity, detected_profile, findings: [...] }`. The top-level `detected_profile` is the structured field for programmatic consumers; `findings` still carries a `profile`-coded banner as its first entry so the text rendering stays consistent.
+JSON output is shaped per-entity as `{ entity, detected_profile, effective_profile, findings: [...] }`. `detected_profile` is always the heuristic auto-detection — what the linter would pick if no override were supplied. `effective_profile` is what the rules actually ran against. Without `--profile` the two fields match; with `--profile` they can differ, and a CI consumer can report "we auto-detected X but you forced Y" without losing either signal. `findings` still carries a `profile`-coded banner as its first entry so the text rendering stays consistent.
 
 Findings carry a `severity` (`pass` / `warn` / `miss`), a `category` (`profile` / `identity` / `listreport` / `filtering` / `fields` / `integrity` / `capabilities`), a stable `code`, a human-readable `message`, and — for actionable warnings / misses — a `suggested_cds` token (e.g. `@UI.headerInfo`, `@ObjectModel.text.element`, `@Consumption.valueHelpDefinition`) plus a short `why_in_fiori` explanation. The table output inlines these under each message; the JSON output emits them as separate fields.
 

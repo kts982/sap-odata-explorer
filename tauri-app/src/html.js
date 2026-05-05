@@ -17,10 +17,26 @@
 // a marker and bypass escaping. Only code with a reference to
 // RAW_HTML_MARKER — i.e. callers of `raw()` — can produce a tagged value.
 
+// Escape `&`, `<`, `>`, `"`, `'` so the result is safe for both element-
+// content and quoted-attribute contexts. The earlier textContent → innerHTML
+// implementation only escaped `& < >` (browser's behavior), which left a
+// breakout gap where SAP-controlled metadata interpolated into a `data-*`
+// or `title="..."` attribute could close the quote and inject new
+// attributes. CSP-strict blocks inline-handler execution today, but this
+// is defense-in-depth — and the existing renderers do interpolate
+// untrusted values into attributes (e.g. selection-field chip names,
+// describe-row data-field, value-list F4 button data-prop / title).
+//
+// Coerces null/undefined to '' so `safeHtml`...${value}...`` stays sane
+// when an upstream field is missing, and so direct `escapeHtml(nonString)`
+// calls don't TypeError.
 export function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 const RAW_HTML_MARKER = Symbol('safeHtmlRaw');

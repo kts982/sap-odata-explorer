@@ -9,9 +9,12 @@
 // This script imports the real `escapeHtml` / `safeHtml` / `raw` from
 // tauri-app/src/html.js and asserts:
 //
-//   1. escapeHtml renders HTML-shaped strings as inert text (`<` → `&lt;`,
-//      `&` → `&amp;`, `>` → `&gt;`).
-//   2. safeHtml`...${malicious}...` interpolates only the escaped form.
+//   1. escapeHtml renders HTML-shaped strings as inert text in BOTH
+//      element-content and quoted-attribute contexts. The five-char
+//      OWASP set (`& < > " '`) is escaped — quote escaping is what
+//      closes the attribute-breakout class (see assertion below).
+//   2. safeHtml`...${malicious}...` interpolates only the escaped form
+//      in both element content and attribute values.
 //   3. raw(htmlString) — when called from trusted code holding the
 //      closure-private Symbol — passes through unescaped.
 //   4. A JSON-shaped { __rawHtml: true, value: '<script>...' } payload
@@ -19,12 +22,8 @@
 //      check fails and the object is stringified to "[object Object]"
 //      instead of being treated as raw HTML.
 //
-// `escapeHtml` uses `document.createElement('div')` + `textContent`
-// in production. We polyfill the minimum surface here — a div that
-// HTML-escapes its `textContent` setter — so the script runs under
-// vanilla Node with no dependencies. The polyfill mirrors what every
-// browser does internally for textContent → innerHTML readback (escape
-// `&`, `<`, `>` — quotes are not touched, matching real DOM behaviour).
+// `escapeHtml` is pure JS now (no `document` dependency) so the script
+// runs under vanilla Node with no polyfill or external deps.
 //
 // Run locally:
 //   node scripts/test-safe-html.mjs
@@ -36,32 +35,6 @@ import { dirname, resolve } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HTML_MODULE = resolve(HERE, '..', 'tauri-app', 'src', 'html.js');
-
-// ── Minimal DOM polyfill ──
-// Real DOM rule: assigning a string to `textContent` and reading
-// `innerHTML` back returns the string with `&`, `<`, `>` replaced by
-// their HTML entities. Quotes are left alone — they're only dangerous
-// in attribute contexts, which the project does not interpolate into.
-function htmlEscapeReference(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-globalThis.document = {
-  createElement(_tag) {
-    let stored = '';
-    return {
-      set textContent(value) {
-        stored = htmlEscapeReference(value);
-      },
-      get innerHTML() {
-        return stored;
-      },
-    };
-  },
-};
 
 const { escapeHtml, safeHtml, raw } = await import(`file://${HTML_MODULE.replace(/\\/g, '/')}`);
 
@@ -77,7 +50,7 @@ function check(label, condition, expected, got) {
   }
 }
 
-// 1. escapeHtml on a classic XSS payload.
+// 1. escapeHtml on a classic element-content XSS payload.
 {
   const payload = '<img src=x onerror=alert(1)>';
   const out = escapeHtml(payload);
@@ -89,35 +62,85 @@ function check(label, condition, expected, got) {
   );
 }
 
-// 2. escapeHtml on entities that need escaping in element content.
+// 2. escapeHtml escapes the full OWASP five-char set, including quotes.
+//    Quote escaping is what makes the function safe for attribute
+//    contexts; without it `escapeHtml` would silently leave breakouts.
 {
-  const out = escapeHtml('a & b < c > d');
+  const out = escapeHtml(`a & b < c > d " e ' f`);
+  const want = `a &amp; b &lt; c &gt; d &quot; e &#39; f`;
   check(
-    'escapeHtml escapes & < > in element content',
-    out === 'a &amp; b &lt; c &gt; d',
-    'a &amp; b &lt; c &gt; d',
+    'escapeHtml escapes & < > " \' (full OWASP set)',
+    out === want,
+    want,
     out,
   );
 }
 
-// 3. safeHtml interpolates the escaped form, not the raw payload.
+// 3. escapeHtml coerces null / undefined / non-string to ''. Avoids
+//    TypeErrors on direct calls and keeps safeHtml output stable when
+//    an upstream field is missing.
+{
+  check('escapeHtml(null) → empty string', escapeHtml(null) === '', '', escapeHtml(null));
+  check(
+    'escapeHtml(undefined) → empty string',
+    escapeHtml(undefined) === '',
+    '',
+    escapeHtml(undefined),
+  );
+  check('escapeHtml(123) → "123"', escapeHtml(123) === '123', '123', escapeHtml(123));
+}
+
+// 4. safeHtml interpolates the escaped form in element content.
 {
   const hostile = '<svg/onload=alert(1)>';
-  const out = safeHtml`<div data-name="${hostile}">${hostile}</div>`;
-  // The element-content interpolation must be escaped. The attribute
-  // interpolation should also not contain an unescaped `<` that could
-  // break out of the attribute. (Attribute escaping is not a goal of
-  // textContent-based escapeHtml, but `<` and `>` are still neutralised.)
+  const out = safeHtml`<div>${hostile}</div>`;
   check(
     'safeHtml escapes < in element-content interpolation',
-    !out.includes('<svg/onload=alert(1)>') &&
-      out.includes('&lt;svg/onload=alert(1)&gt;'),
+    !out.includes('<svg/onload=alert(1)>') && out.includes('&lt;svg/onload=alert(1)&gt;'),
     'no raw <svg…>; contains &lt;svg…&gt;',
     out,
   );
 }
 
-// 4. safeHtml leaves the static template scaffolding alone.
+// 5. ATTRIBUTE BREAKOUT — load-bearing for the html.js fix. SAP-controlled
+//    metadata flows into `data-*` / `title=""` attributes via safeHtml in
+//    several renderers (selection-field chip names, describe-row
+//    data-field, value-list F4 button data-prop / title). A `"` in the
+//    value would close the attribute and inject new ones; CSP-strict
+//    blocks inline-handler EXECUTION today, but the breakout itself is
+//    still real (style=, id=, markup-shape attacks; defense-in-depth
+//    against any future CSP relaxation). The 5-char escape closes it.
+{
+  const hostile = `" onclick="alert(1)`;
+  const out = safeHtml`<button data-name="${hostile}">click</button>`;
+  check(
+    'safeHtml escapes " in attribute-context interpolation (breakout closed)',
+    out === `<button data-name="&quot; onclick=&quot;alert(1)">click</button>`,
+    `<button data-name="&quot; onclick=&quot;alert(1)">click</button>`,
+    out,
+  );
+  check(
+    'attribute-breakout output does not contain raw onclick="..."',
+    !out.includes(`onclick="alert(1)`),
+    `no raw onclick="alert(1)"`,
+    out,
+  );
+}
+
+// 6. Apostrophe-shaped breakout (single-quoted attributes are rarer in
+//    this codebase but the contract should still hold).
+{
+  const hostile = `' onmouseover='alert(1)`;
+  const out = safeHtml`<button data-name='${hostile}'>click</button>`;
+  check(
+    'safeHtml escapes \' in single-quoted attribute interpolation',
+    out.includes('&#39;') && !out.includes(`onmouseover='alert(1)`),
+    'contains &#39; and no raw onmouseover=…',
+    out,
+  );
+}
+
+// 7. safeHtml leaves the static template scaffolding alone.
 {
   const out = safeHtml`<span class="x">${'plain'}</span>`;
   check(
@@ -128,7 +151,7 @@ function check(label, condition, expected, got) {
   );
 }
 
-// 5. raw() called from this script (which has access to the marker via
+// 8. raw() called from this script (which has access to the marker via
 // the html.js closure) passes through unescaped — the trusted-callsite
 // path the project uses for already-safeHtml'd fragments.
 {
@@ -142,7 +165,7 @@ function check(label, condition, expected, got) {
   );
 }
 
-// 6. JSON-shaped __rawHtml forgery is the load-bearing claim. A SAP
+// 9. JSON-shaped __rawHtml forgery is the load-bearing claim. A SAP
 // payload like { "__rawHtml": true, "value": "<script>..." } must NOT
 // be treated as raw — JSON cannot construct Symbol-keyed properties,
 // so the brand check on RAW_HTML_MARKER fails and safeHtml falls back
@@ -158,7 +181,7 @@ function check(label, condition, expected, got) {
   );
 }
 
-// 7. null / undefined interpolations don't blow up and don't print "null".
+// 10. null / undefined interpolations don't blow up and don't print "null".
 {
   const out = safeHtml`<p>${null}-${undefined}</p>`;
   check(
@@ -169,7 +192,7 @@ function check(label, condition, expected, got) {
   );
 }
 
-// 8. Repeat the parser-side fixture's worst payloads against the
+// 11. Repeat the parser-side fixture's worst payloads against the
 // renderer to close the loop end-to-end.
 {
   const cases = [
