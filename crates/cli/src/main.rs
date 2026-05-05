@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use comfy_table::{Cell, Color, Table, presets::UTF8_FULL};
 use sap_odata_core::{
     auth::{AuthConfig, SapConnection},
@@ -207,6 +207,19 @@ enum Commands {
         /// (pass / warn / miss). Defaults to showing everything.
         #[arg(long)]
         min_severity: Option<String>,
+
+        /// Override the auto-detected lint profile. Useful when the
+        /// heuristics misread a service (e.g. a list-report-shaped
+        /// entity that lacks the naming convention) or to ask "how
+        /// list-report-ready is this value-help service?".
+        #[arg(long, value_enum)]
+        profile: Option<LintProfileArg>,
+
+        /// Exit non-zero if any finding at or above this severity is
+        /// present. Intended for CI use. Independent of `--min-severity`,
+        /// which only filters what's displayed.
+        #[arg(long, value_enum)]
+        fail_on: Option<FailOnArg>,
     },
 
     /// List every SAP/UI5 annotation parsed from `$metadata`, grouped
@@ -223,6 +236,50 @@ enum Commands {
         #[arg(long)]
         filter: Option<String>,
     },
+}
+
+/// Lint profile override flag values. Mirrors `lint::LintProfile`
+/// but is decoupled so clap's value-enum derive owns the kebab-case
+/// CLI surface (`list-report`, `object-page`, …) without leaking
+/// clap into the core crate.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+enum LintProfileArg {
+    ListReport,
+    ObjectPage,
+    ValueHelp,
+    Analytical,
+    Transactional,
+}
+
+impl From<LintProfileArg> for lint::LintProfile {
+    fn from(value: LintProfileArg) -> Self {
+        match value {
+            LintProfileArg::ListReport => lint::LintProfile::ListReport,
+            LintProfileArg::ObjectPage => lint::LintProfile::ObjectPage,
+            LintProfileArg::ValueHelp => lint::LintProfile::ValueHelp,
+            LintProfileArg::Analytical => lint::LintProfile::Analytical,
+            LintProfileArg::Transactional => lint::LintProfile::Transactional,
+        }
+    }
+}
+
+/// `--fail-on` accepts the actionable severities only — `pass` would
+/// fire on every entity and isn't a useful CI gate.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+#[value(rename_all = "lowercase")]
+enum FailOnArg {
+    Warn,
+    Miss,
+}
+
+impl From<FailOnArg> for LintSeverity {
+    fn from(value: FailOnArg) -> Self {
+        match value {
+            FailOnArg::Warn => LintSeverity::Warn,
+            FailOnArg::Miss => LintSeverity::Miss,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -472,6 +529,8 @@ async fn main() -> Result<()> {
             Commands::Lint {
                 entity,
                 min_severity,
+                profile,
+                fail_on,
             } => {
                 let svc = require_service()?;
                 cmd_lint(
@@ -480,6 +539,8 @@ async fn main() -> Result<()> {
                     cli.json,
                     entity.clone(),
                     min_severity.clone(),
+                    *profile,
+                    *fail_on,
                 )
                 .await
             }
@@ -1709,6 +1770,8 @@ async fn cmd_lint(
     as_json: bool,
     entity: Option<String>,
     min_severity: Option<String>,
+    profile_override: Option<LintProfileArg>,
+    fail_on: Option<FailOnArg>,
 ) -> Result<()> {
     let meta = client
         .fetch_metadata(service)
@@ -1723,6 +1786,7 @@ async fn cmd_lint(
             anyhow::bail!("unknown severity '{other}' — expected pass, warn, or miss");
         }
     };
+    let fail_on_sev: Option<LintSeverity> = fail_on.map(Into::into);
 
     // Resolve the scope: one entity (accept either type name or set
     // name), or every entity type in the schema.
@@ -1743,17 +1807,38 @@ async fn cmd_lint(
             .collect(),
     };
 
+    // Top-level `detected_profile` is intentionally separate from the
+    // per-finding banner: programmatic consumers (CI, agents) read the
+    // structured field, while the banner stays in `findings` so the
+    // text-rendering path keeps its current shape.
     #[derive(serde::Serialize)]
     struct Report<'a> {
         entity: &'a str,
+        detected_profile: lint::LintProfile,
         findings: Vec<lint::LintFinding>,
     }
     let mut reports: Vec<Report> = Vec::new();
+    let mut fail_on_tripped = false;
     for name in &targets {
         let et = meta
             .find_entity_type(name)
             .ok_or_else(|| anyhow::anyhow!("entity '{name}' vanished"))?;
-        let mut findings = lint::evaluate_entity_type(et);
+        let resolved_profile = profile_override
+            .map(Into::into)
+            .unwrap_or_else(|| lint::detect_profile(et));
+        let mut findings = lint::evaluate_entity_type_with_profile(et, resolved_profile);
+        // Compute fail-on hit BEFORE the min-severity retain — fail-on
+        // is an exit-code gate, not a display gate, and a user who runs
+        // `--min-severity miss --fail-on warn` still wants warns to
+        // count toward the exit code even if they're filtered out of
+        // the table.
+        if let Some(threshold) = fail_on_sev
+            && findings
+                .iter()
+                .any(|f| f.code != "profile" && severity_at_least(f.severity, threshold))
+        {
+            fail_on_tripped = true;
+        }
         if let Some(s) = min_sev {
             // Keep the "profile" banner regardless of severity so the
             // user still sees which profile was assumed when they ask
@@ -1769,6 +1854,7 @@ async fn cmd_lint(
         if has_actionable {
             reports.push(Report {
                 entity: name,
+                detected_profile: resolved_profile,
                 findings,
             });
         }
@@ -1776,11 +1862,22 @@ async fn cmd_lint(
 
     if as_json {
         println!("{}", serde_json::to_string_pretty(&reports)?);
+        if fail_on_tripped {
+            // Even in JSON mode, --fail-on still drives the exit code.
+            // We've already emitted the report so consumers can read
+            // the findings; the bail just sets exit != 0.
+            anyhow::bail!("lint findings at or above --fail-on threshold are present",);
+        }
         return Ok(());
     }
 
     if reports.is_empty() {
         println!("No findings at or above the requested severity.");
+        if fail_on_tripped {
+            anyhow::bail!(
+                "lint findings at or above --fail-on threshold are present (filtered out by --min-severity)",
+            );
+        }
         return Ok(());
     }
 
@@ -1819,6 +1916,9 @@ async fn cmd_lint(
             ]);
         }
         println!("{table}");
+    }
+    if fail_on_tripped {
+        anyhow::bail!("lint findings at or above --fail-on threshold are present");
     }
     Ok(())
 }

@@ -343,6 +343,67 @@ pub fn evaluate_entity_type_with_profile(
             ));
         }
     }
+    // 6. SelectionVariant references hidden or non-filterable property.
+    //    The variant would surface a default filter that the column
+    //    can't actually filter on — Fiori shows the chip, the server
+    //    rejects the `$filter`. Walks both Parameters and SelectOptions
+    //    since either form ends up in the generated `$filter`.
+    {
+        let mut bad: Vec<String> = Vec::new();
+        for sv in &et.selection_variants {
+            let names = sv
+                .parameters
+                .iter()
+                .map(|p| p.property_name.as_str())
+                .chain(sv.select_options.iter().map(|s| s.property_name.as_str()));
+            for name in names {
+                if let Some(p) = et.properties.iter().find(|p| p.name == name)
+                    && (p.hidden || p.filterable == Some(false))
+                    && !bad.iter().any(|b| b == name)
+                {
+                    bad.push(name.to_string());
+                }
+            }
+        }
+        if !bad.is_empty() {
+            out.push(actionable(
+                LintSeverity::Warn,
+                LintCategory::Filtering,
+                "selection_variant_dead_filter",
+                format!(
+                    "UI.SelectionVariant references hidden or non-filterable column(s): {}",
+                    bad.join(", "),
+                ),
+                "@UI.selectionVariant + filter/hidden consistency",
+                "The variant injects a `$filter` clause for a column the server won't filter on — the variant won't apply at runtime.",
+            ));
+        }
+    }
+    // 7. SemanticObject without SemanticKey. Fiori cross-app navigation
+    //    forms the target URL from the SemanticObject + business-key
+    //    parameters; without a SemanticKey it has no business key to
+    //    pass, so the launchpad link will be malformed or generic.
+    {
+        let semantic_object_props: Vec<&str> = et
+            .properties
+            .iter()
+            .filter(|p| p.semantic_object.is_some())
+            .map(|p| p.name.as_str())
+            .collect();
+        if !semantic_object_props.is_empty() && et.semantic_keys.is_empty() {
+            out.push(actionable(
+                LintSeverity::Warn,
+                LintCategory::Identity,
+                "semantic_object_no_key",
+                format!(
+                    "Common.SemanticObject declared on {} but no Common.SemanticKey on the entity.",
+                    semantic_object_props.join(", "),
+                ),
+                "@Consumption.semanticObject + @ObjectModel.semanticKey",
+                "Cross-app nav target won't carry a business key — the launchpad link will be malformed or open the generic landing page.",
+            ));
+        }
+    }
 
     // Integrity (dangling-reference) checks ─────────────────────────────
     // These flag annotations whose Path/target references a property
@@ -1176,6 +1237,137 @@ mod tests {
                 "text_arrangement_lonely",
             ],
             "consistency rules must stream in the canonical order rendered by CLI/desktop",
+        );
+    }
+
+    #[test]
+    fn consistency_rule_selection_variant_references_non_filterable() {
+        // SelectionVariant select_options point at a non-filterable
+        // property — the variant would inject a `$filter` clause the
+        // server rejects.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="InternalNote" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType">
+        <Annotation Term="SAP__UI.SelectionVariant" Qualifier="WithNote">
+          <Record>
+            <PropertyValue Property="Text" String="Notes only"/>
+            <PropertyValue Property="SelectOptions">
+              <Collection>
+                <Record>
+                  <PropertyValue Property="PropertyName" PropertyPath="InternalNote"/>
+                  <PropertyValue Property="Ranges">
+                    <Collection>
+                      <Record Type="UI.SelectionRangeType">
+                        <PropertyValue Property="Sign" EnumMember="UI.SelectionRangeSignType/I"/>
+                        <PropertyValue Property="Option" EnumMember="UI.SelectionRangeOptionType/EQ"/>
+                        <PropertyValue Property="Low" String="x"/>
+                      </Record>
+                    </Collection>
+                  </PropertyValue>
+                </Record>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+      </Annotations>
+      <Annotations Target="SAP__self.Container/Orders">
+        <Annotation Term="SAP__capabilities.FilterRestrictions">
+          <Record>
+            <PropertyValue Property="NonFilterableProperties">
+              <Collection>
+                <PropertyPath>InternalNote</PropertyPath>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let et = meta.find_entity_type("OrderType").unwrap();
+        let findings = evaluate_entity_type(et);
+        let hit = findings
+            .iter()
+            .find(|f| f.code == "selection_variant_dead_filter")
+            .expect("selection_variant_dead_filter should fire when a variant references a non-filterable property");
+        assert_eq!(hit.severity, LintSeverity::Warn);
+        assert!(hit.message.contains("InternalNote"));
+    }
+
+    #[test]
+    fn consistency_rule_semantic_object_without_semantic_key() {
+        // SemanticObject declared but no SemanticKey — Fiori cross-app
+        // nav can't form the target URL with a business key.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="WarehouseId" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType/WarehouseId">
+        <Annotation Term="SAP__common.SemanticObject" String="WarehouseManagement"/>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let et = meta.find_entity_type("OrderType").unwrap();
+        let findings = evaluate_entity_type(et);
+        let hit = findings
+            .iter()
+            .find(|f| f.code == "semantic_object_no_key")
+            .expect("semantic_object_no_key should fire when SemanticObject is set without a SemanticKey");
+        assert_eq!(hit.severity, LintSeverity::Warn);
+        assert!(hit.message.contains("WarehouseId"));
+    }
+
+    #[test]
+    fn consistency_rule_semantic_object_with_semantic_key_passes() {
+        // Same SemanticObject, but now with a Common.SemanticKey
+        // declared — the cross-app nav has a business key to pass, so
+        // the rule should NOT fire.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="WarehouseId" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType/WarehouseId">
+        <Annotation Term="SAP__common.SemanticObject" String="WarehouseManagement"/>
+      </Annotations>
+      <Annotations Target="SAP__self.OrderType">
+        <Annotation Term="SAP__common.SemanticKey">
+          <Collection>
+            <PropertyPath>WarehouseId</PropertyPath>
+          </Collection>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let et = meta.find_entity_type("OrderType").unwrap();
+        let findings = evaluate_entity_type(et);
+        assert!(
+            !findings.iter().any(|f| f.code == "semantic_object_no_key"),
+            "rule should not fire when SemanticKey is declared",
         );
     }
 

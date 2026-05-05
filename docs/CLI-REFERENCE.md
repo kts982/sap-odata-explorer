@@ -327,7 +327,9 @@ Run the Fiori-readiness checklist on one entity or the whole service. Same check
 | Flag | Purpose |
 |---|---|
 | `<entity>` (positional, optional) | Entity type or entity set name. Omit to lint every type in the service. |
-| `--min-severity <pass\|warn\|miss>` | Suppress findings below this severity. Default shows everything. |
+| `--min-severity <pass\|warn\|miss>` | Suppress findings below this severity in the displayed output. Default shows everything. |
+| `--profile <list-report\|object-page\|value-help\|analytical\|transactional>` | Override the auto-detected lint profile. Useful when the heuristics misread a service or to ask "how list-report-ready would this value-help service be?". |
+| `--fail-on <warn\|miss>` | Exit non-zero if any finding at or above this severity is present. CI-style gate. Independent of `--min-severity`, which only filters what's displayed. |
 | `--json` | Dump the structured findings instead of a table. |
 
 ```bash
@@ -337,19 +339,23 @@ sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 lint --min-severity warn
 # One entity, table output
 sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 lint WarehousePhysicalStockProductsType
 
-# Pipe into CI — fail the build if anything is "miss"
-sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 lint --min-severity miss --json \
-  | jq -e 'length == 0'
+# Force-evaluate a value-help entity as if it were a list report
+sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 lint WarehouseVHType --profile list-report
+
+# CI gate: exit non-zero on any miss, no piping required
+sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 lint --fail-on miss
 ```
+
+JSON output is shaped per-entity as `{ entity, detected_profile, findings: [...] }`. The top-level `detected_profile` is the structured field for programmatic consumers; `findings` still carries a `profile`-coded banner as its first entry so the text rendering stays consistent.
 
 Findings carry a `severity` (`pass` / `warn` / `miss`), a `category` (`profile` / `identity` / `listreport` / `filtering` / `fields` / `integrity` / `capabilities`), a stable `code`, a human-readable `message`, and — for actionable warnings / misses — a `suggested_cds` token (e.g. `@UI.headerInfo`, `@ObjectModel.text.element`, `@Consumption.valueHelpDefinition`) plus a short `why_in_fiori` explanation. The table output inlines these under each message; the JSON output emits them as separate fields.
 
-The linter is **profile-aware**: it auto-detects the entity's shape (`list_report` / `object_page` / `value_help` / `analytical` / `transactional`) from the name and declared annotations. The first finding is always a `profile` banner showing the detected shape; subsequent checks skip irrelevant ones (e.g. value-help entities aren't dinged for missing `UI.LineItem`).
+The linter is **profile-aware**: it auto-detects the entity's shape (`list_report` / `object_page` / `value_help` / `analytical` / `transactional`) from the name and declared annotations. Subsequent checks skip irrelevant ones (e.g. value-help entities aren't dinged for missing `UI.LineItem`). Use `--profile` to override the auto-detection.
 
 Check families:
 
 - **Presence checks** — "did you declare X?" (HeaderInfo, LineItem, SelectionFields, ...).
-- **Consistency rules** — contradictions in already-declared annotations: `SelectionFields` referencing a non-filterable column, `SortOrder` referencing a non-sortable one, `UI.Hidden` columns appearing in `SelectionFields`, `Common.ValueList` without a writable (`Out`/`InOut`) parameter, `UI.TextArrangement` on a property with no `Common.Text` to arrange.
+- **Consistency rules** — contradictions in already-declared annotations: `SelectionFields` referencing a non-filterable column, `SortOrder` referencing a non-sortable one, `UI.Hidden` columns appearing in `SelectionFields`, `Common.ValueList` without a writable (`Out`/`InOut`) parameter, `UI.TextArrangement` on a property with no `Common.Text` to arrange, `UI.SelectionVariant` referencing a hidden / non-filterable column, `Common.SemanticObject` declared without a `Common.SemanticKey`.
 - **Integrity rules** — dangling references: annotations whose Path/target points at a column name that doesn't exist on the entity. Covers `Common.Text`, `Measures.Unit` / `ISOCurrency`, `UI.Criticality` (Path form), `UI.HeaderInfo.Title`, `Common.SemanticKey`, `UI.SelectionFields`, `UI.LineItem.DataField.Value`, `UI.PresentationVariant.SortOrder`. Typical cause: a column was renamed in one CDS layer without the annotation being updated.
 
 ### `annotations`
