@@ -211,9 +211,11 @@ enum Commands {
         /// Override the auto-detected lint profile. Useful when the
         /// heuristics misread a service (e.g. a list-report-shaped
         /// entity that lacks the naming convention) or to ask "how
-        /// list-report-ready is this value-help service?".
-        #[arg(long, value_enum)]
-        profile: Option<LintProfileArg>,
+        /// list-report-ready is this value-help service?". Named
+        /// `--lint-profile` to avoid clashing with the global
+        /// connection-profile flag (`-p, --profile`).
+        #[arg(long = "lint-profile", value_enum)]
+        lint_profile: Option<LintProfileArg>,
 
         /// Exit non-zero if any finding at or above this severity is
         /// present. Intended for CI use. Independent of `--min-severity`,
@@ -529,7 +531,7 @@ async fn main() -> Result<()> {
             Commands::Lint {
                 entity,
                 min_severity,
-                profile,
+                lint_profile,
                 fail_on,
             } => {
                 let svc = require_service()?;
@@ -539,7 +541,7 @@ async fn main() -> Result<()> {
                     cli.json,
                     entity.clone(),
                     min_severity.clone(),
-                    *profile,
+                    *lint_profile,
                     *fail_on,
                 )
                 .await

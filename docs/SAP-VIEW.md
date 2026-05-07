@@ -147,7 +147,7 @@ Things intentionally left out of SAP View for now, with the reasoning:
 Still on the roadmap (above the deliberate-gap line — we *will* do these):
 
 - **Prominence of the readiness panel** — currently below the describe tables; a summary pill or a separate button may work better depending on how the describe view evolves.
-- **CLI `--profile` override + `--fail-on`** — let users ask "how list-report-ready is this entity if I use it that way?" and let CI pipelines non-zero-exit on any warn/miss.
+- **CLI `--lint-profile` override + `--fail-on`** — let users ask "how list-report-ready is this entity if I use it that way?" and let CI pipelines non-zero-exit on any warn/miss.
 - **Clickable lint findings** — jump from a finding to the affected property row, or open the annotation inspector filtered to the relevant term.
 
 ## Fiori-readiness checklist

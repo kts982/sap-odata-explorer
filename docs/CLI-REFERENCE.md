@@ -328,7 +328,7 @@ Run the Fiori-readiness checklist on one entity or the whole service. Same check
 |---|---|
 | `<entity>` (positional, optional) | Entity type or entity set name. Omit to lint every type in the service. |
 | `--min-severity <pass\|warn\|miss>` | Suppress findings below this severity in the displayed output. Default shows everything. |
-| `--profile <list-report\|object-page\|value-help\|analytical\|transactional>` | Override the auto-detected lint profile. Useful when the heuristics misread a service or to ask "how list-report-ready would this value-help service be?". |
+| `--lint-profile <list-report\|object-page\|value-help\|analytical\|transactional>` | Override the auto-detected lint profile. Useful when the heuristics misread a service or to ask "how list-report-ready would this value-help service be?". Named `--lint-profile` so it doesn't collide with the global connection-profile flag (`-p, --profile`). |
 | `--fail-on <warn\|miss>` | Exit non-zero if any finding at or above this severity is present. CI-style gate. Independent of `--min-severity`, which only filters what's displayed. |
 | `--json` | Dump the structured findings instead of a table. |
 
@@ -340,17 +340,17 @@ sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 lint --min-severity warn
 sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 lint WarehousePhysicalStockProductsType
 
 # Force-evaluate a value-help entity as if it were a list report
-sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 lint WarehouseVHType --profile list-report
+sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 lint WarehouseVHType --lint-profile list-report
 
 # CI gate: exit non-zero on any miss, no piping required
 sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 lint --fail-on miss
 ```
 
-JSON output is shaped per-entity as `{ entity, detected_profile, effective_profile, findings: [...] }`. `detected_profile` is always the heuristic auto-detection — what the linter would pick if no override were supplied. `effective_profile` is what the rules actually ran against. Without `--profile` the two fields match; with `--profile` they can differ, and a CI consumer can report "we auto-detected X but you forced Y" without losing either signal. `findings` still carries a `profile`-coded banner as its first entry so the text rendering stays consistent.
+JSON output is shaped per-entity as `{ entity, detected_profile, effective_profile, findings: [...] }`. `detected_profile` is always the heuristic auto-detection — what the linter would pick if no override were supplied. `effective_profile` is what the rules actually ran against. Without `--lint-profile` the two fields match; with `--lint-profile` they can differ, and a CI consumer can report "we auto-detected X but you forced Y" without losing either signal. `findings` still carries a `profile`-coded banner as its first entry so the text rendering stays consistent.
 
 Findings carry a `severity` (`pass` / `warn` / `miss`), a `category` (`profile` / `identity` / `listreport` / `filtering` / `fields` / `integrity` / `capabilities`), a stable `code`, a human-readable `message`, and — for actionable warnings / misses — a `suggested_cds` token (e.g. `@UI.headerInfo`, `@ObjectModel.text.element`, `@Consumption.valueHelpDefinition`) plus a short `why_in_fiori` explanation. The table output inlines these under each message; the JSON output emits them as separate fields.
 
-The linter is **profile-aware**: it auto-detects the entity's shape (`list_report` / `object_page` / `value_help` / `analytical` / `transactional`) from the name and declared annotations. Subsequent checks skip irrelevant ones (e.g. value-help entities aren't dinged for missing `UI.LineItem`). Use `--profile` to override the auto-detection.
+The linter is **profile-aware**: it auto-detects the entity's shape (`list_report` / `object_page` / `value_help` / `analytical` / `transactional`) from the name and declared annotations. Subsequent checks skip irrelevant ones (e.g. value-help entities aren't dinged for missing `UI.LineItem`). Use `--lint-profile` to override the auto-detection.
 
 Check families:
 
