@@ -44,6 +44,9 @@ import {
   renderFioriFilterButton,
   applyFioriFilter,
   applyFioriCols,
+  renderFioriReadinessBadge,
+  openFioriReadinessModal,
+  closeFioriReadinessModal,
 } from './fiori.js';
 import {
   openValueListPicker,
@@ -193,6 +196,7 @@ function toggleSapView() {
     renderSelectionFieldsBar(null);
     renderFioriColsButton(null);
     renderFioriFilterButton(null);
+    renderFioriReadinessBadge(null);
   }
   // Clear any lingering warnings from the previous mode.
   if (!state.sapViewEnabled) showSapViewWarnings([]);
@@ -271,6 +275,8 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('annotationBadge').addEventListener('click', openAnnotationInspector);
   document.getElementById('annotationBadge').classList.add('cursor-pointer');
   document.getElementById('btnAiClose').addEventListener('click', closeAnnotationInspector);
+  document.getElementById('fioriReadinessBadge').addEventListener('click', openFioriReadinessModal);
+  document.getElementById('btnFioriReadinessClose').addEventListener('click', closeFioriReadinessModal);
   document.getElementById('aiSearch').addEventListener('input', renderAnnotationInspector);
   document.getElementById('btnOpenFilterBar').addEventListener('click', openFilterBar);
   document.getElementById('btnFbClose').addEventListener('click', closeFilterBar);

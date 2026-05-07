@@ -18,7 +18,7 @@ import { propertyFlagHints, renderSelectionFieldsBar } from './query.js';
 import {
   renderFioriColsButton,
   renderFioriFilterButton,
-  renderFioriReadinessPanel,
+  renderFioriReadinessBadge,
 } from './fiori.js';
 
 export function renderDescribe(info) {
@@ -50,8 +50,18 @@ export function renderDescribe(info) {
     }
   }
 
+  // Filter SAP V4 system fields from the describe panel. `SAP__Messages`
+  // (V4 transient-message container), `__OperationControl` (action-routing
+  // marker), etc. are framework-level and noise for entity inspection.
+  // The full `info.properties` is kept on the model so lint and the
+  // readiness check still see them; we only hide from the UI.
+  const isSystemField = (name) => typeof name === 'string'
+    && (name.startsWith('SAP__') || name.startsWith('__'));
+  const visibleProperties = info.properties.filter(p => !isSystemField(p.name));
+  const visibleNavProperties = info.nav_properties.filter(n => !isSystemField(n.name));
+
   // Properties
-  const propertyRows = info.properties.map(p => {
+  const propertyRows = visibleProperties.map(p => {
     const keyMark = p.is_key ? '<span class="text-ox-amber">&#9679;</span>' : '';
     // SAP view: surface the text-companion property ("↦ TextProp") next to
     // the property name. The arrow hints that this column has an associated
@@ -107,8 +117,8 @@ export function renderDescribe(info) {
 
   // Nav properties
   let navTable = '';
-  if (info.nav_properties.length > 0) {
-    const navRows = info.nav_properties.map(n => safeHtml`
+  if (visibleNavProperties.length > 0) {
+    const navRows = visibleNavProperties.map(n => safeHtml`
       <tr class="hover:bg-ox-amberGlow cursor-pointer transition-colors" data-action="expand" data-field="${n.name}">
         <td class="py-0.5 pr-3 text-ox-text">${n.name}</td>
         <td class="py-0.5 pr-3 text-ox-dim">${n.target_type}</td>
@@ -129,14 +139,15 @@ export function renderDescribe(info) {
       </div>`;
   }
 
-  const readinessPanel = state.sapViewEnabled ? renderFioriReadinessPanel(info) : '';
   const html = safeHtml`
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
       ${raw(propertiesTable)}
       ${raw(navTable)}
-    </div>
-    ${raw(readinessPanel)}`;
+    </div>`;
   document.getElementById('describeContent').innerHTML = html;
+  // Footer pill (next to the annotations badge) — opens the readiness
+  // modal on click. Hidden when SAP View is off or no findings exist.
+  renderFioriReadinessBadge(info);
 }
 
 export function hideDescribe() {

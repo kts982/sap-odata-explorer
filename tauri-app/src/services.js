@@ -295,7 +295,13 @@ export async function resolveAndLoadService(input, versionHint) {
     });
     if (!scope.active()) return;
 
-    const entities = response.entity_sets || [];
+    // Drop SAP V4 system entities. The `SAP__` and `__` double-underscore
+    // prefixes are reserved by the V4 framework for tooling-level entries
+    // (`SAP__Messages`, `SAP__Currencies`, `SAP__UnitsOfMeasure`, ...) —
+    // not part of the developer's data model. Filter at the source so
+    // status text, sidebar count, and tab cache stay in sync.
+    const entities = (response.entity_sets || [])
+      .filter(es => !(es && typeof es.name === 'string' && (es.name.startsWith('SAP__') || es.name.startsWith('__'))));
     const summary = response.annotation_summary || { total: 0, by_namespace: {} };
 
     state.entitySets = entities;

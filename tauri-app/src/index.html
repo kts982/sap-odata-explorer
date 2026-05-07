@@ -193,6 +193,7 @@
       <footer class="bg-ox-panel border-t border-ox-border px-4 py-1 text-[11px] text-ox-text flex items-center gap-4 shrink-0 font-mono">
         <span id="statusText">Ready</span>
         <span id="annotationBadge" class="hidden cursor-help text-[10px] text-ox-blue border border-ox-blue/40 bg-ox-blue/10 rounded-sm px-1.5 py-0.5" title=""></span>
+        <span id="fioriReadinessBadge" class="hidden cursor-pointer text-[10px] rounded-sm px-1.5 py-0.5 border" title=""></span>
         <button id="btnSapView" class="ml-auto inline-flex items-center gap-1 border border-ox-amberDim/60 rounded-sm px-1.5 py-0.5 text-ox-amberDim hover:text-ox-amber hover:border-ox-amber transition-colors" title="Toggle SAP-aware rendering (HeaderInfo, Common.Text, etc.)">
           <span id="sapViewChevron">&#x25B4;</span><span>SAP View</span>
         </button>
@@ -214,29 +215,29 @@
       </div>
       <div class="p-5 space-y-3">
         <div>
-          <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Profile Name</label>
+          <label for="mpName" class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Profile Name</label>
           <input id="mpName" type="text" placeholder="e.g. DEV, QAS, PRD"
             class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-hidden" />
         </div>
         <div>
-          <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Base URL</label>
+          <label for="mpUrl" class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Base URL</label>
           <input id="mpUrl" type="text" placeholder="https://hostname:port"
             class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-hidden" />
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Client</label>
+            <label for="mpClient" class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Client</label>
             <input id="mpClient" type="text" value="100"
               class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-hidden" />
           </div>
           <div>
-            <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Language</label>
+            <label for="mpLang" class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Language</label>
             <input id="mpLang" type="text" value="EN"
               class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-hidden" />
           </div>
         </div>
         <div>
-          <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Authentication</label>
+          <label for="mpAuthMode" class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Authentication</label>
           <select id="mpAuthMode"
             class="bg-ox-surface text-ox-text text-sm border border-ox-border rounded-md px-3 py-1.5 w-full outline-hidden">
             <option value="basic">Username / Password</option>
@@ -256,12 +257,12 @@
         </div>
         <div id="mpCredFields">
           <div class="mb-3">
-            <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Username</label>
+            <label for="mpUser" class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Username</label>
             <input id="mpUser" type="text"
               class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-hidden" />
           </div>
           <div>
-            <label class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Password</label>
+            <label for="mpPass" class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Password</label>
             <input id="mpPass" type="password"
               class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-hidden" />
             <div class="text-[10px] text-ox-dim mt-1">Stored in Windows Credential Manager</div>
@@ -353,6 +354,21 @@
       </div>
       <div id="aiNamespaceBar" class="px-5 py-1.5 border-b border-ox-border text-[10px] font-mono shrink-0 flex items-center gap-1 flex-wrap"></div>
       <div id="aiResults" class="flex-1 overflow-auto text-xs font-mono"></div>
+    </div>
+  </div>
+
+  <!-- ═══ Fiori Readiness Modal ═══ -->
+  <div id="fioriReadinessModal" class="hidden fixed inset-0 z-50 modal-overlay flex items-center justify-center">
+    <div class="modal-content bg-ox-panel border border-ox-border rounded-lg shadow-2xl w-[640px] max-w-[95vw] max-h-[85vh] flex flex-col overflow-hidden">
+      <div class="px-5 py-3 border-b border-ox-border flex items-center justify-between shrink-0">
+        <div class="flex items-baseline gap-2">
+          <span class="text-ox-amber text-xs font-semibold tracking-wide">&#9670;</span>
+          <h3 class="text-sm font-medium text-ox-text">Fiori readiness</h3>
+          <span id="frSubtitle" class="text-[10px] text-ox-dim font-mono"></span>
+        </div>
+        <button id="btnFioriReadinessClose" class="text-ox-dim hover:text-ox-text text-xs px-2 py-0.5 rounded-sm hover:bg-ox-hover">close</button>
+      </div>
+      <div id="frBody" class="flex-1 overflow-auto"></div>
     </div>
   </div>
 

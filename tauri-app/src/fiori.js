@@ -238,24 +238,85 @@ export function applyFioriCols() {
   input.focus();
 }
 
-// Fiori-readiness checklist, rendered below the describe tables when
-// SAP View is on. Shows the parser's findings with a traffic-light
-// dot per row and groups them by category. Summary counts up-front
-// so the user can tell "is this service shaped like Fiori expects?"
-// at a glance.
-export function renderFioriReadinessPanel(info) {
-  const findings = Array.isArray(info.fiori_readiness) ? info.fiori_readiness : [];
-  if (findings.length === 0) return '';
+// Fiori-readiness checklist — surfaced as a footer pill (severity-tinted)
+// next to the annotations badge, opening a modal popup with the full
+// findings grouped by category. Replaced the older bottom-of-describe
+// panel layout to free vertical space and mirror the annotation-inspector
+// UX pattern. Visibility gates on state.sapViewEnabled + non-empty
+// findings so the chrome only appears when there is something to show.
+
+// Module-private latch for the most recent set of findings + the entity
+// name they came from. Set by renderFioriReadinessBadge when describe
+// finishes; consumed by openFioriReadinessModal. Kept here (not in the
+// global state) because the modal is a pure read of the latest describe
+// result — no separate fetch.
+let _fioriCurrent = null;
+
+const _SEVERITY_TONES = {
+  miss: ['text-ox-red', 'border-ox-red/40', 'bg-ox-red/10'],
+  warn: ['text-ox-amber', 'border-ox-amber/40', 'bg-ox-amberGlow'],
+  pass: ['text-ox-green', 'border-ox-green/40', 'bg-ox-greenGlow'],
+};
+const _ALL_TONE_CLASSES = Object.values(_SEVERITY_TONES).flat();
+
+export function renderFioriReadinessBadge(info) {
+  const el = document.getElementById('fioriReadinessBadge');
+  if (!el) return;
+  // Always strip any previous severity tone before deciding the new one
+  // so toggling between entities doesn't leave stale classes.
+  el.classList.remove(..._ALL_TONE_CLASSES);
+  const findings = state.sapViewEnabled && info && Array.isArray(info.fiori_readiness)
+    ? info.fiori_readiness : [];
+  if (findings.length === 0) {
+    el.classList.add('hidden');
+    el.textContent = '';
+    el.title = '';
+    _fioriCurrent = null;
+    return;
+  }
+  el.classList.remove('hidden');
   const counts = { pass: 0, warn: 0, miss: 0 };
   for (const f of findings) {
     if (counts[f.severity] !== undefined) counts[f.severity]++;
   }
-  const summary = [
-    counts.pass ? safeHtml`<span class="text-ox-green">&#9679; ${counts.pass} pass</span>` : '',
-    counts.warn ? safeHtml`<span class="text-ox-amber">&#9679; ${counts.warn} warn</span>` : '',
-    counts.miss ? safeHtml`<span class="text-ox-red">&#9679; ${counts.miss} miss</span>` : '',
-  ].filter(Boolean).join(' <span class="text-ox-border">·</span> ');
-  // Group by category, preserve original order within each group.
+  const tone = counts.miss > 0 ? _SEVERITY_TONES.miss
+    : counts.warn > 0 ? _SEVERITY_TONES.warn
+    : _SEVERITY_TONES.pass;
+  el.classList.add(...tone);
+  el.textContent = counts.miss > 0
+    ? `Fiori × ${counts.miss} miss`
+    : counts.warn > 0
+      ? `Fiori ⚠ ${counts.warn} warn`
+      : `Fiori ✓ ${counts.pass}`;
+  el.title = `Fiori readiness — pass: ${counts.pass} · warn: ${counts.warn} · miss: ${counts.miss}\nClick to inspect`;
+  _fioriCurrent = { findings, entityName: info.name || '' };
+}
+
+export function openFioriReadinessModal() {
+  const modal = document.getElementById('fioriReadinessModal');
+  const subtitle = document.getElementById('frSubtitle');
+  const body = document.getElementById('frBody');
+  if (!modal || !_fioriCurrent) return;
+  subtitle.textContent = _fioriCurrent.entityName;
+  body.innerHTML = _renderFioriReadinessBody(_fioriCurrent.findings);
+  modal.classList.remove('hidden');
+}
+
+export function closeFioriReadinessModal() {
+  const modal = document.getElementById('fioriReadinessModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+// Body content for the readiness modal: a summary pill row, then the
+// findings grouped by category in declared order. Internal — the
+// outer modal frame is supplied by the popup itself, so this returns
+// only the inner content. Same finding-row shape the older inline
+// panel used: severity dot + code + message + optional ABAP CDS hint.
+function _renderFioriReadinessBody(findings) {
+  const counts = { pass: 0, warn: 0, miss: 0 };
+  for (const f of findings) {
+    if (counts[f.severity] !== undefined) counts[f.severity]++;
+  }
   const order = ['profile', 'identity', 'listreport', 'filtering', 'fields', 'integrity', 'capabilities'];
   const byCategory = new Map(order.map(k => [k, []]));
   for (const f of findings) {
@@ -279,9 +340,6 @@ export function renderFioriReadinessPanel(info) {
         : f.severity === 'warn' ? 'text-ox-amber'
         : 'text-ox-red';
       let extra = '';
-      // ABAP CDS "fix hint" — surfaces the annotation to add at the
-      // source so the linter teaches, not just grades. Only present
-      // on actionable (warn/miss) findings; passes skip this line.
       if (f.suggested_cds || f.why_in_fiori) {
         const parts = [];
         if (f.suggested_cds) {
@@ -293,7 +351,7 @@ export function renderFioriReadinessPanel(info) {
         extra = safeHtml`<div class="mt-1 text-[10px] text-ox-muted leading-snug">${raw(parts.join(''))}</div>`;
       }
       return safeHtml`
-        <div class="px-3 py-1 border-t border-ox-border/40 flex items-start gap-2 text-[11px]">
+        <div class="px-4 py-1.5 border-t border-ox-border/40 flex items-start gap-2 text-[11px]">
           <span class="${color} mt-0.5">&#9679;</span>
           <div class="flex-1">
             <span class="text-ox-dim font-mono">${f.code}</span> — <span class="text-ox-text">${f.message}</span>
@@ -302,15 +360,15 @@ export function renderFioriReadinessPanel(info) {
         </div>`;
     }).join('');
     categoryBlocks.push(safeHtml`
-      <div class="px-3 py-1 bg-ox-surface/40 text-[9px] uppercase tracking-widest text-ox-muted border-t border-ox-border/40">${pretty[cat] || cat}</div>
+      <div class="px-4 py-1 bg-ox-surface/40 text-[9px] uppercase tracking-widest text-ox-muted border-t border-ox-border/40">${pretty[cat] || cat}</div>
       ${raw(rows)}`);
   }
   return safeHtml`
-    <div class="mt-4 border border-ox-border rounded-sm overflow-hidden">
-      <div class="px-3 py-1.5 bg-ox-panel text-[10px] uppercase tracking-widest text-ox-dim flex items-center gap-3">
-        <span class="font-medium">Fiori readiness</span>
-        <span class="text-[10px] normal-case tracking-normal">${raw(summary)}</span>
-      </div>
-      ${raw(categoryBlocks.join(''))}
-    </div>`;
+    <div class="px-4 py-2 border-b border-ox-border/40 text-[11px] font-mono flex items-center gap-3 bg-ox-surface/40">
+      <span class="uppercase tracking-widest text-ox-dim text-[10px]">Summary</span>
+      <span class="text-ox-green">&#9679; ${counts.pass} pass</span>
+      <span class="text-ox-amber">&#9679; ${counts.warn} warn</span>
+      <span class="text-ox-red">&#9679; ${counts.miss} miss</span>
+    </div>
+    ${raw(categoryBlocks.join(''))}`;
 }

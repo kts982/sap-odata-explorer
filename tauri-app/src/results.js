@@ -108,7 +108,13 @@ export function renderResults(data, elapsedMs, params) {
     orderedScalars = orderedScalars.filter(c => !foldedTextCols.has(c));
   }
 
-  const allCols = [...orderedScalars, ...nestedCols];
+  // Hide SAP V4 system columns from the grid (the full row is still
+  // captured in `state.expandedDataStore` so "copy row as JSON" preserves
+  // them). `SAP__Messages` and `__OperationControl` are the common
+  // offenders; the prefix rule covers the family.
+  const isSystemField = (name) => typeof name === 'string'
+    && (name.startsWith('SAP__') || name.startsWith('__'));
+  const allCols = [...orderedScalars, ...nestedCols].filter(c => !isSystemField(c));
 
   // Estimate JSON size for stats
   const jsonSize = new Blob([JSON.stringify(data)]).size;
@@ -200,7 +206,7 @@ export function renderResults(data, elapsedMs, params) {
 
     return safeHtml`
       <tr class="hover:bg-ox-amberGlow border-b border-ox-border/30 transition-colors ${stripe}" data-row-idx="${i}">
-        ${raw(cells)}${raw(copyCell)}
+        ${raw(copyCell)}${raw(cells)}
       </tr>`;
   }).join('');
 
@@ -209,8 +215,8 @@ export function renderResults(data, elapsedMs, params) {
       <table class="w-full text-xs font-mono border-collapse">
         <thead>
           <tr>
-            ${raw(headerCells)}
             <th class="text-left px-2 py-1.5 bg-ox-panel border-b border-ox-border sticky top-0 w-6"></th>
+            ${raw(headerCells)}
           </tr>
         </thead>
         <tbody>${raw(rowCells)}</tbody>
