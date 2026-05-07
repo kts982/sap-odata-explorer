@@ -1506,7 +1506,15 @@ async fn cmd_entities(client: &SapClient, service: &str, json: bool) -> Result<(
             Cell::new("Keys").fg(Color::DarkCyan),
         ]);
 
-        for (i, es) in meta.entity_sets.iter().enumerate() {
+        // Hide SAP V4 system entity sets from the table; --json (handled
+        // above) still prints them. Re-number with `enumerate` after the
+        // filter so the displayed index is 1..N over what's shown.
+        for (i, es) in meta
+            .entity_sets
+            .iter()
+            .filter(|es| !is_sap_system_field(&es.name))
+            .enumerate()
+        {
             let et = meta.entity_type_for_set(&es.name);
             let keys = et.map(|t| t.keys.join(", ")).unwrap_or_default();
             table.add_row(vec![
@@ -1556,7 +1564,14 @@ async fn cmd_describe(
         Cell::new("Label").fg(Color::DarkCyan),
     ]);
 
-    for p in &et.properties {
+    // Hide SAP V4 system fields (`SAP__Messages`, `__OperationControl`,
+    // ...) from the property table. --json output above keeps the full
+    // entity type intact so scripted consumers can still see them.
+    for p in et
+        .properties
+        .iter()
+        .filter(|p| !is_sap_system_field(&p.name))
+    {
         let is_key = if et.keys.contains(&p.name) { "*" } else { "" };
         prop_table.add_row(vec![
             Cell::new(&p.name),
@@ -1569,7 +1584,11 @@ async fn cmd_describe(
     }
     println!("{prop_table}");
 
-    let nav_targets = meta.nav_targets(et);
+    let nav_targets: Vec<_> = meta
+        .nav_targets(et)
+        .into_iter()
+        .filter(|(name, _, _)| !is_sap_system_field(name))
+        .collect();
     if !nav_targets.is_empty() {
         println!("\n  Navigation Properties:\n");
         let mut nav_table = Table::new();
@@ -1586,9 +1605,12 @@ async fn cmd_describe(
     }
 
     println!("\n  Example query:");
+    // Skip SAP V4 system fields when picking example $select columns —
+    // showing `SAP__Messages` in the example query would mislead the user.
     let select_fields: Vec<&str> = et
         .properties
         .iter()
+        .filter(|p| !is_sap_system_field(&p.name))
         .take(3)
         .map(|p| p.name.as_str())
         .collect();
@@ -1948,6 +1970,19 @@ fn severity_at_least(actual: LintSeverity, threshold: LintSeverity) -> bool {
 
 // ── Helpers ──
 
+/// Whether a metadata identifier (entity-set name, property name, response
+/// column) belongs to the SAP V4 framework's reserved-prefix family. The
+/// `SAP__` and `__` double-underscore prefixes are owned by the V4
+/// runtime — `SAP__Messages` (transient message container),
+/// `SAP__Currencies`, `SAP__UnitsOfMeasure`, `__OperationControl` — none
+/// of which are part of the developer's data model. Table output filters
+/// these out for a cleaner read; `--json` output is left untouched so
+/// scripted consumers still see the raw service truth. The same rule
+/// lives in the desktop frontend (services.js / describe.js / results.js).
+fn is_sap_system_field(name: &str) -> bool {
+    name.starts_with("SAP__") || name.starts_with("__")
+}
+
 fn extract_results(data: &serde_json::Value) -> Option<serde_json::Value> {
     if let Some(d) = data.get("d") {
         if let Some(results) = d.get("results") {
@@ -1975,7 +2010,7 @@ fn print_results_table(rows: &[serde_json::Value]) {
         .keys()
         .filter(|k| {
             !k.starts_with('@')
-                && *k != "__metadata"
+                && !is_sap_system_field(k)
                 && !matches!(
                     obj.get(*k),
                     Some(serde_json::Value::Object(_) | serde_json::Value::Array(_))
