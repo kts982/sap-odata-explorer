@@ -7,6 +7,8 @@
 [![Rust 1.85+](https://img.shields.io/badge/Rust-1.85+-orange.svg)](https://rustup.rs)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#)
 
+> **Want to see it first?** Take the [visual tour in the Showcase](./docs/SHOWCASE.md) — system setup, SAP View annotation overlay, F4 value-help picker, Fiori-readiness linter, and pre-flight validator. Screenshots before commitment.
+
 ![sap-odata-explorer — desktop app with SAP View overlay, F4 reference tooltip, and FilterRestrictions warning](docs/images/hero.png)
 
 A CLI tool and desktop app for exploring and testing SAP OData services against real customer systems. It supports **OData V2 and V4**, SAP Gateway catalog discovery, and three common authentication modes: basic auth, Windows SSO (Kerberos / SPNEGO), and browser-based SSO (Azure AD / SAP IAS / SAML flows).
