@@ -536,7 +536,18 @@ fn auth_error_detail(
     detail
 }
 
-fn response_hint(
+/// Map an HTTP response to a SAP-specific troubleshooting hint, or
+/// `None` when the status code doesn't warrant one.
+///
+/// Public so the desktop / Tauri layer can call it directly on its
+/// own error paths without round-tripping through this client's
+/// error type — both surfaces stay consistent that way.
+///
+/// The function is best-effort: it inspects the URL path for SAP
+/// SICF nodes, the response content-type for HTML interception, and
+/// the body for SAP `<innererror>` codes. None of that is required —
+/// missing inputs just narrow what can be suggested.
+pub fn response_hint(
     status: StatusCode,
     url: &str,
     content_type: Option<&str>,
@@ -556,9 +567,15 @@ fn response_hint(
                     .to_string(),
             );
         }
+        if path.contains("/sap/opu/odata4") {
+            return Some(
+                "V4 OData lookup failed. The service path may be wrong, the entity set may not exist on this service (`entities -s <svc>` lists valid sets), or the V4 catalog SICF node may be unpublished on this system — try pasting the full /sap/opu/odata4/<vendor>/<svc>/<version>/ path instead of the short name. Use `services` to list what's exposed."
+                    .to_string(),
+            );
+        }
         if path.contains("/sap/opu/odata") || path.contains("/$metadata") {
             return Some(
-                "The OData service path may be wrong, inactive, or not registered in /IWFND/MAINT_SERVICE."
+                "The OData service path may be wrong, inactive, or not registered in /IWFND/MAINT_SERVICE. If the service exists, the entity set name may not — use `entities -s <svc>` to list valid sets."
                     .to_string(),
             );
         }
@@ -567,7 +584,13 @@ fn response_hint(
     if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
         if matches!(auth, AuthConfig::Browser) && content_type.starts_with("text/html") {
             return Some(
-                "Browser SSO usually returned a login page instead of an OData response. Re-run sign-in from the desktop app and inspect the request log for redirects."
+                "Browser SSO usually returned a login page instead of an OData response. Run `signout <profile>` and re-sign-in from the desktop app, then inspect the request log for redirects."
+                    .to_string(),
+            );
+        }
+        if matches!(auth, AuthConfig::Browser) {
+            return Some(
+                "Browser SSO session likely expired. Run `signout <profile>` and re-sign-in from the desktop app."
                     .to_string(),
             );
         }
@@ -579,7 +602,7 @@ fn response_hint(
         }
         if matches!(auth, AuthConfig::Basic { .. }) {
             return Some(
-                "Basic authentication was accepted by the HTTP stack but SAP rejected the request. Check the user, password, and service authorization."
+                "Basic authentication was accepted by the HTTP stack but SAP rejected the request. Check the profile's user, password, and service authorization. SU53 on the backend reveals missing authorisation objects."
                     .to_string(),
             );
         }
@@ -587,6 +610,19 @@ fn response_hint(
             "Authentication succeeded at the transport layer but SAP denied access. Check the active session, assigned roles, and any front-door SSO policy."
                 .to_string(),
         );
+    }
+
+    // 4xx with a SAP error code in the body — point at SE91 for the
+    // message lookup. Only fires when there's a parseable code; the
+    // generic `server returned 4xx` message already carries the
+    // SAP-supplied message text via `extract_sap_error`.
+    if status.is_client_error()
+        && !status.is_success()
+        && let Some(code) = extract_sap_error_code(body)
+    {
+        return Some(format!(
+            "SAP error code {code}. Look the message up in SE91 (or your IDE's SAP message viewer) for the full text and where-used."
+        ));
     }
 
     if status.is_server_error() {
@@ -604,6 +640,46 @@ fn response_hint(
         }
     }
 
+    None
+}
+
+/// Try to extract a SAP message code (e.g. `SY/530`, `/IWBEP/CM_MGW_BUSI/107`)
+/// from an OData error envelope. Returns the first code found in either
+/// the top-level `error.code` or under `error.innererror`. Codes are
+/// strings like `<class>/<number>` — used to suggest SE91 lookups.
+fn extract_sap_error_code(body: &str) -> Option<String> {
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
+        // Top-level error.code or error.innererror.errordetails[].code.
+        let err = json.get("error")?;
+        if let Some(code) = err.get("code").and_then(|v| v.as_str())
+            && !code.is_empty()
+            && code != "/0"
+        {
+            return Some(code.to_string());
+        }
+        if let Some(details) = err
+            .get("innererror")
+            .and_then(|i| i.get("errordetails"))
+            .and_then(|d| d.as_array())
+            && let Some(first) = details.first()
+            && let Some(code) = first.get("code").and_then(|v| v.as_str())
+            && !code.is_empty()
+        {
+            return Some(code.to_string());
+        }
+    }
+    // XML form: <code>SY/530</code> inside <error>.
+    if let Ok(doc) = roxmltree::Document::parse(body) {
+        for node in doc.descendants() {
+            if node.has_tag_name("code")
+                && let Some(text) = node.text()
+                && !text.is_empty()
+                && text.contains('/')
+            {
+                return Some(text.to_string());
+            }
+        }
+    }
     None
 }
 
@@ -637,4 +713,112 @@ fn extract_host(url: &str) -> String {
     url::Url::parse(url)
         .map(|u| u.host_str().unwrap_or(url).to_string())
         .unwrap_or_else(|_| url.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn basic_auth() -> AuthConfig {
+        AuthConfig::Basic {
+            username: "u".into(),
+            password: "p".into(),
+        }
+    }
+
+    #[test]
+    fn hint_404_v4_mentions_unpublished_sicf_and_entity_listing() {
+        // Single combined V4 hint covers both service-level and
+        // entity-set-level 404s — the URL alone can't reliably
+        // distinguish them, so we surface every angle the user can
+        // act on.
+        let h = response_hint(
+            StatusCode::NOT_FOUND,
+            "https://example.com/sap/opu/odata4/sap/zsvc/srvd/sap/zsvc/0001/",
+            None,
+            "",
+            &basic_auth(),
+        )
+        .expect("expected a hint");
+        assert!(h.contains("V4"));
+        assert!(h.contains("SICF"));
+        assert!(h.contains("entities -s"));
+    }
+
+    #[test]
+    fn hint_404_v2_mentions_entity_set_listing() {
+        let h = response_hint(
+            StatusCode::NOT_FOUND,
+            "https://example.com/sap/opu/odata/sap/ZMY_SVC/SomeBogusSet",
+            None,
+            "",
+            &basic_auth(),
+        )
+        .expect("expected a hint");
+        assert!(
+            h.contains("entities -s"),
+            "expected entity-set listing pointer, got: {h}"
+        );
+    }
+
+    #[test]
+    fn hint_401_basic_mentions_su53() {
+        let h = response_hint(
+            StatusCode::UNAUTHORIZED,
+            "https://example.com/sap/opu/odata/sap/ZMY_SVC",
+            None,
+            "",
+            &basic_auth(),
+        )
+        .expect("expected a hint");
+        assert!(h.contains("SU53") || h.contains("authorization") || h.contains("authorisation"));
+    }
+
+    #[test]
+    fn hint_401_browser_sso_mentions_signout() {
+        let h = response_hint(
+            StatusCode::UNAUTHORIZED,
+            "https://example.com/sap/opu/odata/sap/ZMY_SVC",
+            None,
+            "",
+            &AuthConfig::Browser,
+        )
+        .expect("expected a hint");
+        assert!(
+            h.contains("signout"),
+            "expected browser-SSO signout pointer, got: {h}"
+        );
+    }
+
+    #[test]
+    fn hint_4xx_with_sap_code_points_at_se91() {
+        let body = r#"{"error":{"code":"SY/530","message":{"value":"Something went wrong"}}}"#;
+        let h = response_hint(
+            StatusCode::BAD_REQUEST,
+            "https://example.com/sap/opu/odata/sap/ZMY_SVC/X",
+            None,
+            body,
+            &basic_auth(),
+        )
+        .expect("expected a hint");
+        assert!(h.contains("SY/530"));
+        assert!(h.contains("SE91"));
+    }
+
+    #[test]
+    fn extract_sap_error_code_handles_innererror_details() {
+        let body = r#"{"error":{"code":"","innererror":{"errordetails":[{"code":"/IWBEP/CM_MGW/123","message":"x"}]}}}"#;
+        assert_eq!(
+            extract_sap_error_code(body).as_deref(),
+            Some("/IWBEP/CM_MGW/123")
+        );
+    }
+
+    #[test]
+    fn extract_sap_error_code_ignores_placeholder_zero() {
+        // Some SAP error envelopes carry `code: "/0"` when there's no
+        // meaningful code — skip it rather than suggesting `SE91 /0`.
+        let body = r#"{"error":{"code":"/0","message":{"value":"x"}}}"#;
+        assert_eq!(extract_sap_error_code(body), None);
+    }
 }
