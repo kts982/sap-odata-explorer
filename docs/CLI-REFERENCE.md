@@ -17,6 +17,7 @@ Full command reference for `sap-odata`. For a quick start, see the [main README]
   - [`build`](#build)
   - [`run`](#run)
   - [`metadata`](#metadata)
+  - [`verify`](#verify)
   - [`signout`](#signout)
 - [HTTP trace (`--verbose`)](#http-trace---verbose)
 - [Configuration file](#configuration-file)
@@ -387,6 +388,23 @@ sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 annotations --filter EWMWarehouse
 sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 annotations --json \
   | jq '[.[] | select(.namespace == "Capabilities")] | length'
 ```
+
+### `verify`
+
+Smoke-test every entity set in a service. Issues a small `$top` GET against each set and reports OK / FAIL with row counts. Intended as a CI- or agent-friendly health check after a backend change.
+
+| Flag | Purpose |
+|---|---|
+| `--quick` | Just list entity sets, skip the per-set probe |
+| `--top <n>` | `$top` to use on each probe (default `1`) |
+| `--json` | Emit results as a JSON array instead of a table |
+
+```bash
+sap-odata -p DEV -s API_BUSINESS_PARTNER verify
+sap-odata -p DEV -s API_BUSINESS_PARTNER verify --top 5 --json
+```
+
+Exit code is `0` when every probe succeeded, `1` if any probe failed. SAP V4 framework sets (`SAP__*`, `__*` prefixes) are skipped — they're runtime plumbing, not part of the data model under test.
 
 ### `signout`
 

@@ -236,6 +236,33 @@ enum Commands {
     /// Fetch and display the raw $metadata XML
     Metadata,
 
+    /// Smoke-test every entity set in a service. Issues a small
+    /// `$top` GET against each set and reports OK / FAIL with row
+    /// counts. Exit code is 0 when every probe succeeded, 1 otherwise
+    /// — intended as a CI- and agent-friendly health check.
+    #[command(long_about = "Smoke-test every entity set in a service.\n\
+        \n\
+        Issues a small `$top` GET against each set and reports OK / FAIL\n\
+        with row counts. SAP V4 framework sets (SAP__/__ prefixed) are\n\
+        skipped because they're runtime plumbing, not user data.\n\
+        \n\
+        Flags:\n  \
+            --quick                only list entity sets, no per-set GET\n  \
+            --top N                $top per probe (default 1)\n  \
+            --json                 emit results as a JSON array\n\
+        \n\
+        Exit code: 0 when every probe succeeded, 1 if any probe failed.")]
+    Verify {
+        /// Just list entity sets, skip the per-set probe.
+        #[arg(long)]
+        quick: bool,
+
+        /// $top to use on each probe. Smaller is faster; the default
+        /// of 1 is enough to confirm the set is reachable.
+        #[arg(long, default_value_t = 1)]
+        top: u32,
+    },
+
     /// Fiori-readiness checklist for an entity. Evaluates the
     /// service's annotations against what a Fiori list-report /
     /// object-page app would normally expect (HeaderInfo, LineItem,
@@ -564,6 +591,10 @@ async fn main() -> Result<()> {
             Commands::Metadata => {
                 let svc = require_service()?;
                 cmd_metadata(&sap_client, &svc).await
+            }
+            Commands::Verify { quick, top } => {
+                let svc = require_service()?;
+                cmd_verify(&sap_client, &svc, *quick, *top, cli.json).await
             }
             Commands::Annotations { namespace, filter } => {
                 let svc = require_service()?;
@@ -1789,6 +1820,180 @@ async fn cmd_run(
     }
 
     Ok(())
+}
+
+/// `verify` — issue a small `$top` GET against every entity set in
+/// the service and report OK / FAIL per set. Returns Err only on
+/// fatal errors (metadata fetch failed); per-set failures are
+/// reported in the table and surface via the exit code.
+async fn cmd_verify(
+    client: &SapClient,
+    service: &str,
+    quick: bool,
+    top: u32,
+    json: bool,
+) -> Result<()> {
+    let meta = client
+        .fetch_metadata(service)
+        .await
+        .context("failed to fetch metadata")?;
+    let version = meta.version;
+
+    // Skip SAP V4 framework sets (SAP__Messages, __OperationControl,
+    // ...). Same rule cmd_entities uses for its table view — they're
+    // runtime plumbing, not part of the data model under test.
+    let sets: Vec<&str> = meta
+        .entity_sets
+        .iter()
+        .map(|es| es.name.as_str())
+        .filter(|name| !is_sap_system_field(name))
+        .collect();
+
+    if sets.is_empty() {
+        if json {
+            println!("[]");
+        } else {
+            println!("No entity sets to verify in this service.");
+        }
+        return Ok(());
+    }
+
+    let mut results: Vec<VerifyResult> = Vec::with_capacity(sets.len());
+    for set in &sets {
+        if quick {
+            results.push(VerifyResult {
+                set: (*set).to_string(),
+                status: VerifyStatus::Ok,
+                rows: None,
+                note: Some("not probed (--quick)".to_string()),
+            });
+            continue;
+        }
+        let query = ODataQuery::new(set)
+            .top(top)
+            .format("json")
+            .version(version);
+        match client.query_json(service, &query).await {
+            Ok(data) => {
+                let rows = match extract_results(&data) {
+                    Some(serde_json::Value::Array(arr)) => Some(arr.len() as u32),
+                    Some(serde_json::Value::Object(_)) => Some(1),
+                    _ => None,
+                };
+                results.push(VerifyResult {
+                    set: (*set).to_string(),
+                    status: VerifyStatus::Ok,
+                    rows,
+                    note: None,
+                });
+            }
+            Err(e) => {
+                let note = truncate_for_table(&e.to_string(), 120);
+                results.push(VerifyResult {
+                    set: (*set).to_string(),
+                    status: VerifyStatus::Fail,
+                    rows: None,
+                    note: Some(note),
+                });
+            }
+        }
+    }
+
+    let any_fail = results
+        .iter()
+        .any(|r| matches!(r.status, VerifyStatus::Fail));
+
+    if json {
+        let payload: Vec<_> = results
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "set": r.set,
+                    "status": match r.status {
+                        VerifyStatus::Ok => "ok",
+                        VerifyStatus::Fail => "fail",
+                    },
+                    "rows": r.rows,
+                    "note": r.note,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+    } else {
+        let mut table = Table::new();
+        table.load_preset(UTF8_FULL);
+        table.set_header(vec![
+            Cell::new("Entity Set").fg(Color::DarkCyan),
+            Cell::new("Status").fg(Color::DarkCyan),
+            Cell::new("Rows").fg(Color::DarkCyan),
+            Cell::new("Note").fg(Color::DarkCyan),
+        ]);
+        for r in &results {
+            let status_cell = match r.status {
+                VerifyStatus::Ok => Cell::new("OK").fg(Color::Green),
+                VerifyStatus::Fail => Cell::new("FAIL").fg(Color::Red),
+            };
+            let rows_cell = match r.rows {
+                Some(n) => Cell::new(n),
+                None => Cell::new("-"),
+            };
+            table.add_row(vec![
+                Cell::new(&r.set),
+                status_cell,
+                rows_cell,
+                Cell::new(r.note.as_deref().unwrap_or("")),
+            ]);
+        }
+        println!("{table}");
+
+        let ok = results
+            .iter()
+            .filter(|r| matches!(r.status, VerifyStatus::Ok))
+            .count();
+        let fail = results.len() - ok;
+        eprintln!(
+            "\n  {} OK · {} FAIL ({} set{} probed)",
+            ok,
+            fail,
+            results.len(),
+            if results.len() == 1 { "" } else { "s" }
+        );
+    }
+
+    if any_fail {
+        // Table already shows every failure with its error excerpt; an
+        // anyhow `bail!` would dup that as `Error: ...` underneath.
+        // Exit directly with code 1 so CI/agents see the failure
+        // without the redundant line.
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// Per-set outcome captured during `cmd_verify`. Kept inside the
+/// fn module so the JSON/table renderers can share it; not exported.
+struct VerifyResult {
+    set: String,
+    status: VerifyStatus,
+    rows: Option<u32>,
+    note: Option<String>,
+}
+
+enum VerifyStatus {
+    Ok,
+    Fail,
+}
+
+/// Trim a multi-line error message down to the first line and cap
+/// at `max_len` chars so the verify table stays scannable.
+fn truncate_for_table(s: &str, max_len: usize) -> String {
+    let first_line = s.lines().next().unwrap_or(s);
+    if first_line.chars().count() <= max_len {
+        first_line.to_string()
+    } else {
+        let truncated: String = first_line.chars().take(max_len).collect();
+        format!("{truncated}…")
+    }
 }
 
 async fn cmd_metadata(client: &SapClient, service: &str) -> Result<()> {
