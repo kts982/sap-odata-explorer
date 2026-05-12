@@ -267,6 +267,7 @@ Build and print an OData URL without issuing the request. Useful for sanity-chec
 | `<entity_set>` | Entity set name (positional) |
 | `--select <cols>` | Comma-separated `$select` fields |
 | `--filter <expr>` | `$filter` expression |
+| `--in <prop> <v1> <v2> ...` | OR'd equality shortcut: builds `(prop eq 'v1' or prop eq 'v2' ...)`. Combines with `--filter` via AND. String values only; quoting and apostrophe-doubling applied automatically. |
 | `--expand <navs>` | Comma-separated `$expand` navigation properties |
 | `--orderby <cols>` | `$orderby` clause (e.g., `"CreationDate desc,BusinessPartner asc"`) |
 | `--top <n>` | `$top` |
@@ -284,6 +285,10 @@ sap-odata -p DEV -s API_BUSINESS_PARTNER build A_BusinessPartner \
 sap-odata -p DEV -s so build A_SalesOrder \
   --key "'0000000001'" \
   --expand "to_Item"
+
+# OR'd equality shortcut — no PowerShell-quoting pain
+sap-odata -p DEV -s so build A_SalesOrder \
+  --in SalesOrder 0000000001 0000000002 0000000003
 ```
 
 ### `run`
@@ -313,7 +318,7 @@ sap-odata -p DEV -s API_PURCHASEORDER_PROCESS_SRV run A_PurchaseOrder \
 
 ### `metadata`
 
-Dump the raw `$metadata` XML to stdout. Useful for grepping, diffing, or piping into an XML formatter.
+Dump the raw `$metadata` XML to stdout. The service-resolution banner goes to **stderr**, so redirecting stdout to a file captures clean XML — no need to strip a preamble.
 
 ```bash
 sap-odata -p DEV -s API_BUSINESS_PARTNER metadata > api_bp_metadata.xml

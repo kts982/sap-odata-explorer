@@ -114,6 +114,21 @@ enum Commands {
     Functions,
 
     /// Build and display an OData query URL (dry-run)
+    #[command(
+        long_about = "Build and display the OData query URL without sending it.\n\
+        \n\
+        Common flags (also accepted by `run`):\n  \
+            --select FIELDS        comma-separated $select list\n  \
+            --filter EXPR          raw OData $filter expression\n  \
+            --in PROP V1 V2 ...    OR'd equality shortcut: builds (PROP eq 'V1' or PROP eq 'V2' ...)\n  \
+            --expand NAVS          comma-separated $expand list\n  \
+            --orderby CLAUSES      comma-separated $orderby clauses (e.g. \"Name asc,Date desc\")\n  \
+            --top N                $top\n  \
+            --skip N               $skip\n  \
+            --key K                single-entity read: CustomerSet(K)\n  \
+            --count                request inline count\n  \
+            --json                 emit URL as a JSON string instead of plain text"
+    )]
     Build {
         /// Entity set name
         entity_set: String,
@@ -125,6 +140,14 @@ enum Commands {
         /// Filter expression
         #[arg(long)]
         filter: Option<String>,
+
+        /// OR'd equality shortcut. Usage: `--in PROP V1 V2 V3` builds
+        /// `(PROP eq 'V1' or PROP eq 'V2' or PROP eq 'V3')`. Combines with
+        /// `--filter` via AND. Saves PowerShell-escaping pain when filtering
+        /// against a small set of values. String values only; quoting is
+        /// applied automatically.
+        #[arg(long = "in", num_args = 2.., value_name = "PROP VALUES...")]
+        in_values: Vec<String>,
 
         /// Navigation properties to expand (comma-separated)
         #[arg(long)]
@@ -152,6 +175,21 @@ enum Commands {
     },
 
     /// Execute an OData query and display the results
+    #[command(long_about = "Execute the OData query and render the results.\n\
+        \n\
+        Common flags:\n  \
+            --select FIELDS        comma-separated $select list\n  \
+            --filter EXPR          raw OData $filter expression\n  \
+            --in PROP V1 V2 ...    OR'd equality shortcut: builds (PROP eq 'V1' or PROP eq 'V2' ...)\n  \
+            --expand NAVS          comma-separated $expand list\n  \
+            --orderby CLAUSES      comma-separated $orderby clauses\n  \
+            --top N                $top (default: server-side limit)\n  \
+            --skip N               $skip (pagination)\n  \
+            --key K                single-entity read\n  \
+            --count                request inline count\n  \
+            --json                 emit the raw response JSON instead of the table\n\
+        \n\
+        Use `build` instead to print the URL without sending the request.")]
     Run {
         /// Entity set name
         entity_set: String,
@@ -163,6 +201,12 @@ enum Commands {
         /// Filter expression
         #[arg(long)]
         filter: Option<String>,
+
+        /// OR'd equality shortcut. Usage: `--in PROP V1 V2 V3` builds
+        /// `(PROP eq 'V1' or PROP eq 'V2' or PROP eq 'V3')`. Combines with
+        /// `--filter` via AND.
+        #[arg(long = "in", num_args = 2.., value_name = "PROP VALUES...")]
+        in_values: Vec<String>,
 
         /// Navigation properties to expand (comma-separated)
         #[arg(long)]
@@ -459,6 +503,7 @@ async fn main() -> Result<()> {
                 entity_set,
                 select,
                 filter,
+                in_values,
                 expand,
                 orderby,
                 top,
@@ -467,10 +512,11 @@ async fn main() -> Result<()> {
                 count,
             } => {
                 let svc = require_service()?;
+                let combined = combine_filter_with_in(filter.clone(), in_values)?;
                 let query = build_query(
                     entity_set,
                     select.clone(),
-                    filter.clone(),
+                    combined,
                     expand.clone(),
                     orderby.clone(),
                     *top,
@@ -487,6 +533,7 @@ async fn main() -> Result<()> {
                 entity_set,
                 select,
                 filter,
+                in_values,
                 expand,
                 orderby,
                 top,
@@ -499,10 +546,11 @@ async fn main() -> Result<()> {
                     .fetch_metadata(&svc)
                     .await
                     .context("failed to fetch metadata")?;
+                let combined = combine_filter_with_in(filter.clone(), in_values)?;
                 let query = build_query(
                     entity_set,
                     select.clone(),
-                    filter.clone(),
+                    combined,
                     expand.clone(),
                     orderby.clone(),
                     *top,
@@ -740,18 +788,20 @@ async fn resolve_service_path(cli: &Cli, sap_client: &SapClient) -> Result<Optio
             let alias_lower = raw.to_lowercase();
             for (alias_name, alias_path) in &profile.aliases {
                 if alias_name.to_lowercase() == alias_lower {
-                    println!("  Resolved alias '{}' -> {}", raw, alias_path);
+                    eprintln!("  Resolved alias '{}' -> {}", raw, alias_path);
                     return Ok(Some(alias_path.clone()));
                 }
             }
         }
     }
 
-    // Try catalog resolution (searches V2 + V4 by technical name)
-    println!("  Resolving service '{}'...", raw);
+    // Try catalog resolution (searches V2 + V4 by technical name).
+    // Banner goes to stderr so `metadata > out.xml` and similar
+    // redirects capture only the data on stdout.
+    eprintln!("  Resolving service '{}'...", raw);
     match sap_odata_core::catalog::resolve_service_by_name(sap_client, &raw).await {
         Ok(path) => {
-            println!("  Resolved '{}' -> {}", raw, path);
+            eprintln!("  Resolved '{}' -> {}", raw, path);
             Ok(Some(path))
         }
         Err(e) => Err(anyhow::anyhow!(
@@ -1349,6 +1399,42 @@ fn cmd_profile_where() -> Result<()> {
 }
 
 // ── Query builder ──
+
+/// Combine the raw `--filter` expression with a `--in PROP V1 V2 ...`
+/// shortcut. Returns the merged $filter expression, or the original
+/// filter / None when `--in` is empty.
+///
+/// `--in` builds `(PROP eq 'V1' or PROP eq 'V2' or ...)` with each value
+/// quoted as an OData string literal (apostrophes doubled per spec —
+/// `O'Brien` → `'O''Brien'`). Combined with an explicit `--filter` by
+/// wrapping both in parens and joining with `and`, so operator
+/// precedence stays intact. String literals only — numeric/date typing
+/// would need property metadata.
+fn combine_filter_with_in(filter: Option<String>, in_values: &[String]) -> Result<Option<String>> {
+    if in_values.is_empty() {
+        return Ok(filter);
+    }
+    // clap's `num_args = 2..` already enforces this, but guard for
+    // defensive callers (and to keep the error specific).
+    if in_values.len() < 2 {
+        anyhow::bail!(
+            "--in needs a property name followed by one or more values (got {} arg(s))",
+            in_values.len()
+        );
+    }
+    let prop = &in_values[0];
+    let in_expr = in_values[1..]
+        .iter()
+        .map(|v| format!("{prop} eq '{}'", v.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(" or ");
+    let in_expr = format!("({in_expr})");
+
+    Ok(Some(match filter {
+        Some(f) => format!("({f}) and {in_expr}"),
+        None => in_expr,
+    }))
+}
 
 #[allow(clippy::too_many_arguments)]
 fn build_query(
