@@ -51,13 +51,19 @@ This project is aimed at a narrower problem: understand a real SAP OData service
 
 ## Installation
 
-### Download a prebuilt binary (easiest — Windows)
+### Download a prebuilt binary (Windows)
 
-1. Go to the [Releases page](https://github.com/kts982/sap-odata-explorer/releases) and pick the latest tag.
-2. Download the assets you want:
-   - **`sap-odata.exe`** — the CLI. Put it somewhere on your `PATH` (e.g. `C:\Users\<you>\bin\`) and run `sap-odata setup` to get started.
-   - **`SAP OData Explorer_<version>_x64_en-US.msi`** — the desktop app installer. Double-click to install; launch from the Start menu.
-3. Verify the download (optional) — each release has a `SHA256SUMS.txt`; on PowerShell, run `Get-FileHash sap-odata.exe -Algorithm SHA256` and compare.
+Go to the [Releases page](https://github.com/kts982/sap-odata-explorer/releases) and pick the latest tag. Each release attaches the following assets:
+
+| Asset | What it is | When to use |
+|---|---|---|
+| `SAP-OData-Explorer_<ver>_x64_en-US.msi` | Desktop app installer (MSI) | **Easiest path.** Double-click, install, launch from the Start menu. |
+| `SAP-OData-Explorer_<ver>_x64-setup.exe` | Desktop app installer (NSIS) | Alternative installer with different uninstall hooks. |
+| `SAP-OData-Explorer_<ver>_portable.exe` | Desktop app, **no install** | Locked-down environments (Citrix, no-admin laptop, customer VM). Copy and run — no installer, no admin required. |
+| `sap-odata.exe` | **CLI** tool, no install | Scripting, CI, or terminal use. Put on your `PATH` and run `sap-odata setup`. |
+| `SHA256SUMS.txt` | Checksums | Verify downloads with `Get-FileHash <file> -Algorithm SHA256` and compare. |
+
+The CLI and the desktop app share the same `connections.toml` and Windows Credential Manager entries — no need to duplicate profiles between them.
 
 > [!WARNING]
 > Binaries are **unsigned**. Windows SmartScreen will show an "unrecognized app" warning — click **More info → Run anyway**. Code signing is planned.
@@ -85,11 +91,22 @@ cargo tauri build
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, tests, and contribution guidelines.
 
+### Config location
+
+Profiles, aliases, and (optionally) plaintext-fallback passwords are stored in `connections.toml`. The CLI and the desktop app read the same file.
+
+| Mode | Path |
+|---|---|
+| Default | `%APPDATA%\sap-odata-explorer\config\connections.toml` on Windows · `~/.config/sap-odata-explorer/connections.toml` on Linux · `~/Library/Application Support/sap-odata-explorer/connections.toml` on macOS |
+| Portable | A `connections.toml` placed **next to the exe** takes precedence — useful when running from a USB stick or a copied folder on a locked-down machine. |
+
+Run `sap-odata profile where` to print the exact path in use. Basic-auth passwords are stored in the OS keyring by default — see [Security notes](#security-notes) below.
+
 ## Quick start
 
 ### Desktop app
 
-1. Launch `sap-odata-explorer-app.exe`
+1. Launch the app — from the Start menu if you installed it, or by running the portable exe directly
 2. Click `+` next to the profile dropdown to add a system
 3. Choose auth mode and save the profile
 4. For Browser SSO profiles, click **Sign In** once and complete the login flow

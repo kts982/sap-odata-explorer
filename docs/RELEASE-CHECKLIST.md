@@ -44,8 +44,19 @@ npm run css
 
 ## Artifacts
 
+Each release **must** attach exactly these five assets so the Installation table in the README stays accurate:
+
+| File on release | Source path in build tree | Notes |
+|---|---|---|
+| `SAP-OData-Explorer_<ver>_x64_en-US.msi` | `target/release/bundle/msi/` | GUI installer (MSI) — "easiest path" in the README |
+| `SAP-OData-Explorer_<ver>_x64-setup.exe` | `target/release/bundle/nsis/` | GUI installer (NSIS) |
+| `SAP-OData-Explorer_<ver>_portable.exe` | `target/release/sap-odata-explorer-app.exe` — **rename before upload** | GUI portable (no install); for Citrix / no-admin / customer-laptop scenarios |
+| `sap-odata.exe` | `target/release/sap-odata.exe` | CLI portable |
+| `SHA256SUMS.txt` | Generated locally over the four binaries above | Checksums |
+
 - Build artifacts from a clean tree.
+- The portable GUI exe ships under the canonical `_portable.exe` name — Tauri's default output is `sap-odata-explorer-app.exe` (from `tauri-app/src-tauri/Cargo.toml`'s `[package].name`); rename to `SAP-OData-Explorer_<ver>_portable.exe` before uploading so the release page is consistent with the two installers.
+- Regenerate `SHA256SUMS.txt` **after** the portable rename so the hashes line up with the published filenames.
 - Check packaged README/INSTALL docs for the same security and responsible-use language as the source README.
 - Label unsigned Windows artifacts clearly in release notes.
-- Publish checksums for attached binaries/archives.
 - Do not attach archives that contain `tmp/`, local configs, traces, credentials, or customer metadata.
