@@ -205,7 +205,7 @@ impl SapClient {
             let is_idp_redirect = crate::session::is_idp_redirect_location(location);
             if is_idp_redirect {
                 return Err(ODataError::AuthFailed(
-                    "browser sign-in required or session expired".to_string(),
+                    "browser sign-in required or session expired — run `signout <profile>` and re-sign-in from the desktop app".to_string(),
                 ));
             }
             // Otherwise it might be a normal SAP redirect — follow it
@@ -252,7 +252,8 @@ impl SapClient {
                 let _ = self.read_response_text(trace_id, resp).await;
                 return Err(ODataError::AuthFailed(
                     "browser sign-in incomplete; SAP or the IdP returned HTML instead of OData. \
-                     Re-run sign-in from the desktop app and check the HTTP inspector for redirects."
+                     The session likely expired — run `signout <profile>` and re-sign-in from the desktop app, \
+                     then inspect the HTTP trace for redirects."
                         .to_string(),
                 ));
             }
@@ -648,24 +649,36 @@ pub fn response_hint(
 /// the top-level `error.code` or under `error.innererror`. Codes are
 /// strings like `<class>/<number>` — used to suggest SE91 lookups.
 fn extract_sap_error_code(body: &str) -> Option<String> {
+    // Placeholder codes SAP emits when there's no meaningful diagnostic
+    // identifier — pointing users at "SE91 /0" would be worse than
+    // showing no hint at all, so treat them as misses.
+    fn is_useful_code(code: &str) -> bool {
+        !code.is_empty() && code != "/0" && code != "0"
+    }
+
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
-        // Top-level error.code or error.innererror.errordetails[].code.
         let err = json.get("error")?;
         if let Some(code) = err.get("code").and_then(|v| v.as_str())
-            && !code.is_empty()
-            && code != "/0"
+            && is_useful_code(code)
         {
             return Some(code.to_string());
         }
+        // SAP's `innererror.errordetails` is a list — the most actionable
+        // code isn't always at index 0 (the first entry can be the
+        // placeholder `/0` while a real `SY/530` sits further down).
+        // Walk the list and return the first useful code.
         if let Some(details) = err
             .get("innererror")
             .and_then(|i| i.get("errordetails"))
             .and_then(|d| d.as_array())
-            && let Some(first) = details.first()
-            && let Some(code) = first.get("code").and_then(|v| v.as_str())
-            && !code.is_empty()
         {
-            return Some(code.to_string());
+            for entry in details {
+                if let Some(code) = entry.get("code").and_then(|v| v.as_str())
+                    && is_useful_code(code)
+                {
+                    return Some(code.to_string());
+                }
+            }
         }
     }
     // XML form: <code>SY/530</code> inside <error>.
@@ -673,7 +686,7 @@ fn extract_sap_error_code(body: &str) -> Option<String> {
         for node in doc.descendants() {
             if node.has_tag_name("code")
                 && let Some(text) = node.text()
-                && !text.is_empty()
+                && is_useful_code(text)
                 && text.contains('/')
             {
                 return Some(text.to_string());
@@ -820,5 +833,17 @@ mod tests {
         // meaningful code — skip it rather than suggesting `SE91 /0`.
         let body = r#"{"error":{"code":"/0","message":{"value":"x"}}}"#;
         assert_eq!(extract_sap_error_code(body), None);
+    }
+
+    #[test]
+    fn extract_sap_error_code_walks_past_placeholder_in_errordetails() {
+        // SAP often returns a leading `/0` placeholder followed by the
+        // real code. `.first()` would return the placeholder; we need
+        // to walk the list.
+        let body = r#"{"error":{"code":"","innererror":{"errordetails":[
+            {"code":"/0","message":"warm-up"},
+            {"code":"SY/530","message":"the real one"}
+        ]}}}"#;
+        assert_eq!(extract_sap_error_code(body).as_deref(), Some("SY/530"));
     }
 }

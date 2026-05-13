@@ -553,7 +553,11 @@ async fn main() -> Result<()> {
                     None,
                 );
                 let full_url = format!("{}/{}", svc.trim_end_matches('/'), query.build());
-                println!("{full_url}");
+                if cli.json {
+                    println!("{}", serde_json::to_string(&full_url)?);
+                } else {
+                    println!("{full_url}");
+                }
                 Ok(())
             }
             Commands::Run {
@@ -1961,11 +1965,16 @@ async fn cmd_verify(
     }
 
     if any_fail {
-        // Table already shows every failure with its error excerpt; an
-        // anyhow `bail!` would dup that as `Error: ...` underneath.
-        // Exit directly with code 1 so CI/agents see the failure
-        // without the redundant line.
-        std::process::exit(1);
+        // Bail (rather than `process::exit`) so the caller's post-
+        // command paths still run — most importantly `emit_http_trace`
+        // under `--verbose`, which is exactly when failure diagnostics
+        // are useful. The terse message is one line under the table
+        // and doesn't compete with the per-row failure details.
+        let fail = results
+            .iter()
+            .filter(|r| matches!(r.status, VerifyStatus::Fail))
+            .count();
+        anyhow::bail!("{fail} entity set(s) failed verification");
     }
     Ok(())
 }
