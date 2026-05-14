@@ -40,6 +40,7 @@ export function createTab(opts = {}) {
     entitySet: opts.entitySet || null,
     entitySets: [],
     cachedServices: null,
+    catalogWarnings: null,
     lastSearchQuery: null,
     // query history (last 20, in-memory)
     queryHistory: [],

@@ -31,9 +31,11 @@ struct ProfileInfo {
     name: String,
     base_url: String,
     client: String,
+    language: String,
     username: String,
     password_source: String,
     auth_mode: String,
+    sso_delegate: bool,
     aliases: Vec<AliasInfo>,
 }
 
@@ -531,13 +533,23 @@ fn get_profiles() -> Result<Vec<ProfileInfo>, String> {
                 name: name.clone(),
                 base_url: profile.base_url.clone(),
                 client: profile.client.clone(),
+                language: profile.language.clone(),
                 username: profile.username.clone(),
                 password_source,
                 auth_mode: auth_mode_for_profile(profile).to_string(),
+                sso_delegate: profile.sso_delegate,
                 aliases,
             }
         })
         .collect())
+}
+
+#[derive(Serialize)]
+struct ServicesResponse {
+    services: Vec<ServiceInfo>,
+    // Per-version catalog failures (e.g., "V4 catalog: 403 Forbidden") — surfaced so
+    // the UI can render a context-specific hint (paste full path) when V4 is down.
+    warnings: Vec<String>,
 }
 
 #[tauri::command]
@@ -546,7 +558,7 @@ async fn get_services(
     profile_name: String,
     search: Option<String>,
     v4_only: bool,
-) -> CmdResult<Vec<ServiceInfo>> {
+) -> CmdResult<ServicesResponse> {
     let client = client_from_profile(&profile_name, &state).map_err(CommandError::msg)?;
     let result = catalog::fetch_service_catalog(&client)
         .await
@@ -562,7 +574,7 @@ async fn get_services(
         ));
     }
 
-    let data = result
+    let services = result
         .entries
         .iter()
         .filter(|e| {
@@ -583,7 +595,10 @@ async fn get_services(
         })
         .collect();
     Ok(CommandOk {
-        data,
+        data: ServicesResponse {
+            services,
+            warnings: result.warnings,
+        },
         trace: client.diagnostics_snapshot(),
     })
 }

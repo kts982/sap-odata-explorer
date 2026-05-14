@@ -93,6 +93,7 @@ import {
 import { clearQueryResultCache } from './resultCache.js';
 import {
   showAddProfileModal,
+  showEditProfileModal,
   updateAuthModeFields,
   hideAddProfileModal,
   saveProfileModal,
@@ -114,6 +115,7 @@ document.getElementById('profileSelect').addEventListener('change', (e) => {
   tab.entitySet = null;
   tab.entitySets = [];
   tab.cachedServices = null;
+  tab.catalogWarnings = null;
   tab.lastSearchQuery = null;
   tab._sidebarHtml = undefined;
   tab._sidebarTitle = 'Services';
@@ -261,6 +263,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── Static button wiring ──
   document.getElementById('btnAddProfile').addEventListener('click', showAddProfileModal);
+  document.getElementById('btnEditProfile').addEventListener('click', () => {
+    if (state.currentProfile) showEditProfileModal(state.currentProfile);
+  });
   document.getElementById('btnProfileSignIn').addEventListener('click', signInCurrentProfile);
   document.getElementById('btnProfileSignOut').addEventListener('click', signOutCurrentProfile);
   document.getElementById('btnRemoveProfile').addEventListener('click', removeCurrentProfile);

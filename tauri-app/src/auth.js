@@ -30,6 +30,7 @@ export function isBrowserAuthProfile(profileName = state.currentProfile) {
 export function updateProfileAuthUi(profileName = state.currentProfile) {
   const signInBtn  = document.getElementById('btnProfileSignIn');
   const signOutBtn = document.getElementById('btnProfileSignOut');
+  const editBtn    = document.getElementById('btnEditProfile');
   const removeBtn  = document.getElementById('btnRemoveProfile');
 
   // Sign In / Sign Out: only for browser SSO profiles
@@ -41,10 +42,12 @@ export function updateProfileAuthUi(profileName = state.currentProfile) {
     signOutBtn.classList.remove('hidden');
   }
 
-  // Remove button: shown whenever any profile is selected
+  // Edit + Remove: shown whenever any profile is selected
   if (!profileName) {
+    editBtn.classList.add('hidden');
     removeBtn.classList.add('hidden');
   } else {
+    editBtn.classList.remove('hidden');
     removeBtn.classList.remove('hidden');
   }
 }

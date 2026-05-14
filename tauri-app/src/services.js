@@ -16,7 +16,7 @@
 import { state } from './state.js';
 import { invoke } from './vendor/tauri-core.js';
 import { setStatus } from './status.js';
-import { safeHtml } from './html.js';
+import { safeHtml, raw } from './html.js';
 import {
   tabScope,
   timedInvoke,
@@ -85,12 +85,24 @@ export function isServicePath(s) {
   return typeof s === 'string' && s.startsWith('/sap/');
 }
 
+// Detects "V4 catalog: ..." entries in the warnings list (or matching substring
+// in error messages). The Rust side at crates/core/src/catalog.rs prefixes the
+// per-version warning with literally "V4 catalog:" — matching on that prefix
+// avoids over-triggering on unrelated mentions of "V4".
+export function hasV4CatalogFailure(warningsOrText) {
+  if (!warningsOrText) return false;
+  if (Array.isArray(warningsOrText)) {
+    return warningsOrText.some(w => typeof w === 'string' && w.includes('V4 catalog'));
+  }
+  return typeof warningsOrText === 'string' && warningsOrText.includes('V4 catalog');
+}
+
 export async function searchServices(query) {
   if (!state.currentProfile) return;
   const tab = getActiveTab();
 
   if (tab && tab.cachedServices && tab.lastSearchQuery === (query || '')) {
-    renderServiceList(filterServices(tab.cachedServices, query));
+    renderServiceList(filterServices(tab.cachedServices, query), true, tab.catalogWarnings);
     return;
   }
 
@@ -99,29 +111,78 @@ export async function searchServices(query) {
 
   try {
     if (!state.cachedServices) {
-      const services = await timedInvoke('get_services', {
+      const response = await timedInvoke('get_services', {
         profileName: state.currentProfile,
         search: null,
         v4Only: false,
       });
       if (!scope.active()) return;
+      // get_services now returns { services, warnings }. Old single-array
+      // callers became this two-field shape so the V4 catalog warning (403
+      // when /IWFND/CONFIG V4 SICF node is inactive — a common customer
+      // config) can be surfaced as a paste-full-path hint.
+      const services = response?.services ?? [];
+      const warnings = response?.warnings ?? [];
       state.cachedServices = services;
-      if (tab) tab.cachedServices = services;
+      if (tab) {
+        tab.cachedServices = services;
+        tab.catalogWarnings = warnings;
+      }
     }
 
     state.lastSearchQuery = query || '';
     if (tab) tab.lastSearchQuery = state.lastSearchQuery;
 
     const filtered = filterServices(state.cachedServices, query);
-    renderServiceList(filtered);
+    renderServiceList(filtered, true, tab ? tab.catalogWarnings : null);
     setStatus(`${filtered.length} service(s)${query ? ` matching '${query}'` : ''}`);
   } catch (e) {
     if (!scope.active()) return;
     setStatus('Error: ' + e);
     const message = isBrowserAuthProfile(state.currentProfile) ? browserAuthMessage(e) : String(e);
-    document.getElementById('resultsArea').innerHTML =
-      safeHtml`<div class="p-4 text-ox-red text-sm">${message}</div>`;
+    const errArea = document.getElementById('resultsArea');
+    if (hasV4CatalogFailure(String(e))) {
+      // Both catalogs failed — Rust concatenated the warnings into the error
+      // message. Render the same paste-full-path hint as the success path so
+      // the user has an actionable next step instead of a red wall.
+      errArea.innerHTML = safeHtml`
+        <div class="p-4 space-y-3">
+          <div class="text-ox-red text-sm">${message}</div>
+          ${raw(v4HintHtml())}
+        </div>`;
+    } else {
+      errArea.innerHTML =
+        safeHtml`<div class="p-4 text-ox-red text-sm">${message}</div>`;
+    }
   }
+}
+
+// Sidebar / results-area hint shown when the V4 ServiceGroups catalog is
+// unreachable. /IWFND/CONFIG V4 SICF node is often inactive on customer
+// systems even when V4 OData services themselves are reachable — pasting the
+// full /sap/opu/odata4/... path bypasses the catalog entirely (see
+// isServicePath + resolveAndLoadService).
+function v4HintHtml() {
+  return safeHtml`
+    <div class="border border-ox-amber/40 bg-ox-amber/5 rounded-md p-3 text-[11px] leading-relaxed">
+      <div class="text-ox-amber font-medium mb-1">V4 catalog unavailable</div>
+      <div class="text-ox-dim">
+        403 is typical when the <span class="font-mono text-ox-text">/IWFND/CONFIG</span> V4 node isn't active.
+        V4 services themselves may still be reachable — paste the full path in the search box, e.g.
+      </div>
+      <div class="mt-1.5 font-mono text-[10px] text-ox-text break-all">
+        /sap/opu/odata4/sap/&lt;group&gt;/srvd_a2x/sap/&lt;service&gt;/0001
+      </div>
+    </div>`;
+}
+
+// Sidebar-footer flavour of the same hint. Tighter padding so it sits cleanly
+// below the (possibly long) service list.
+function renderV4HintFooter(list) {
+  const wrap = document.createElement('div');
+  wrap.className = 'px-3 py-3 border-t border-ox-border/40';
+  wrap.innerHTML = v4HintHtml();
+  list.appendChild(wrap);
 }
 
 export function filterServices(services, query) {
@@ -180,9 +241,10 @@ export function renderFavoritesOnlySidebar(profile) {
   }
 }
 
-export function renderServiceList(services, saveState = true) {
+export function renderServiceList(services, saveState = true, warnings = null) {
   const tab = getActiveTab();
   const profile = tab ? tab.profile : state.currentProfile;
+  const showV4Hint = hasV4CatalogFailure(warnings ?? (tab ? tab.catalogWarnings : null));
 
   if (saveState) {
     state.currentServicePath = null;
@@ -197,7 +259,16 @@ export function renderServiceList(services, saveState = true) {
   list.innerHTML = '';
 
   if (services.length === 0) {
-    list.innerHTML = '<div class="px-4 py-8 text-center"><div class="text-ox-dim text-xs">No services found</div></div>';
+    const empty = document.createElement('div');
+    empty.className = 'px-4 py-8 text-center';
+    empty.innerHTML = '<div class="text-ox-dim text-xs">No services found</div>';
+    list.appendChild(empty);
+    if (showV4Hint) renderV4HintFooter(list);
+    if (tab) {
+      tab._sidebarTitle = 'Services';
+      tab._sidebarCount = '0';
+      tab._sidebarHtml = list.innerHTML;
+    }
     return;
   }
 
@@ -227,6 +298,8 @@ export function renderServiceList(services, saveState = true) {
     list.appendChild(hdr2);
   }
   for (const svc of rest) list.appendChild(makeSvcItem(svc, false));
+
+  if (showV4Hint) renderV4HintFooter(list);
 
   if (saveState) {
     document.getElementById('queryBar').classList.add('hidden');
