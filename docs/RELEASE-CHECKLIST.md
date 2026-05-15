@@ -65,3 +65,4 @@ Each release **must** attach exactly these five assets so the Installation table
 - Check packaged README/INSTALL docs for the same security and responsible-use language as the source README.
 - Label unsigned Windows artifacts clearly in release notes.
 - Do not attach archives that contain `tmp/`, local configs, traces, credentials, or customer metadata.
+- Submit the four binaries to VirusTotal before publishing. Unsigned Windows binaries normally pick up 1-3 single-vendor ML/reputation hits; the rule to ship on is **Microsoft Defender clean across all artifacts**. Include per-asset SHA256 + VT URLs in a `## Verification` section of the release notes so users can re-check independently — especially helpful for the locked-down-environment audience downloading the portable exe.
