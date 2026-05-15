@@ -107,10 +107,10 @@ Run `sap-odata profile where` to print the exact path in use. Basic-auth passwor
 ### Desktop app
 
 1. Launch the app — from the Start menu if you installed it, or by running the portable exe directly
-2. Click `+` next to the profile dropdown to add a system
+2. Click `+` next to the profile dropdown to add a system. Use `✎` to edit an existing profile (URL, password, auth mode) or `−` to remove it. Profile name and basic-auth username are locked on edit — both feed the keyring entry key, so changing them = delete + re-add.
 3. Choose auth mode and save the profile
 4. For Browser SSO profiles, click **Sign In** once and complete the login flow
-5. Click **Search** to browse services and pick one
+5. Click **Search** to browse services and pick one. If your system has the V4 catalog SICF node inactive (`/IWFND/CONFIG` V4 node off — a common customer config), the sidebar shows a hint to paste the full `/sap/opu/odata4/...` path directly into the search box.
 6. Click an entity set in the sidebar → click property names to add them to `$select`, navigation properties to `$expand` → **Run**
 7. Toggle **SAP View** in the status bar to overlay SAP/UI5 annotation hints (entity titles, description pairings, criticality colors, filter restrictions, selection-field chips). Toggle **Inspector** to see the full HTTP trace for the last call.
 

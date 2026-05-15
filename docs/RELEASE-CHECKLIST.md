@@ -54,9 +54,14 @@ Each release **must** attach exactly these five assets so the Installation table
 | `sap-odata.exe` | `target/release/sap-odata.exe` | CLI portable |
 | `SHA256SUMS.txt` | Generated locally over the four binaries above | Checksums |
 
-- Build artifacts from a clean tree.
-- The portable GUI exe ships under the canonical `_portable.exe` name — Tauri's default output is `sap-odata-explorer-app.exe` (from `tauri-app/src-tauri/Cargo.toml`'s `[package].name`); rename to `SAP-OData-Explorer_<ver>_portable.exe` before uploading so the release page is consistent with the two installers.
-- Regenerate `SHA256SUMS.txt` **after** the portable rename so the hashes line up with the published filenames.
+- Build artifacts from a clean tree:
+  ```
+  cargo build --release -p sap-odata-cli
+  cd tauri-app && cargo tauri build && cd ..
+  node scripts/stage-release-assets.mjs --tag v<release-tag>
+  ```
+- `scripts/stage-release-assets.mjs` handles the portable rename and SHA256SUMS regeneration in one shot — it copies the four expected binaries (MSI, NSIS, portable GUI, CLI) into `dist/v<tag>/` with the canonical filenames the README's Installation table references, then writes `SHA256SUMS.txt` over them. The portable rename is load-bearing: Tauri's default output is `sap-odata-explorer-app.exe` (from `tauri-app/src-tauri/Cargo.toml`'s `[package].name`), but the release page expects `SAP-OData-Explorer_<ver>_portable.exe` so the asset table stays accurate.
+- Confirm the resulting `dist/v<tag>/` has exactly the five files in the table above before uploading.
 - Check packaged README/INSTALL docs for the same security and responsible-use language as the source README.
 - Label unsigned Windows artifacts clearly in release notes.
 - Do not attach archives that contain `tmp/`, local configs, traces, credentials, or customer metadata.

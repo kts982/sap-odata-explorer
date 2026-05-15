@@ -4,6 +4,46 @@ All notable changes to this project are documented here. Format loosely follows 
 
 ## [Unreleased]
 
+CLI ergonomics polish, a dedicated service-health subcommand, a centralised error-hint layer used by both surfaces, and two desktop UX additions — profile edit-in-place and a V4-catalog-miss workaround hint.
+
+### New
+
+- **Profile edit (desktop)**: pencil button next to the profile dropdown opens the existing add-profile modal in edit mode. URL, password, auth mode, language, and the Kerberos-delegation toggle are editable; profile name and basic-auth username are intentionally locked (both feed the OS keyring entry key, so changing them requires delete + re-add). Blank password keeps the existing keyring entry.
+- **V4 catalog-miss UX hint (desktop)**: when the V4 ServiceGroups catalog returns 403/404 (common on customer systems where the `/IWFND/CONFIG` V4 SICF node isn't active), the sidebar shows an amber footer pointing to the paste-full-path workaround (`/sap/opu/odata4/...`). Pasted paths already bypass the catalog via the existing `isServicePath` shortcut; the hint is purely educational.
+- **`verify` subcommand (CLI)**: `sap-odata verify <service>` issues a small `$top` GET against each entity set in a service and prints an OK/FAIL table with row counts. Exit code reflects whether any probe failed — designed as a CI- and agent-friendly health check after a backend change. Flags: `--quick` (list only), `--top N`, `--json`. SAP V4 framework sets (`SAP__*`, `__*` prefixes) are skipped.
+- **`--in PROP V1 V2 ...` filter shortcut (CLI)** on `run` / `build`: expands to `(PROP eq 'V1' or PROP eq 'V2' or ...)`. Combines with `--filter` via AND-wrapped parens, preserving operator precedence. Apostrophes inside values are doubled per the OData spec (`O'Brien` → `'O''Brien'`) before URL-encoding. Saves PowerShell-escaping pain when filtering against a small enumerated set.
+- **Centralised `response_hint`** covering common SAP failure shapes — used by both CLI and desktop surfaces so error text stays consistent. New cases: 404 on a V4 path names the three actionable causes (wrong service path / wrong entity set / unpublished V4 SICF node); 404 on V2 appends "use `entities -s <svc>` to list valid sets"; 401/403 on Browser SSO points to `signout`; 401/403 on basic mentions SU53 for missing authorisations; 4xx responses with a parseable SAP error code in the OData envelope suggest an SE91 lookup (placeholder `/0` codes filtered out).
+- **Service-resolution banner now goes to stderr** instead of stdout, so `sap-odata -s SVC metadata > out.xml` captures clean XML without the "Resolving..." preamble. Mirrored in `CLI-REFERENCE.md`.
+
+### Fixes
+
+- `verify --verbose` no longer drops the HTTP trace on FAIL — `cmd_verify` was using `std::process::exit(1)` which bypassed the post-command trace emitter; switched to `anyhow::bail!` so the trace fires before the error propagates (precisely when it's most useful).
+- `build --json` was documented to emit a JSON string but always printed plain text. Now honors `--json`.
+- `extract_sap_error_code` walks past placeholder `/0` entries at both the top level and nested `errordetails`. SAP sometimes emits a leading `/0` warm-up entry followed by the real code (e.g. `SY/530`); the previous `.first()` returned the placeholder and produced unhelpful suggestions.
+- Browser-SSO HTML-fallback (the common expired-session shape on SAP/IdP gateways) didn't route through `response_hint`, so the `signout <profile>` pointer never fired for that path. Hardcoded messages now mention `signout` whether the failure surfaces as 401/403 or HTML interception.
+
+### Docs
+
+- **README Installation table** enumerates the five release assets (MSI / NSIS / portable GUI / CLI / SHA256SUMS) with one-line "when to use" guidance per file, including the locked-down-environment framing for the portable GUI exe.
+- **`docs/RELEASE-CHECKLIST.md`** documents the five-asset contract and references `scripts/stage-release-assets.mjs` for the portable rename + checksum regeneration.
+- **README "Config location" section** under "Build from source" makes the `connections.toml` paths discoverable independently of the desktop quick-start, since the CLI and desktop app share the same file.
+- **README Quick-start** mentions the `✎` (edit) / `−` (remove) buttons and the V4 paste-full-path workaround.
+
+### Dev tooling
+
+- `tauri-app/src-tauri/tauri.conf.json`: `beforeDevCommand` changed from `npm run css` to `npm run dev` so `cargo tauri dev` boots the static server on `:1420` itself instead of hanging on "Waiting for your frontend dev server...".
+- `scripts/stage-release-assets.mjs`: copies build artifacts into `dist/v<tag>/` under the canonical filenames the README references, handles the `sap-odata-explorer-app.exe` → `SAP-OData-Explorer_<ver>_portable.exe` rename, and writes `SHA256SUMS.txt` over the final names in one shot.
+
+### Tests
+
+- `client::tests` covering each new `response_hint` branch (V4 404, V2 404 hint append, basic 401/403 SU53 mention, Browser SSO signout pointer, SAP-error-code SE91 suggestion).
+- Regression test for `extract_sap_error_code` walking past placeholder `/0` entries.
+
+### Internals
+
+- `get_services` Tauri command now returns `{ services, warnings }` instead of a bare service list, so per-version catalog warnings (e.g. "V4 catalog: 403 Forbidden") surface to the renderer instead of being dropped.
+- `ProfileInfo` gains `language` + `sso_delegate` so the edit modal can prefill without silently regressing those fields on save.
+
 ## [0.1.0-alpha.2] — 2026-05-07
 
 Second public alpha. Adds the Fiori-readiness footer popup + the SAP V4 system-field filter, wraps the post-alpha.1 security/correctness hardening (CSP `style-src` tightening, XSS attribute-context coverage, structured keyring errors, entity-key encoding), and ships local fonts that actually decode. Interfaces may still change.
