@@ -8,6 +8,9 @@ use sap_odata_core::{
     diagnostics::HttpTraceEntry,
     lint::{self, LintSeverity},
     metadata::ODataVersion,
+    offline::{
+        self, ImportOptions, SaveOptions, SaveOutcome, auto_offline_profile_name, current_iso8601,
+    },
     query::ODataQuery,
 };
 
@@ -309,6 +312,75 @@ enum Commands {
         #[arg(long)]
         filter: Option<String>,
     },
+
+    /// Manage the offline EDMX library (save / list / import services
+    /// for offline browsing).
+    Offline {
+        #[command(subcommand)]
+        action: OfflineAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum OfflineAction {
+    /// Save the current connection's `$metadata` for a service into the
+    /// offline library. Requires `-p PROFILE -s SERVICE`. The bytes are
+    /// written under `{config}/offline/`, attributed to the connected
+    /// profile; subsequent re-saves overwrite the file in place under
+    /// the same stable `service_id`.
+    Save {
+        /// Override the offline-profile bucket name. Defaults to
+        /// `<connected> (offline)`. If the chosen name doesn't yet
+        /// exist as an offline profile, it's created; the name must
+        /// not collide with an existing connected profile.
+        #[arg(long)]
+        offline_profile: Option<String>,
+
+        /// Override the auto-derived display label. The label-derivation
+        /// rule for V4 SAP services produces e.g. `UI_PHYSSTOCKPROD_1`
+        /// from the schema namespace; pass `--label` to override.
+        #[arg(long)]
+        label: Option<String>,
+
+        /// Optional free-form note to attach to the saved entry.
+        #[arg(long)]
+        note: Option<String>,
+    },
+
+    /// Import an EDMX file from disk into the offline library. No
+    /// connected profile needed — the file is read, validated, and
+    /// indexed. Suitable for files pulled from API Hub, exported via
+    /// `/IWFND/GW_CLIENT` "Save Response", or downloaded with
+    /// `curl <base>/$metadata > out.xml`.
+    Import {
+        /// Path to the EDMX file on disk. Must be a regular file,
+        /// UTF-8 encoded, ≤ 10 MB.
+        file: std::path::PathBuf,
+
+        /// Target offline-profile bucket. Defaults to `Imported` —
+        /// the catch-all where mixed-source captures coexist.
+        #[arg(long)]
+        offline_profile: Option<String>,
+
+        /// Override the auto-derived display label. Auto-derivation
+        /// reads the file's `Schema Namespace`; for unknown shapes
+        /// the filename stem is used as a fallback.
+        #[arg(long)]
+        label: Option<String>,
+
+        /// Optional free-form note to attach to the imported entry.
+        #[arg(long)]
+        note: Option<String>,
+    },
+
+    /// List all services in an offline-profile bucket. With no
+    /// `--profile` argument, lists all offline profiles instead.
+    List {
+        /// Offline-profile bucket name to list services from. Omit
+        /// to list the buckets themselves.
+        #[arg(long)]
+        profile: Option<String>,
+    },
 }
 
 /// Lint profile override flag values. Mirrors `lint::LintProfile`
@@ -471,6 +543,34 @@ async fn main() -> Result<()> {
     if let Commands::Signout { name } = &cli.command {
         return cmd_signout(name);
     }
+    // `offline import` reads a local file and doesn't talk to SAP —
+    // skip the connection-resolution step that follows so the user
+    // can import without any profile / URL / credentials configured.
+    if let Commands::Offline {
+        action:
+            OfflineAction::Import {
+                file,
+                offline_profile,
+                label,
+                note,
+            },
+    } = &cli.command
+    {
+        return cmd_offline_import(
+            file.clone(),
+            offline_profile.clone(),
+            label.clone(),
+            note.clone(),
+            cli.json,
+        );
+    }
+    // `offline list` reads only the local TOML index — no network.
+    if let Commands::Offline {
+        action: OfflineAction::List { profile },
+    } = &cli.command
+    {
+        return cmd_offline_list(profile.clone(), cli.json);
+    }
 
     // Resolve connection: profile → env vars → CLI flags
     let connection = resolve_connection(&cli)?;
@@ -629,6 +729,38 @@ async fn main() -> Result<()> {
                 )
                 .await
             }
+            Commands::Offline { action } => match action {
+                OfflineAction::Save {
+                    offline_profile,
+                    label,
+                    note,
+                } => {
+                    let svc = require_service()?;
+                    let connected_profile = cli.profile.clone().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "`offline save` requires `-p PROFILE` so the captured bytes can be attributed to a connected system"
+                        )
+                    })?;
+                    cmd_offline_save(
+                        &sap_client,
+                        &connected_profile,
+                        &svc,
+                        offline_profile.clone(),
+                        label.clone(),
+                        note.clone(),
+                        cli.json,
+                    )
+                    .await
+                }
+                OfflineAction::Import { .. } | OfflineAction::List { .. } => {
+                    // Both handled in the early-exit block above. If
+                    // we reach here, the early-exit was skipped —
+                    // that's a logic bug, not user error.
+                    unreachable!(
+                        "offline import/list should have early-exited before connection resolution"
+                    );
+                }
+            },
         }
     }
     .await;
@@ -962,6 +1094,18 @@ async fn cmd_setup_wizard() -> Result<()> {
         .interact_text()?;
     let name = name.trim().to_string();
 
+    // Global name-uniqueness check (step-7 hardening). Run BEFORE any
+    // keyring writes / further prompts so we don't leave an orphan
+    // credential entry under a name we're about to reject. Same shared
+    // helper as `cmd_profile_add` and Tauri `add_profile`.
+    {
+        let (cfg_for_check, _) =
+            config::load_config().context("failed to load config for name check")?;
+        if let Err(msg) = offline::check_connected_profile_name_available(&name, &cfg_for_check) {
+            anyhow::bail!("{msg}");
+        }
+    }
+
     // Base URL
     let url: String = Input::with_theme(&theme)
         .with_prompt("SAP base URL (e.g. https://sap.example.com or https://host:44300)")
@@ -1251,6 +1395,13 @@ fn cmd_profile_add(
     portable: bool,
 ) -> Result<()> {
     let (mut cfg, config_dir) = config::load_config().context("failed to load config")?;
+
+    // Global name-uniqueness check (step 7's connected-side enforcement).
+    // Shared core helper so this path and `cmd_setup_wizard` and the
+    // Tauri `add_profile` all enforce identical semantics.
+    if let Err(msg) = offline::check_connected_profile_name_available(name, &cfg) {
+        anyhow::bail!("{msg}");
+    }
 
     let existing_aliases = cfg
         .connections
@@ -2252,6 +2403,225 @@ async fn cmd_lint(
     if fail_on_tripped {
         anyhow::bail!("lint findings at or above --fail-on threshold are present");
     }
+    Ok(())
+}
+
+/// Capture the bytes of a connected service's `$metadata` into the
+/// offline library. Mirrors the Tauri command but is a separate
+/// implementation because the CLI flow operates without `AppState`:
+/// load config from disk → call the core save function → write back.
+/// The core function does the atomic EDMX + TOML write internally.
+async fn cmd_offline_save(
+    client: &SapClient,
+    connected_profile_name: &str,
+    service_path: &str,
+    offline_profile_name: Option<String>,
+    label_override: Option<String>,
+    note: Option<String>,
+    json: bool,
+) -> Result<()> {
+    let (mut cfg, config_dir) = config::load_config().context("loading config")?;
+    let base_url = cfg
+        .connections
+        .get(connected_profile_name)
+        .map(|p| p.base_url.clone())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Profile '{}' not found in connections.toml",
+                connected_profile_name
+            )
+        })?;
+    let svc_trimmed = service_path.trim_start_matches('/').trim_end_matches('/');
+    let source_url = format!(
+        "{}/{}/$metadata",
+        base_url.trim_end_matches('/'),
+        svc_trimmed
+    );
+
+    let opts = SaveOptions {
+        offline_profile_name: offline_profile_name
+            .or_else(|| Some(auto_offline_profile_name(connected_profile_name))),
+        source_profile_for_new_bucket: Some(connected_profile_name.to_string()),
+        label_override,
+        note,
+        now_iso: current_iso8601(),
+    };
+
+    let outcome = offline::save_service_offline(
+        client,
+        service_path,
+        source_url,
+        &mut cfg,
+        &config_dir.path,
+        opts,
+    )
+    .await
+    .context("save_service_offline")?;
+
+    if json {
+        let s = serde_json::to_string_pretty(&outcome)?;
+        println!("{s}");
+        return Ok(());
+    }
+
+    render_offline_save_outcome(&outcome);
+    Ok(())
+}
+
+fn render_offline_save_outcome(outcome: &SaveOutcome) {
+    use offline::SaveKind;
+    let header = match outcome.kind {
+        SaveKind::NewService => "Saved offline (new entry)",
+        SaveKind::OverwriteUpdatedBytes => "Saved offline (updated existing entry)",
+        SaveKind::SkippedByteIdentical => "Skipped — bytes identical to the existing entry",
+    };
+    println!("{header}");
+    println!("  profile:        {}", outcome.offline_profile_name);
+    println!("  service id:     {}", outcome.service_id);
+    println!("  edmx file:      {}", outcome.edmx_file);
+    println!("  odata version:  {:?}", outcome.odata_version);
+    println!("  sha256:         {}", outcome.sha256);
+    println!("  size:           {} bytes", outcome.size_bytes);
+    if outcome.created_new_offline_profile {
+        println!("  (created new offline profile bucket)");
+    }
+}
+
+/// Path B: import an EDMX file from disk. No SapClient — the file
+/// path is read directly and run through the import-validation
+/// pipeline. Reuses the same atomic-write / lockfile primitives as
+/// `cmd_offline_save`.
+fn cmd_offline_import(
+    file: std::path::PathBuf,
+    target_offline_profile: Option<String>,
+    label_override: Option<String>,
+    note: Option<String>,
+    json: bool,
+) -> Result<()> {
+    let (mut cfg, config_dir) = config::load_config().context("loading config")?;
+    let opts = ImportOptions {
+        file_path: file,
+        target_offline_profile,
+        label_override,
+        note,
+        now_iso: current_iso8601(),
+    };
+    let outcome =
+        offline::import_edmx_file(&mut cfg, &config_dir.path, opts).context("import_edmx_file")?;
+    if json {
+        let s = serde_json::to_string_pretty(&outcome)?;
+        println!("{s}");
+        return Ok(());
+    }
+    render_offline_save_outcome(&outcome);
+    Ok(())
+}
+
+/// List offline profiles (when `profile` is None) or services within
+/// an offline profile. Reads only the local TOML index — no network.
+fn cmd_offline_list(profile: Option<String>, json: bool) -> Result<()> {
+    let (cfg, _) = config::load_config().context("loading config")?;
+    match profile {
+        None => render_offline_profiles(&cfg, json),
+        Some(name) => render_offline_services(&cfg, &name, json),
+    }
+}
+
+fn render_offline_profiles(cfg: &config::ConfigFile, json: bool) -> Result<()> {
+    if json {
+        let entries: Vec<_> = cfg
+            .offline_profiles
+            .iter()
+            .map(|(name, p)| {
+                serde_json::json!({
+                    "name": name,
+                    "source_profile": p.source_profile,
+                    "created_at": p.created_at,
+                    "service_count": cfg
+                        .offline_services
+                        .iter()
+                        .filter(|s| &s.profile == name)
+                        .count(),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&entries)?);
+        return Ok(());
+    }
+    if cfg.offline_profiles.is_empty() {
+        println!(
+            "No offline profiles. Use `sap-odata offline save` (from a connected profile) or `sap-odata offline import <file>` to create one."
+        );
+        return Ok(());
+    }
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL)
+        .set_header(vec!["Profile", "Source", "Services", "Created"]);
+    for (name, p) in &cfg.offline_profiles {
+        let count = cfg
+            .offline_services
+            .iter()
+            .filter(|s| &s.profile == name)
+            .count();
+        let source = if p.source_profile.is_empty() {
+            "—"
+        } else {
+            &p.source_profile
+        };
+        table.add_row(vec![
+            Cell::new(name),
+            Cell::new(source),
+            Cell::new(count.to_string()),
+            Cell::new(&p.created_at),
+        ]);
+    }
+    println!("{table}");
+    Ok(())
+}
+
+fn render_offline_services(cfg: &config::ConfigFile, profile: &str, json: bool) -> Result<()> {
+    if !cfg.offline_profiles.contains_key(profile) {
+        anyhow::bail!(
+            "Offline profile '{profile}' not found. Run `sap-odata offline list` to see available profiles."
+        );
+    }
+    let services: Vec<_> = cfg
+        .offline_services
+        .iter()
+        .filter(|s| s.profile == profile)
+        .collect();
+    if json {
+        println!("{}", serde_json::to_string_pretty(&services)?);
+        return Ok(());
+    }
+    if services.is_empty() {
+        println!("Offline profile '{profile}' has no services yet.");
+        return Ok(());
+    }
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL).set_header(vec![
+        "Service ID",
+        "Label",
+        "Version",
+        "Size",
+        "Source",
+    ]);
+    for s in services {
+        let source = s
+            .source_service_path
+            .clone()
+            .or_else(|| s.original_filename.clone())
+            .unwrap_or_else(|| "—".to_string());
+        table.add_row(vec![
+            Cell::new(&s.id),
+            Cell::new(&s.label),
+            Cell::new(&s.odata_version),
+            Cell::new(format!("{} B", s.size_bytes)),
+            Cell::new(truncate_for_table(&source, 60)),
+        ]);
+    }
+    println!("{table}");
     Ok(())
 }
 

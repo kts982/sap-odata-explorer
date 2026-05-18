@@ -6,6 +6,7 @@ pub mod diagnostics;
 pub mod error;
 pub mod lint;
 pub mod metadata;
+pub mod offline;
 pub mod query;
 pub mod session;
 pub mod sspi;

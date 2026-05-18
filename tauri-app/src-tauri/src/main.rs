@@ -11,6 +11,9 @@ use sap_odata_core::{
         self, AnnotationSummary, Criticality, FieldControl, HeaderInfo, LineItemField,
         RawAnnotation, SelectionVariant, SortOrder, TextArrangement, ValueList,
     },
+    offline::{
+        self, ImportOptions, SaveOptions, SaveOutcome, auto_offline_profile_name, current_iso8601,
+    },
     query::ODataQuery,
 };
 use serde::{Deserialize, Serialize};
@@ -29,6 +32,12 @@ use tauri::{
 #[derive(Serialize)]
 struct ProfileInfo {
     name: String,
+    /// `"connected"` (live SAP profile) or `"offline"` (offline-mode
+    /// EDMX bucket). The frontend's profile picker uses this to render
+    /// the `OFFLINE` badge and to disable execute buttons when the
+    /// active profile is offline. Backward-compatible: existing JS
+    /// that doesn't read `kind` still sees normal profile entries.
+    kind: String,
     base_url: String,
     client: String,
     language: String,
@@ -37,6 +46,15 @@ struct ProfileInfo {
     auth_mode: String,
     sso_delegate: bool,
     aliases: Vec<AliasInfo>,
+    /// Offline-profile attribution: which connected SAP system the
+    /// bucket was originally captured from. `None` for connected
+    /// profiles and for the catch-all `Imported` bucket.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_profile: Option<String>,
+    /// UTC ISO-8601 timestamp when the offline bucket was created.
+    /// `None` for connected profiles.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created_at: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -310,6 +328,57 @@ fn client_from_profile(profile_name: &str, state: &AppState) -> Result<SapClient
     Ok(client)
 }
 
+/// Dispatch a `(profile_name, service_identifier)` pair to the right
+/// metadata source — live HTTP for connected profiles, on-disk EDMX
+/// read for offline profiles — and return parsed `ServiceMetadata`
+/// plus a captured HTTP trace.
+///
+/// The trace is always returned (empty `Vec` for the offline branch)
+/// so callers can keep wrapping the response in `CommandOk { data,
+/// trace }` without conditional logic. Offline reads have no HTTP
+/// exchanges to report; the inspector panel sees an empty trace and
+/// can render a "no live activity — offline source" placeholder.
+///
+/// Profile-name globally unique across `connections` and
+/// `offline_profiles` (enforced at add-time) means the dispatch is
+/// unambiguous. If neither map contains the name, returns a typed
+/// "profile not found" error.
+async fn fetch_service_metadata(
+    profile_name: &str,
+    service_identifier: &str,
+    state: &AppState,
+) -> Result<(metadata::ServiceMetadata, Vec<HttpTraceEntry>), CommandError> {
+    let (cfg, config_dir) =
+        config::load_config().map_err(|e| CommandError::msg(format!("Config error: {e}")))?;
+    let source =
+        sap_odata_core::offline::MetadataSource::resolve(profile_name, service_identifier, &cfg)
+            .map_err(|e| CommandError::msg(e.to_string()))?;
+
+    match source {
+        sap_odata_core::offline::MetadataSource::Connected { .. } => {
+            let client = client_from_profile(profile_name, state).map_err(CommandError::msg)?;
+            let meta = client
+                .fetch_metadata(service_identifier)
+                .await
+                .map_err(|e| CommandError::with_client(&client, format!("Metadata error: {e}")))?;
+            let trace = client.diagnostics_snapshot();
+            Ok((meta, trace))
+        }
+        sap_odata_core::offline::MetadataSource::Offline { service_id, .. } => {
+            let xml = sap_odata_core::offline::read_offline_metadata(
+                &cfg,
+                &config_dir.path,
+                profile_name,
+                &service_id,
+            )
+            .map_err(|e| CommandError::msg(format!("Offline read error: {e}")))?;
+            let meta = metadata::parse_metadata(&xml)
+                .map_err(|e| CommandError::msg(format!("Offline metadata parse error: {e}")))?;
+            Ok((meta, Vec::new()))
+        }
+    }
+}
+
 fn resolve_service_for_profile(profile_name: &str, service: &str) -> Result<String, String> {
     // Only treat as a literal service path when it's rooted at `/sap/`. SAP
     // catalog technical names in a customer namespace (e.g.
@@ -497,51 +566,79 @@ async fn browser_sign_in_for_connection(
 fn get_profiles() -> Result<Vec<ProfileInfo>, String> {
     let (cfg, _) = config::load_config().map_err(|e| format!("Config error: {e}"))?;
 
-    Ok(cfg
-        .connections
-        .iter()
-        .map(|(name, profile)| {
-            let password_source = if profile.browser_sso {
-                "browser".to_string()
-            } else if profile.sso {
-                "none".to_string()
-            } else if profile.password.is_some() {
-                "config".to_string()
-            } else {
-                match config::try_get_password_from_keyring(name, &profile.username) {
-                    Ok(Some(_)) => "keyring".to_string(),
-                    Ok(None) => "none".to_string(),
-                    // Distinct states so the frontend (now or later) can
-                    // tell users to unlock the credential store rather than
-                    // re-add the profile.
-                    Err(config::KeyringReadError::Locked(_)) => "keyring_locked".to_string(),
-                    Err(config::KeyringReadError::Corrupt(_)) => "keyring_corrupt".to_string(),
-                    Err(config::KeyringReadError::Backend(_)) => "keyring_error".to_string(),
-                }
-            };
-
-            let aliases = profile
-                .aliases
-                .iter()
-                .map(|(n, p)| AliasInfo {
-                    name: n.clone(),
-                    path: p.clone(),
-                })
-                .collect();
-
-            ProfileInfo {
-                name: name.clone(),
-                base_url: profile.base_url.clone(),
-                client: profile.client.clone(),
-                language: profile.language.clone(),
-                username: profile.username.clone(),
-                password_source,
-                auth_mode: auth_mode_for_profile(profile).to_string(),
-                sso_delegate: profile.sso_delegate,
-                aliases,
+    let connected = cfg.connections.iter().map(|(name, profile)| {
+        let password_source = if profile.browser_sso {
+            "browser".to_string()
+        } else if profile.sso {
+            "none".to_string()
+        } else if profile.password.is_some() {
+            "config".to_string()
+        } else {
+            match config::try_get_password_from_keyring(name, &profile.username) {
+                Ok(Some(_)) => "keyring".to_string(),
+                Ok(None) => "none".to_string(),
+                // Distinct states so the frontend (now or later) can
+                // tell users to unlock the credential store rather than
+                // re-add the profile.
+                Err(config::KeyringReadError::Locked(_)) => "keyring_locked".to_string(),
+                Err(config::KeyringReadError::Corrupt(_)) => "keyring_corrupt".to_string(),
+                Err(config::KeyringReadError::Backend(_)) => "keyring_error".to_string(),
             }
-        })
-        .collect())
+        };
+
+        let aliases = profile
+            .aliases
+            .iter()
+            .map(|(n, p)| AliasInfo {
+                name: n.clone(),
+                path: p.clone(),
+            })
+            .collect();
+
+        ProfileInfo {
+            name: name.clone(),
+            kind: "connected".to_string(),
+            base_url: profile.base_url.clone(),
+            client: profile.client.clone(),
+            language: profile.language.clone(),
+            username: profile.username.clone(),
+            password_source,
+            auth_mode: auth_mode_for_profile(profile).to_string(),
+            sso_delegate: profile.sso_delegate,
+            aliases,
+            source_profile: None,
+            created_at: None,
+        }
+    });
+
+    // Offline profiles share the picker with connected ones. The fields
+    // that don't apply (base_url, client, language, ...) are populated
+    // with empty strings so the JSON shape stays stable for the
+    // frontend — `kind = "offline"` is the discriminator that tells the
+    // UI to render the badge and disable execute affordances.
+    let offline = cfg
+        .offline_profiles
+        .iter()
+        .map(|(name, bucket)| ProfileInfo {
+            name: name.clone(),
+            kind: "offline".to_string(),
+            base_url: String::new(),
+            client: String::new(),
+            language: String::new(),
+            username: String::new(),
+            password_source: "none".to_string(),
+            auth_mode: "offline".to_string(),
+            sso_delegate: false,
+            aliases: Vec::new(),
+            source_profile: if bucket.source_profile.is_empty() {
+                None
+            } else {
+                Some(bucket.source_profile.clone())
+            },
+            created_at: Some(bucket.created_at.clone()),
+        });
+
+    Ok(connected.chain(offline).collect())
 }
 
 #[derive(Serialize)]
@@ -559,6 +656,76 @@ async fn get_services(
     search: Option<String>,
     v4_only: bool,
 ) -> CmdResult<ServicesResponse> {
+    // Dispatch on profile kind. Offline profiles serve a fixed
+    // services list from the TOML index rather than hitting the
+    // gateway catalog; same response shape so the frontend's
+    // services-rendering code path is unchanged.
+    let (cfg, _) =
+        config::load_config().map_err(|e| CommandError::msg(format!("Config error: {e}")))?;
+
+    // **Fail-closed on name collisions** before branching. If the name
+    // is in both `connections` and `offline_profiles`, the previous
+    // "prefer offline" precedence here masked the corrupt state — the
+    // picker would render cached services, but the very next call
+    // (`get_entities`, `describe_entity`, etc.) would fail with
+    // `MetadataSource::NameCollision` and the user would see a
+    // confusing two-step error. Surface the collision at the same
+    // chokepoint as the dispatcher so the picker is the place where
+    // the user is told to fix `connections.toml`.
+    if cfg.connections.contains_key(&profile_name)
+        && cfg.offline_profiles.contains_key(&profile_name)
+    {
+        return Err(CommandError::msg(format!(
+            "Profile name '{profile_name}' is present in BOTH connections and offline_profiles — dispatch is ambiguous. Rename or remove one of them in connections.toml."
+        )));
+    }
+
+    if cfg.offline_profiles.contains_key(&profile_name) {
+        let services = cfg
+            .offline_services
+            .iter()
+            .filter(|s| s.profile == profile_name)
+            .filter(|s| {
+                if v4_only && s.odata_version != "V4" {
+                    return false;
+                }
+                if let Some(ref needle) = search {
+                    let needle_lc = needle.to_lowercase();
+                    let hay = format!(
+                        "{} {} {}",
+                        s.label,
+                        s.source_service_path.as_deref().unwrap_or(""),
+                        s.original_filename.as_deref().unwrap_or(""),
+                    )
+                    .to_lowercase();
+                    if !hay.contains(&needle_lc) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .map(|s| ServiceInfo {
+                // technical_name = the stable id, which is what the
+                // frontend round-trips back to commands like
+                // get_entities / describe_entity. `MetadataSource::resolve`
+                // accepts id directly (and also accepts
+                // source_service_path as a fallback for path-A rows).
+                technical_name: s.id.clone(),
+                title: s.label.clone(),
+                description: s.note.clone(),
+                service_url: s.source_service_path.clone().unwrap_or_default(),
+                version: s.odata_version.clone(),
+            })
+            .collect();
+        return Ok(CommandOk {
+            data: ServicesResponse {
+                services,
+                warnings: Vec::new(),
+            },
+            trace: Vec::new(),
+        });
+    }
+
     let client = client_from_profile(&profile_name, &state).map_err(CommandError::msg)?;
     let result = catalog::fetch_service_catalog(&client)
         .await
@@ -616,6 +783,58 @@ async fn resolve_service(
             trace: Vec::new(),
         });
     }
+
+    // **Offline-profile branch.** For an offline source, "resolving" a
+    // service identifier means looking it up in the indexed
+    // `offline_services` rows and returning the canonical `service_id`
+    // — never building a `SapClient` or hitting the gateway catalog.
+    // The frontend passes either an `id` or a `source_service_path`
+    // for path-A rows; `MetadataSource::resolve` handles both forms
+    // and always returns the canonical id. Name collisions surface
+    // here as a hard error (same wording as the dispatcher) so the
+    // user fixes `connections.toml` before any read happens.
+    let (cfg, _) =
+        config::load_config().map_err(|e| CommandError::msg(format!("Config error: {e}")))?;
+    if cfg.offline_profiles.contains_key(&profile_name)
+        || cfg.connections.contains_key(&profile_name)
+    {
+        // Run dispatcher unconditionally for both kinds — it's the
+        // single chokepoint for the collision check too. Only the
+        // offline branch returns here; connected falls through to the
+        // existing live-catalog resolution below.
+        match sap_odata_core::offline::MetadataSource::resolve(&profile_name, &service, &cfg) {
+            Ok(sap_odata_core::offline::MetadataSource::Offline { service_id, .. }) => {
+                return Ok(CommandOk {
+                    data: service_id,
+                    trace: Vec::new(),
+                });
+            }
+            Ok(sap_odata_core::offline::MetadataSource::Connected { .. }) => {
+                // Fall through to the live-catalog resolution.
+            }
+            Err(sap_odata_core::offline::MetadataSourceError::OfflineServiceNotFound {
+                ..
+            }) => {
+                // Offline profile but the identifier doesn't match
+                // any indexed row. Surface the error directly — the
+                // user picked a stale/wrong identifier.
+                return Err(CommandError::msg(format!(
+                    "Service '{service}' is not present in offline profile '{profile_name}'."
+                )));
+            }
+            Err(sap_odata_core::offline::MetadataSourceError::NameCollision(_)) => {
+                return Err(CommandError::msg(format!(
+                    "Profile name '{profile_name}' is present in BOTH connections and offline_profiles — dispatch is ambiguous. Rename or remove one of them in connections.toml."
+                )));
+            }
+            Err(sap_odata_core::offline::MetadataSourceError::ProfileNotFound(_)) => {
+                // Shouldn't happen — we just checked containment.
+                // Fall through to the live-catalog path which will
+                // return its own profile-not-found error.
+            }
+        }
+    }
+
     let client = client_from_profile(&profile_name, &state).map_err(CommandError::msg)?;
     match catalog::resolve_service_by_name(&client, &service).await {
         Ok(path) => Ok(CommandOk {
@@ -638,14 +857,10 @@ async fn get_annotations(
     profile_name: String,
     service_path: String,
 ) -> CmdResult<Vec<RawAnnotation>> {
-    let client = client_from_profile(&profile_name, &state).map_err(CommandError::msg)?;
-    let meta = client
-        .fetch_metadata(&service_path)
-        .await
-        .map_err(|e| CommandError::with_client(&client, format!("Metadata error: {e}")))?;
+    let (meta, trace) = fetch_service_metadata(&profile_name, &service_path, &state).await?;
     Ok(CommandOk {
         data: meta.annotations,
-        trace: client.diagnostics_snapshot(),
+        trace,
     })
 }
 
@@ -655,11 +870,7 @@ async fn get_entities(
     profile_name: String,
     service_path: String,
 ) -> CmdResult<EntityListResponse> {
-    let client = client_from_profile(&profile_name, &state).map_err(CommandError::msg)?;
-    let meta = client
-        .fetch_metadata(&service_path)
-        .await
-        .map_err(|e| CommandError::with_client(&client, format!("Metadata error: {e}")))?;
+    let (meta, trace) = fetch_service_metadata(&profile_name, &service_path, &state).await?;
 
     let entity_sets = meta
         .entity_sets
@@ -682,7 +893,7 @@ async fn get_entities(
             entity_sets,
             annotation_summary,
         },
-        trace: client.diagnostics_snapshot(),
+        trace,
     })
 }
 
@@ -693,15 +904,14 @@ async fn describe_entity(
     service_path: String,
     entity_set: String,
 ) -> CmdResult<EntityTypeInfo> {
-    let client = client_from_profile(&profile_name, &state).map_err(CommandError::msg)?;
-    let meta = client
-        .fetch_metadata(&service_path)
-        .await
-        .map_err(|e| CommandError::with_client(&client, format!("Metadata error: {e}")))?;
+    let (meta, trace) = fetch_service_metadata(&profile_name, &service_path, &state).await?;
 
-    let et = meta.entity_type_for_set(&entity_set).ok_or_else(|| {
-        CommandError::with_client(&client, format!("Entity set '{}' not found", entity_set))
-    })?;
+    let et = meta
+        .entity_type_for_set(&entity_set)
+        .ok_or_else(|| CommandError {
+            message: format!("Entity set '{}' not found", entity_set),
+            trace: trace.clone(),
+        })?;
 
     let nav_targets = meta.nav_targets(et);
 
@@ -764,10 +974,7 @@ async fn describe_entity(
             })
             .collect(),
     };
-    Ok(CommandOk {
-        data,
-        trace: client.diagnostics_snapshot(),
-    })
+    Ok(CommandOk { data, trace })
 }
 
 #[tauri::command]
@@ -777,6 +984,18 @@ async fn run_query(
     service_path: String,
     params: QueryParams,
 ) -> CmdResult<serde_json::Value> {
+    // Query execution always requires the network. Reject early with a
+    // friendly message rather than letting the offline-source caller
+    // hit `client_from_profile` and get a profile-not-found error.
+    let (cfg, _) =
+        config::load_config().map_err(|e| CommandError::msg(format!("Config error: {e}")))?;
+    let source =
+        sap_odata_core::offline::MetadataSource::resolve(&profile_name, &service_path, &cfg)
+            .map_err(|e| CommandError::msg(e.to_string()))?;
+    source
+        .assert_network_allowed()
+        .map_err(|e| CommandError::msg(e.to_string()))?;
+
     let client = client_from_profile(&profile_name, &state).map_err(CommandError::msg)?;
 
     let meta = client
@@ -856,6 +1075,16 @@ fn add_profile(
     #[allow(non_snake_case)] allow_sso_delegate: Option<bool>,
 ) -> Result<String, String> {
     let (mut cfg, _) = config::load_config().map_err(|e| format!("Config error: {e}"))?;
+
+    // **Global name uniqueness across connections + offline_profiles.**
+    // Shared check via `offline::check_connected_profile_name_available`
+    // so all three connected-add paths (this one, the CLI
+    // `cmd_profile_add`, and the CLI `cmd_setup_wizard`) go through one
+    // source of truth. The reverse direction is enforced inline by
+    // `save_service_offline_from_bytes` / `import_edmx_file`. Upsert
+    // (re-saving an existing connected profile with new settings) is
+    // permitted; only cross-map collisions are rejected.
+    sap_odata_core::offline::check_connected_profile_name_available(&name, &cfg)?;
 
     let existing_aliases = cfg
         .connections
@@ -937,6 +1166,150 @@ fn add_profile(
         Some(w) => format!("{base}. Warning: {w}"),
         None => base,
     })
+}
+
+/// Path A: capture the bytes of a connected service's `$metadata` to the
+/// offline library. Resolves the connected profile, builds a client,
+/// fetches metadata, validates it, atomically writes the bytes + TOML
+/// index. Returns the `SaveOutcome` describing what landed.
+#[tauri::command]
+async fn save_service_offline(
+    state: tauri::State<'_, AppState>,
+    connected_profile_name: String,
+    service_path: String,
+    offline_profile_name: Option<String>,
+    label_override: Option<String>,
+    note: Option<String>,
+) -> CmdResult<SaveOutcome> {
+    let client = client_from_profile(&connected_profile_name, &state).map_err(CommandError::msg)?;
+    let (mut cfg, config_dir) =
+        config::load_config().map_err(|e| CommandError::msg(format!("Config error: {e}")))?;
+
+    // Source URL for attribution: connected profile's base + service +
+    // `/$metadata`. `strip_userinfo` runs inside the core fn at save
+    // time so credentials never land in the offline index even if the
+    // user pasted them into the connection form.
+    let base_url = cfg
+        .connections
+        .get(&connected_profile_name)
+        .map(|p| p.base_url.clone())
+        .ok_or_else(|| {
+            CommandError::msg(format!("Profile '{connected_profile_name}' not found"))
+        })?;
+    let svc = service_path.trim_start_matches('/').trim_end_matches('/');
+    let source_url = format!("{}/{}/$metadata", base_url.trim_end_matches('/'), svc);
+
+    let opts = SaveOptions {
+        offline_profile_name: offline_profile_name
+            .or_else(|| Some(auto_offline_profile_name(&connected_profile_name))),
+        source_profile_for_new_bucket: Some(connected_profile_name.clone()),
+        label_override,
+        note,
+        now_iso: current_iso8601(),
+    };
+
+    let outcome = offline::save_service_offline(
+        &client,
+        &service_path,
+        source_url,
+        &mut cfg,
+        &config_dir.path,
+        opts,
+    )
+    .await
+    .map_err(|e| CommandError::with_client(&client, format!("Save error: {e}")))?;
+
+    Ok(CommandOk {
+        data: outcome,
+        trace: client.diagnostics_snapshot(),
+    })
+}
+
+/// Path B: import an EDMX file from disk into the offline library. No
+/// connected profile required. The file path comes from the user (UI
+/// file picker); the import-validation pipeline rejects wrong-shape
+/// inputs before any state changes. Returns the `SaveOutcome` so the
+/// UI can render the new-vs-overwrite-vs-skipped header.
+#[tauri::command]
+fn import_edmx_file(
+    file_path: String,
+    target_offline_profile: Option<String>,
+    label_override: Option<String>,
+    note: Option<String>,
+) -> Result<SaveOutcome, String> {
+    let (mut cfg, config_dir) = config::load_config().map_err(|e| format!("Config error: {e}"))?;
+    let opts = ImportOptions {
+        file_path: std::path::PathBuf::from(&file_path),
+        target_offline_profile,
+        label_override,
+        note,
+        now_iso: current_iso8601(),
+    };
+    offline::import_edmx_file(&mut cfg, &config_dir.path, opts)
+        .map_err(|e| format!("Import error: {e}"))
+}
+
+/// Shape returned by `list_offline_services`. Carries more attribution
+/// detail than the generic `ServiceInfo` because the offline UI needs
+/// to render the source profile, timestamps, original filename, etc.
+/// `get_services` returns the leaner `ServiceInfo` so the existing
+/// services-list rendering stays compatible.
+#[derive(Serialize)]
+struct OfflineServiceListEntry {
+    id: String,
+    profile: String,
+    label: String,
+    label_at_creation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_service_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    original_filename: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fetched_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    imported_at: Option<String>,
+    sha256: String,
+    size_bytes: u64,
+    odata_version: String,
+    note: String,
+}
+
+/// List all services in an offline profile bucket. Distinct from
+/// `get_services` (which dispatches on profile kind and returns the
+/// generic `ServiceInfo`) — this command returns the full
+/// attribution shape the offline-library UI needs for rendering the
+/// per-service detail panel.
+#[tauri::command]
+fn list_offline_services(profile_name: String) -> Result<Vec<OfflineServiceListEntry>, String> {
+    let (cfg, _) = config::load_config().map_err(|e| format!("Config error: {e}"))?;
+    if !cfg.offline_profiles.contains_key(&profile_name) {
+        return Err(format!(
+            "Offline profile '{profile_name}' not found. Use `list_offline_profiles` (or `get_profiles`, filtering by `kind = \"offline\"`) to see what's available."
+        ));
+    }
+    let entries = cfg
+        .offline_services
+        .iter()
+        .filter(|s| s.profile == profile_name)
+        .map(|s| OfflineServiceListEntry {
+            id: s.id.clone(),
+            profile: s.profile.clone(),
+            label: s.label.clone(),
+            label_at_creation: s.label_at_creation.clone(),
+            source_service_path: s.source_service_path.clone(),
+            source_url: s.source_url.clone(),
+            original_filename: s.original_filename.clone(),
+            fetched_at: s.fetched_at.clone(),
+            imported_at: s.imported_at.clone(),
+            sha256: s.sha256.clone(),
+            size_bytes: s.size_bytes,
+            odata_version: s.odata_version.clone(),
+            note: s.note.clone(),
+        })
+        .collect();
+    Ok(entries)
 }
 
 #[tauri::command]
@@ -1230,6 +1603,25 @@ async fn resolve_value_list_reference(
     reference_url: String,
     local_property: String,
 ) -> CmdResult<ResolvedValueList> {
+    // **Fail-closed for offline sources.** The reviewer's HIGH finding
+    // from earlier review passes: this command silently builds a live
+    // `SapClient` for any profile name it's given, which would defeat
+    // the entire offline-mode guarantee. Resolve the source first and
+    // assert network is allowed before doing anything else. For v0.2
+    // we return a "value-help not available offline" error; future
+    // versions can grow cross-EDMX F4 resolution against another
+    // cached service in the same offline profile.
+    let (cfg, _) =
+        config::load_config().map_err(|e| CommandError::msg(format!("Config error: {e}")))?;
+    let source =
+        sap_odata_core::offline::MetadataSource::resolve(&profile_name, &service_path, &cfg)
+            .map_err(|e| CommandError::msg(e.to_string()))?;
+    if source.assert_network_allowed().is_err() {
+        return Err(CommandError::msg(format!(
+            "Value-help (F4) is not available offline for profile '{profile_name}'. The referenced service '{reference_url}' would require a live fetch; cross-EDMX resolution against another cached service is planned for a future release."
+        )));
+    }
+
     let client = client_from_profile(&profile_name, &state).map_err(CommandError::msg)?;
     let resolved_service_path = resolve_reference_path(&service_path, &reference_url);
     let xml = client
@@ -1319,6 +1711,9 @@ fn main() {
             run_query,
             resolve_value_list_reference,
             add_profile,
+            save_service_offline,
+            import_edmx_file,
+            list_offline_services,
             remove_profile,
             test_connection,
             browser_sign_in_profile,

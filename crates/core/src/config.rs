@@ -6,6 +6,7 @@ use thiserror::Error;
 use tracing::{debug, warn};
 
 use crate::auth::{AuthConfig, SapConnection};
+use crate::offline::{OfflineProfile, OfflineService};
 
 /// Why a keyring read failed. Distinguishes "the user can fix this by
 /// unlocking the OS credential store" from "the credential blob is broken"
@@ -92,10 +93,24 @@ fn default_language() -> String {
 }
 
 /// Top-level config file structure.
+///
+/// Offline-mode adds two top-level tables alongside `connections`:
+/// - `[offline_profiles.<name>]` — bucket metadata (one per offline profile).
+/// - `[[offline_services]]` — flat array of cached/imported service entries.
+///
+/// Profile names are globally unique across `connections` and
+/// `offline_profiles`; uniqueness is enforced at add-time in both directions
+/// so that internal dispatch by name is unambiguous without threading a
+/// `kind` discriminator through every Tauri command, tab cache, history
+/// key, and trace context.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConfigFile {
     #[serde(default)]
     pub connections: BTreeMap<String, ConnectionProfile>,
+    #[serde(default)]
+    pub offline_profiles: BTreeMap<String, OfflineProfile>,
+    #[serde(default)]
+    pub offline_services: Vec<OfflineService>,
 }
 
 /// Resolved config directory location.
@@ -455,5 +470,133 @@ mod tests {
 
         let backend = KeyringReadError::Backend("dbus dropped".to_string());
         assert!(backend.to_string().contains("backend"));
+    }
+
+    // ── ConfigFile round-trip with offline tables ──
+    //
+    // Lock the on-disk shape of the offline-mode extensions so a future
+    // unrelated change to `OfflineProfile` / `OfflineService` can't quietly
+    // break the TOML schema. Migration of existing user configs is painful
+    // once shipped.
+
+    #[test]
+    fn config_file_round_trip_with_offline_tables() {
+        let mut connections = BTreeMap::new();
+        connections.insert(
+            "DEV".to_string(),
+            ConnectionProfile {
+                base_url: "https://sap.example.com".into(),
+                client: "100".into(),
+                language: "EN".into(),
+                username: "alice".into(),
+                password: None,
+                sso: false,
+                browser_sso: true,
+                insecure_tls: false,
+                sso_delegate: false,
+                aliases: BTreeMap::new(),
+            },
+        );
+        let mut offline_profiles = BTreeMap::new();
+        offline_profiles.insert(
+            "DEV (offline)".to_string(),
+            OfflineProfile {
+                source_profile: "DEV".into(),
+                created_at: "2026-05-18T08:00:00Z".into(),
+            },
+        );
+        offline_profiles.insert(
+            "Imported".to_string(),
+            OfflineProfile {
+                source_profile: "".into(),
+                created_at: "2026-05-18T08:00:00Z".into(),
+            },
+        );
+        let offline_services = vec![
+            OfflineService {
+                id: "ui_physstockprod_1-ab12cd34".into(),
+                profile: "DEV (offline)".into(),
+                label: "UI_PHYSSTOCKPROD_1".into(),
+                label_at_creation: "UI_PHYSSTOCKPROD_1".into(),
+                source_service_path: Some("/sap/opu/odata/sap/UI_PHYSSTOCKPROD_1".into()),
+                edmx_file: "dev_offline/ui_physstockprod_1-ab12cd34.edmx".into(),
+                fetched_at: Some("2026-05-18T08:00:00Z".into()),
+                imported_at: None,
+                source_url: Some(
+                    "https://sap.example.com/sap/opu/odata/sap/UI_PHYSSTOCKPROD_1/$metadata?sap-client=100".into(),
+                ),
+                original_filename: None,
+                sha256: "ab12cd34".repeat(8),
+                size_bytes: 123_456,
+                odata_version: "V4".into(),
+                note: "".into(),
+            },
+            OfflineService {
+                id: "op_warehouseorder_0001-7f3a91be".into(),
+                profile: "Imported".into(),
+                label: "OP_WAREHOUSEORDER_0001".into(),
+                label_at_creation: "OP_WAREHOUSEORDER_0001".into(),
+                source_service_path: None,
+                edmx_file: "imported/op_warehouseorder_0001-7f3a91be.edmx".into(),
+                fetched_at: None,
+                imported_at: Some("2026-05-18T08:00:00Z".into()),
+                source_url: None,
+                original_filename: Some("gw_client_data_02CC7A66.xml".into()),
+                sha256: "7f3a91be".repeat(8),
+                size_bytes: 92_671,
+                odata_version: "V4".into(),
+                note: "From customer X DEV via GW_CLIENT".into(),
+            },
+        ];
+
+        let original = ConfigFile {
+            connections,
+            offline_profiles,
+            offline_services,
+        };
+        let s = toml::to_string_pretty(&original).unwrap();
+        let back: ConfigFile = toml::from_str(&s).unwrap();
+
+        assert_eq!(back.connections.len(), 1);
+        assert!(back.connections.contains_key("DEV"));
+        assert_eq!(back.offline_profiles.len(), 2);
+        assert_eq!(back.offline_profiles["DEV (offline)"].source_profile, "DEV");
+        assert_eq!(back.offline_profiles["Imported"].source_profile, "");
+        assert_eq!(back.offline_services.len(), 2);
+        let a = &back.offline_services[0];
+        let b = &back.offline_services[1];
+        assert_eq!(a.id, "ui_physstockprod_1-ab12cd34");
+        assert_eq!(
+            a.source_service_path.as_deref(),
+            Some("/sap/opu/odata/sap/UI_PHYSSTOCKPROD_1")
+        );
+        assert!(a.imported_at.is_none());
+        assert_eq!(b.id, "op_warehouseorder_0001-7f3a91be");
+        assert!(b.source_service_path.is_none());
+        assert!(b.fetched_at.is_none());
+        assert_eq!(
+            b.original_filename.as_deref(),
+            Some("gw_client_data_02CC7A66.xml")
+        );
+    }
+
+    #[test]
+    fn config_file_backward_compatible_without_offline_tables() {
+        // Existing users on alpha.3 have configs without `[offline_profiles]`
+        // or `[[offline_services]]`. The `#[serde(default)]` on each field
+        // should let those load unchanged. Critical for not breaking on
+        // upgrade.
+        let legacy = r#"
+[connections.DEV]
+base_url = "https://sap.example.com"
+client = "100"
+language = "EN"
+username = "alice"
+browser_sso = true
+"#;
+        let cfg: ConfigFile = toml::from_str(legacy).unwrap();
+        assert_eq!(cfg.connections.len(), 1);
+        assert!(cfg.offline_profiles.is_empty());
+        assert!(cfg.offline_services.is_empty());
     }
 }
