@@ -20,6 +20,7 @@ import {
   removeCurrentProfile,
   signInCurrentProfile,
 } from './auth.js';
+import { wireOfflineButtons } from './offline.js';
 import { getFavorites, toggleFavorite } from './favorites.js';
 import {
   loadProfiles,
@@ -269,6 +270,9 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btnProfileSignIn').addEventListener('click', signInCurrentProfile);
   document.getElementById('btnProfileSignOut').addEventListener('click', signOutCurrentProfile);
   document.getElementById('btnRemoveProfile').addEventListener('click', removeCurrentProfile);
+  // Offline-mode buttons: header "Save offline" (gated visibility in
+  // updateProfileAuthUi) and header "Import EDMX" + modal.
+  wireOfflineButtons();
   document.getElementById('btnSearch').addEventListener('click', loadService);
   document.getElementById('btnCloseDescribe').addEventListener('click', hideDescribe);
   document.getElementById('btnRun').addEventListener('click', () => executeQuery(false));

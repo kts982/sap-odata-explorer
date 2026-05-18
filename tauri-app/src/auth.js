@@ -27,14 +27,27 @@ export function isBrowserAuthProfile(profileName = state.currentProfile) {
   return getProfileMeta(profileName)?.auth_mode === 'browser';
 }
 
+/// `true` when the active (or named) profile is an offline-mode bucket
+/// rather than a live SAP connection. Frontend gating for execute /
+/// sign-in / edit buttons reads this to disable affordances that the
+/// backend would reject (`assert_network_allowed`).
+export function isOfflineProfile(profileName = state.currentProfile) {
+  return getProfileMeta(profileName)?.kind === 'offline';
+}
+
 export function updateProfileAuthUi(profileName = state.currentProfile) {
   const signInBtn  = document.getElementById('btnProfileSignIn');
   const signOutBtn = document.getElementById('btnProfileSignOut');
   const editBtn    = document.getElementById('btnEditProfile');
   const removeBtn  = document.getElementById('btnRemoveProfile');
+  const saveOfflineBtn = document.getElementById('btnSaveOffline');
+  const runBtn = document.getElementById('btnRun');
 
-  // Sign In / Sign Out: only for browser SSO profiles
-  if (!profileName || !isBrowserAuthProfile(profileName)) {
+  const offline = isOfflineProfile(profileName);
+
+  // Sign In / Sign Out: only for live browser-SSO profiles. Hidden
+  // for connected-basic and for offline (no network identity).
+  if (!profileName || offline || !isBrowserAuthProfile(profileName)) {
     signInBtn.classList.add('hidden');
     signOutBtn.classList.add('hidden');
   } else {
@@ -42,13 +55,46 @@ export function updateProfileAuthUi(profileName = state.currentProfile) {
     signOutBtn.classList.remove('hidden');
   }
 
-  // Edit + Remove: shown whenever any profile is selected
+  // Edit: hidden for offline profiles (the connection-form fields
+  // — base_url, client, language, etc. — don't apply). Remove
+  // remains available so the user can delete an offline bucket.
   if (!profileName) {
     editBtn.classList.add('hidden');
     removeBtn.classList.add('hidden');
+  } else if (offline) {
+    editBtn.classList.add('hidden');
+    removeBtn.classList.remove('hidden');
   } else {
     editBtn.classList.remove('hidden');
     removeBtn.classList.remove('hidden');
+  }
+
+  // "Save offline" button (header): visible only for live connected
+  // profiles. Hidden when no profile is selected or when the active
+  // profile is already an offline bucket.
+  if (saveOfflineBtn) {
+    if (!profileName || offline) {
+      saveOfflineBtn.classList.add('hidden');
+    } else {
+      saveOfflineBtn.classList.remove('hidden');
+    }
+  }
+
+  // Run / query-execute button: disabled when active profile is
+  // offline. The backend already fails-closed via
+  // `assert_network_allowed` on `run_query`; this is defense-in-depth
+  // at the UI layer so the user doesn't see a "no network allowed"
+  // error after clicking — the button just isn't actionable.
+  if (runBtn) {
+    if (offline) {
+      runBtn.setAttribute('disabled', '');
+      runBtn.classList.add('opacity-40', 'cursor-not-allowed');
+      runBtn.title = 'Query execution is disabled for offline profiles';
+    } else {
+      runBtn.removeAttribute('disabled');
+      runBtn.classList.remove('opacity-40', 'cursor-not-allowed');
+      runBtn.title = '';
+    }
   }
 }
 

@@ -42,7 +42,19 @@ export async function loadProfiles() {
     for (const p of profiles) {
       const opt = document.createElement('option');
       opt.value = p.name;
-      opt.textContent = `${p.name} — ${p.base_url.replace('https://', '')}`;
+      // Offline profiles get an `[OFFLINE]` badge and a different
+      // secondary line (source profile if attributed, "imports"
+      // otherwise). Connected profiles keep the existing `name —
+      // host` shape so the picker is backward-compatible for users
+      // who have no offline profiles yet.
+      if (p.kind === 'offline') {
+        const suffix = p.source_profile
+          ? `from ${p.source_profile}`
+          : 'imports';
+        opt.textContent = `${p.name} [OFFLINE] — ${suffix}`;
+      } else {
+        opt.textContent = `${p.name} — ${p.base_url.replace('https://', '')}`;
+      }
       select.appendChild(opt);
     }
     updateProfileAuthUi(select.value || state.currentProfile);

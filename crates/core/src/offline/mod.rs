@@ -24,6 +24,7 @@
 // by every read/delete path. URL sanitization lives in `url_sanitize` and
 // runs at save time on `source_url`.
 
+pub mod delete;
 pub mod import;
 pub mod import_file;
 pub mod paths;
@@ -35,11 +36,15 @@ pub mod url_sanitize;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub use delete::{
+    DeleteError, DeleteProfileOutcome, DeleteServiceOutcome, delete_offline_profile,
+    delete_offline_service,
+};
 pub use import::{
     ImportError, MAX_IMPORT_SIZE_BYTES, ValidatedEdmx, derive_label_from_schema_namespace,
     strip_utf8_bom, validate_edmx,
 };
-pub use import_file::{ImportOptions, import_edmx_file};
+pub use import_file::{ImportOptions, import_edmx_file, import_edmx_from_bytes};
 pub use paths::{PathError, canonicalize_under, safe_join_under, slugify};
 pub use read::{OfflineReadError, read_offline_metadata};
 pub use save::{

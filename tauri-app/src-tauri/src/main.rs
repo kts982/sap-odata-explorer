@@ -1249,6 +1249,34 @@ fn import_edmx_file(
         .map_err(|e| format!("Import error: {e}"))
 }
 
+/// Bytes-based path-B import for the webview's `<input type="file">`
+/// flow. The browser's file picker hands JS a `File` object whose
+/// content is readable via `arrayBuffer()` but whose filesystem path
+/// is not exposed (Tauri sandbox + browser policy). The frontend
+/// reads the bytes and forwards them here along with the basename
+/// for the `original_filename` field.
+#[tauri::command]
+fn import_edmx_bytes(
+    bytes: Vec<u8>,
+    original_filename: Option<String>,
+    target_offline_profile: Option<String>,
+    label_override: Option<String>,
+    note: Option<String>,
+) -> Result<SaveOutcome, String> {
+    let (mut cfg, config_dir) = config::load_config().map_err(|e| format!("Config error: {e}"))?;
+    offline::import_edmx_from_bytes(
+        &mut cfg,
+        &config_dir.path,
+        &bytes,
+        original_filename,
+        target_offline_profile,
+        label_override,
+        note,
+        current_iso8601(),
+    )
+    .map_err(|e| format!("Import error: {e}"))
+}
+
 /// Shape returned by `list_offline_services`. Carries more attribution
 /// detail than the generic `ServiceInfo` because the offline UI needs
 /// to render the source profile, timestamps, original filename, etc.
@@ -1312,10 +1340,34 @@ fn list_offline_services(profile_name: String) -> Result<Vec<OfflineServiceListE
     Ok(entries)
 }
 
+/// Dispatches on profile kind. Connected profiles go through the
+/// existing keyring + session cleanup; offline profiles delegate to
+/// `offline::delete_offline_profile` which removes the bucket dir +
+/// every indexed service + the bucket entry, all under the shared
+/// `SaveLock`. The single command keeps the frontend's Remove button
+/// path-agnostic.
 #[tauri::command]
 fn remove_profile(state: tauri::State<'_, AppState>, name: String) -> Result<String, String> {
     let (mut cfg, config_dir) = config::load_config().map_err(|e| format!("Config error: {e}"))?;
 
+    // Offline-profile branch.
+    if cfg.offline_profiles.contains_key(&name) {
+        let outcome = offline::delete_offline_profile(&mut cfg, &config_dir.path, &name)
+            .map_err(|e| format!("Delete offline profile error: {e}"))?;
+        return Ok(format!(
+            "Offline profile '{}' removed ({} service(s), {} file(s), bucket dir {})",
+            outcome.profile,
+            outcome.services_removed,
+            outcome.files_removed,
+            if outcome.directory_removed {
+                "removed"
+            } else {
+                "absent"
+            },
+        ));
+    }
+
+    // Connected-profile branch (existing logic).
     let profile = cfg
         .connections
         .remove(&name)
@@ -1345,6 +1397,28 @@ fn remove_profile(state: tauri::State<'_, AppState>, name: String) -> Result<Str
             warnings.join("; ")
         ))
     }
+}
+
+/// Delete a single offline service (one row + its EDMX file).
+/// `remove_profile` handles the whole-bucket case; this is the
+/// finer-grained variant the UI uses for per-row deletes from the
+/// offline-services list.
+#[tauri::command]
+fn delete_offline_service(profile_name: String, service_id: String) -> Result<String, String> {
+    let (mut cfg, config_dir) = config::load_config().map_err(|e| format!("Config error: {e}"))?;
+    let outcome =
+        offline::delete_offline_service(&mut cfg, &config_dir.path, &profile_name, &service_id)
+            .map_err(|e| format!("Delete offline service error: {e}"))?;
+    Ok(format!(
+        "Offline service '{}' removed from profile '{}' (file {})",
+        outcome.service_id,
+        outcome.profile,
+        if outcome.file_removed {
+            "removed"
+        } else {
+            "already gone"
+        },
+    ))
 }
 
 #[tauri::command]
@@ -1713,7 +1787,9 @@ fn main() {
             add_profile,
             save_service_offline,
             import_edmx_file,
+            import_edmx_bytes,
             list_offline_services,
+            delete_offline_service,
             remove_profile,
             test_connection,
             browser_sign_in_profile,

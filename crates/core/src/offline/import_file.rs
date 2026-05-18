@@ -78,37 +78,33 @@ pub struct ImportOptions {
     pub now_iso: String,
 }
 
-/// Pure orchestration for the path-B import. Reads the file, runs
-/// `validate_edmx`, locates or generates the index entry by
-/// `(profile, label_at_creation)`, performs the atomic EDMX + TOML
-/// writes, and returns the `SaveOutcome`.
+/// Path B with bytes already in memory. Used by the Tauri frontend's
+/// `<input type="file">` flow, which has the file contents but not
+/// a filesystem path the Rust side can read. The `original_filename`
+/// (basename of the user's pick, if known) feeds the label-derivation
+/// fallback and the `original_filename` index field.
 ///
-/// Reuses `SaveError` so the UI layer doesn't have to discriminate
-/// between path A and path B failure shapes.
-pub fn import_edmx_file(
+/// `import_edmx_file` (the disk-based entry point) is a thin wrapper
+/// around this: it reads bytes via a bounded `take(MAX+1).read_to_end`,
+/// then delegates. All the post-bytes work — validation, locking,
+/// reload-under-lock, bucket creation, identity lookup, atomic
+/// writes — lives here.
+#[allow(clippy::too_many_arguments)]
+pub fn import_edmx_from_bytes(
     config: &mut ConfigFile,
     config_dir: &Path,
-    options: ImportOptions,
+    bytes: &[u8],
+    original_filename: Option<String>,
+    target_offline_profile: Option<String>,
+    label_override: Option<String>,
+    note: Option<String>,
+    now_iso: String,
 ) -> Result<SaveOutcome, SaveError> {
-    let ImportOptions {
-        file_path,
-        target_offline_profile,
-        label_override,
-        note,
-        now_iso,
-    } = options;
-
     // 0. Acquire the cross-process save lock — same primitive as
     //    path A. Held for the full transaction.
     let _save_lock = SaveLock::acquire(config_dir)?;
 
-    // 0b. **Reload config from disk under the lock.** Same rationale
-    //     as path A: between the caller's `load_config()` and the
-    //     lock acquisition another process could have written. Without
-    //     this reload, the later writer drops the earlier writer's
-    //     row. If the file doesn't exist yet, the caller's in-memory
-    //     config stays as the source of truth — preserves test
-    //     ergonomics for the pre-populated cases.
+    // 0b. Reload config from disk under the lock.
     let toml_path = config_dir.join(CONFIG_FILENAME);
     if toml_path.exists() {
         let content = std::fs::read_to_string(&toml_path).map_err(|e| StorageError::Io {
@@ -119,62 +115,19 @@ pub fn import_edmx_file(
             .map_err(|e| SaveError::TomlSerialize(format!("reload parse: {e}")))?;
     }
 
-    // 1a. Type check via path metadata so the user gets a friendly
-    //     "not a regular file" error when they pick a directory. The
-    //     TOCTOU concern the reviewer flagged is about *size*, not
-    //     type — if the path is swapped to a directory between this
-    //     stat and the open below, `File::open` will fail and we
-    //     return a clean I/O error. If it's swapped from directory to
-    //     regular file, we already rejected — no security issue.
-    let pre_meta = std::fs::metadata(&file_path).map_err(|e| StorageError::Io {
-        path: file_path.clone(),
-        source: e,
-    })?;
-    if !pre_meta.is_file() {
-        return Err(SaveError::Validation(ImportError::NotEdmxRoot {
-            root_name: "(not a regular file)".to_string(),
-        }));
-    }
-
-    // 1b. Open the file **once** and stat *the handle*. The
-    //     handle-stat's size is informational (a fast early-reject);
-    //     the actual TOCTOU-safe size cap is enforced by the bounded
-    //     `take(MAX+1).read_to_end(...)` below. Even if the file
-    //     grows between open and read, we never load more than MAX+1
-    //     bytes — the extra byte is the sentinel that tells us "grew
-    //     past cap mid-read."
-    use std::io::Read;
-    // `file` is consumed by `.take(...)` below — no `mut` needed.
-    let file = std::fs::File::open(&file_path).map_err(|e| StorageError::Io {
-        path: file_path.clone(),
-        source: e,
-    })?;
-    let handle_size = file.metadata().map(|m| m.len()).unwrap_or(0); // best-effort: drop into the bounded read regardless
-    if handle_size > MAX_IMPORT_SIZE_BYTES {
-        return Err(SaveError::Validation(ImportError::TooLarge {
-            size: handle_size,
-            limit: MAX_IMPORT_SIZE_BYTES,
-        }));
-    }
-
-    let limit = MAX_IMPORT_SIZE_BYTES.saturating_add(1);
-    let mut bytes = Vec::with_capacity(handle_size.min(MAX_IMPORT_SIZE_BYTES) as usize + 1);
-    file.take(limit)
-        .read_to_end(&mut bytes)
-        .map_err(|e| StorageError::Io {
-            path: file_path.clone(),
-            source: e,
-        })?;
-    if bytes.len() as u64 > MAX_IMPORT_SIZE_BYTES {
+    // 1. Size cap is the only invariant we enforce on already-loaded
+    //    bytes (the file-path version's `take(MAX+1)` already
+    //    enforced this, but a direct bytes-caller might not have).
+    if (bytes.len() as u64) > MAX_IMPORT_SIZE_BYTES {
         return Err(SaveError::Validation(ImportError::TooLarge {
             size: bytes.len() as u64,
             limit: MAX_IMPORT_SIZE_BYTES,
         }));
     }
 
-    // 3. Validate via the full pipeline. Any rejection here returns
+    // 2. Validate via the full pipeline. Any rejection here returns
     //    the friendly variant verbatim — no writes happen.
-    let validated = validate_edmx(&bytes)?;
+    let validated = validate_edmx(bytes)?;
 
     // 4. Resolve the target bucket. Default to `Imported`.
     let target_profile_name =
@@ -203,7 +156,7 @@ pub fn import_edmx_file(
     }
 
     // 6. Compute the bytes-on-disk view (BOM-stripped) + hash + size.
-    let storable_bytes = strip_utf8_bom(&bytes);
+    let storable_bytes = strip_utf8_bom(bytes);
     let sha256 = sha256_hex(storable_bytes);
     let size_bytes = storable_bytes.len() as u64;
 
@@ -212,11 +165,20 @@ pub fn import_edmx_file(
     //    namespace shape), fall back to the filename stem; if even
     //    that is empty, last-resort fallback to "service".
     let auto_label = derive_label_from_schema_namespace(&validated.schema_namespace);
-    let filename_stem = file_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_string();
+    // Filename stem from the user-supplied original_filename (if any),
+    // used as a fallback for label derivation when the schema namespace
+    // is unknown. The file-path entry point computes this from
+    // `file_path.file_stem()` and passes it through; the direct-bytes
+    // entry point can leave it `None`.
+    let filename_stem = original_filename
+        .as_deref()
+        .and_then(|name| {
+            std::path::Path::new(name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(String::from)
+        })
+        .unwrap_or_default();
     let display_label = label_override
         .map(|s| cap_chars(s.trim().to_string(), LABEL_MAX_CHARS))
         .filter(|s| !s.is_empty())
@@ -323,10 +285,17 @@ pub fn import_edmx_file(
     // 12. Mutate the in-memory index. Path-B-specific field
     //     population: imported_at + original_filename are Some, the
     //     path-A fields stay None.
-    let original_filename = file_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .map(|s| cap_chars(s.to_string(), ORIGINAL_FILENAME_MAX_CHARS));
+    let capped_original_filename = original_filename.map(|name| {
+        // Capture basename only (caller may have passed a full path);
+        // cap at the plan-stated max so a pathological filename can't
+        // bloat the index.
+        let basename = std::path::Path::new(&name)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(String::from)
+            .unwrap_or(name);
+        cap_chars(basename, ORIGINAL_FILENAME_MAX_CHARS)
+    });
     let capped_note = note
         .map(|n| cap_bytes(n, NOTE_MAX_BYTES))
         .unwrap_or_default();
@@ -341,7 +310,7 @@ pub fn import_edmx_file(
         fetched_at: None,
         imported_at: Some(now_iso.clone()),
         source_url: None,
-        original_filename,
+        original_filename: capped_original_filename,
         sha256: sha256.clone(),
         size_bytes,
         odata_version: format!("{:?}", validated.odata_version),
@@ -373,6 +342,89 @@ pub fn import_edmx_file(
         created_new_offline_profile,
         kind,
     })
+}
+
+/// Path B disk entry point: reads `options.file_path`, runs the
+/// bounded read (TOCTOU-safe via `take(MAX+1)`), then delegates to
+/// `import_edmx_from_bytes`. CLI / Tauri callers that have a real
+/// filesystem path use this. The webview file-picker flow (which
+/// only gives JS a `File` object, not a path) uses
+/// `import_edmx_from_bytes` directly with bytes from
+/// `file.arrayBuffer()`.
+pub fn import_edmx_file(
+    config: &mut ConfigFile,
+    config_dir: &Path,
+    options: ImportOptions,
+) -> Result<SaveOutcome, SaveError> {
+    let ImportOptions {
+        file_path,
+        target_offline_profile,
+        label_override,
+        note,
+        now_iso,
+    } = options;
+
+    // 1a. Type check via path metadata so the user gets a friendly
+    //     "not a regular file" error when they pick a directory. The
+    //     TOCTOU concern the reviewer flagged is about *size*, not
+    //     type — if the path is swapped to a directory between this
+    //     stat and the open below, `File::open` will fail and we
+    //     return a clean I/O error.
+    let pre_meta = std::fs::metadata(&file_path).map_err(|e| StorageError::Io {
+        path: file_path.clone(),
+        source: e,
+    })?;
+    if !pre_meta.is_file() {
+        return Err(SaveError::Validation(ImportError::NotEdmxRoot {
+            root_name: "(not a regular file)".to_string(),
+        }));
+    }
+
+    // 1b. Open the file once, stat the handle, bounded-read.
+    use std::io::Read;
+    let file = std::fs::File::open(&file_path).map_err(|e| StorageError::Io {
+        path: file_path.clone(),
+        source: e,
+    })?;
+    let handle_size = file.metadata().map(|m| m.len()).unwrap_or(0);
+    if handle_size > MAX_IMPORT_SIZE_BYTES {
+        return Err(SaveError::Validation(ImportError::TooLarge {
+            size: handle_size,
+            limit: MAX_IMPORT_SIZE_BYTES,
+        }));
+    }
+    let limit = MAX_IMPORT_SIZE_BYTES.saturating_add(1);
+    let mut bytes = Vec::with_capacity(handle_size.min(MAX_IMPORT_SIZE_BYTES) as usize + 1);
+    file.take(limit)
+        .read_to_end(&mut bytes)
+        .map_err(|e| StorageError::Io {
+            path: file_path.clone(),
+            source: e,
+        })?;
+    if (bytes.len() as u64) > MAX_IMPORT_SIZE_BYTES {
+        return Err(SaveError::Validation(ImportError::TooLarge {
+            size: bytes.len() as u64,
+            limit: MAX_IMPORT_SIZE_BYTES,
+        }));
+    }
+
+    // Hand off to the bytes entry point. `original_filename` is the
+    // basename of the user-picked path so the filename-stem fallback
+    // and the persisted `original_filename` field work correctly.
+    let original_filename = file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(String::from);
+    import_edmx_from_bytes(
+        config,
+        config_dir,
+        &bytes,
+        original_filename,
+        target_offline_profile,
+        label_override,
+        note,
+        now_iso,
+    )
 }
 
 #[cfg(test)]
