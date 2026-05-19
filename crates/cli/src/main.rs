@@ -381,6 +381,29 @@ enum OfflineAction {
         #[arg(long)]
         profile: Option<String>,
     },
+
+    /// Delete an offline service or a whole offline-profile bucket.
+    /// With `--service-id`, removes a single service (file + index
+    /// row); without it, removes the entire bucket (every service,
+    /// every cached file, the bucket directory, and the index entry).
+    /// Both operations go through the same `safe_join_under` +
+    /// `canonicalize_under` boundary checks as the GUI's Remove
+    /// button — the offline root is never authorized for recursive
+    /// removal.
+    Delete {
+        /// Offline-profile bucket name (required).
+        #[arg(long)]
+        profile: String,
+
+        /// Specific service id to delete. Omit to delete the whole
+        /// bucket. Use `offline list --profile NAME` to see ids.
+        #[arg(long)]
+        service_id: Option<String>,
+
+        /// Skip the confirmation prompt. Useful in scripts.
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
 }
 
 /// Lint profile override flag values. Mirrors `lint::LintProfile`
@@ -571,6 +594,21 @@ async fn main() -> Result<()> {
     {
         return cmd_offline_list(profile.clone(), cli.json);
     }
+    // `offline delete` mutates the local TOML index + on-disk EDMX
+    // files; never touches the network. Same early-exit as import /
+    // list so the user can delete buckets without a configured
+    // connection.
+    if let Commands::Offline {
+        action:
+            OfflineAction::Delete {
+                profile,
+                service_id,
+                yes,
+            },
+    } = &cli.command
+    {
+        return cmd_offline_delete(profile.clone(), service_id.clone(), *yes, cli.json);
+    }
 
     // Resolve connection: profile → env vars → CLI flags
     let connection = resolve_connection(&cli)?;
@@ -752,12 +790,14 @@ async fn main() -> Result<()> {
                     )
                     .await
                 }
-                OfflineAction::Import { .. } | OfflineAction::List { .. } => {
-                    // Both handled in the early-exit block above. If
+                OfflineAction::Import { .. }
+                | OfflineAction::List { .. }
+                | OfflineAction::Delete { .. } => {
+                    // All handled in the early-exit block above. If
                     // we reach here, the early-exit was skipped —
                     // that's a logic bug, not user error.
                     unreachable!(
-                        "offline import/list should have early-exited before connection resolution"
+                        "offline import/list/delete should have early-exited before connection resolution"
                     );
                 }
             },
@@ -2622,6 +2662,121 @@ fn render_offline_services(cfg: &config::ConfigFile, profile: &str, json: bool) 
         ]);
     }
     println!("{table}");
+    Ok(())
+}
+
+/// Delete an offline service or a whole offline-profile bucket.
+/// Reads only the local TOML index — no network. Confirms
+/// interactively unless `--yes` is passed, mirroring the GUI's
+/// confirmation dialog. Goes through the same core delete helpers
+/// (`offline::delete_offline_service` / `delete_offline_profile`)
+/// as the Tauri command, so the boundary discipline is identical.
+fn cmd_offline_delete(
+    profile: String,
+    service_id: Option<String>,
+    yes: bool,
+    json: bool,
+) -> Result<()> {
+    let (mut cfg, config_dir) = config::load_config().context("loading config")?;
+
+    // Pre-flight existence check so the confirmation prompt only
+    // appears when there's actually something to delete. Without
+    // this, the user gets the prompt, types `y`, and only then
+    // discovers the profile didn't exist.
+    if !cfg.offline_profiles.contains_key(&profile) {
+        anyhow::bail!(
+            "Offline profile '{profile}' not found. Run `sap-odata offline list` to see available profiles."
+        );
+    }
+    if let Some(ref id) = service_id {
+        let exists = cfg
+            .offline_services
+            .iter()
+            .any(|s| s.profile == profile && &s.id == id);
+        if !exists {
+            anyhow::bail!(
+                "Offline service '{id}' not found in profile '{profile}'. Run `sap-odata offline list --profile {profile}` to see available service ids."
+            );
+        }
+    }
+
+    if !yes {
+        let prompt = match &service_id {
+            Some(id) => format!(
+                "Delete offline service '{id}' from '{profile}'? The cached EDMX file will be removed. (y/N)"
+            ),
+            None => {
+                let count = cfg
+                    .offline_services
+                    .iter()
+                    .filter(|s| s.profile == profile)
+                    .count();
+                format!(
+                    "Delete offline profile '{profile}' (containing {count} service(s))? Every cached EDMX file in this bucket will be removed. (y/N)"
+                )
+            }
+        };
+        use dialoguer::Confirm;
+        let confirmed = Confirm::new()
+            .with_prompt(prompt)
+            .default(false)
+            .interact()?;
+        if !confirmed {
+            anyhow::bail!("Aborted.");
+        }
+    }
+
+    match service_id {
+        Some(id) => {
+            let outcome =
+                offline::delete_offline_service(&mut cfg, &config_dir.path, &profile, &id)
+                    .context("delete_offline_service")?;
+            if json {
+                let payload = serde_json::json!({
+                    "profile": outcome.profile,
+                    "service_id": outcome.service_id,
+                    "file_removed": outcome.file_removed,
+                });
+                println!("{}", serde_json::to_string_pretty(&payload)?);
+            } else {
+                println!(
+                    "Offline service '{}' removed from profile '{}' (file {})",
+                    outcome.service_id,
+                    outcome.profile,
+                    if outcome.file_removed {
+                        "removed"
+                    } else {
+                        "already gone"
+                    }
+                );
+            }
+        }
+        None => {
+            let outcome = offline::delete_offline_profile(&mut cfg, &config_dir.path, &profile)
+                .context("delete_offline_profile")?;
+            if json {
+                let payload = serde_json::json!({
+                    "profile": outcome.profile,
+                    "services_removed": outcome.services_removed,
+                    "files_removed": outcome.files_removed,
+                    "directory_removed": outcome.directory_removed,
+                });
+                println!("{}", serde_json::to_string_pretty(&payload)?);
+            } else {
+                println!(
+                    "Offline profile '{}' removed ({} service(s), {} file(s), bucket dir {})",
+                    outcome.profile,
+                    outcome.services_removed,
+                    outcome.files_removed,
+                    if outcome.directory_removed {
+                        "removed"
+                    } else {
+                        "absent"
+                    }
+                );
+            }
+        }
+    }
     Ok(())
 }
 
