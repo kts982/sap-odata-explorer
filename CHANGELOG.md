@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Format loosely follows 
 
 ## [Unreleased]
 
+## [0.1.0-alpha.4] — 2026-05-19
+
 **Headline:** offline EDMX library — capture `$metadata` from a connected SAP system or import an EDMX file from disk, then browse it in the same desktop UI without any network connection. Designed as a route-around for the unsigned-exe install friction at customer sites: someone with `curl` / `/IWFND/GW_CLIENT` / browser access can pull a `$metadata` document and hand it to a consultant running the explorer on their own laptop.
 
 Also: CLI ergonomics polish, a dedicated service-health subcommand, a centralised error-hint layer used by both surfaces, profile edit-in-place, and a V4-catalog-miss workaround hint.
