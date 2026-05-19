@@ -19,6 +19,7 @@
 
 import { state } from './state.js';
 import { invoke } from './vendor/tauri-core.js';
+import { timedInvoke } from './api.js';
 import { setStatus } from './status.js';
 import { loadProfiles, searchServices } from './services.js';
 import { getActiveTab } from './tabs.js';
@@ -94,7 +95,11 @@ async function saveCurrentServiceOffline() {
   }
   setStatus(`Saving ${state.currentServicePath} from '${state.currentProfile}' offline...`);
   try {
-    const outcome = await invoke('save_service_offline', {
+    // `save_service_offline` touches the network (fetch_metadata_xml)
+    // and returns the wrapped `{ data, trace }` shape. Route through
+    // `timedInvoke` so the trace lands in the active tab's HTTP
+    // inspector and we get the spinner + the unwrapped SaveOutcome.
+    const outcome = await timedInvoke('save_service_offline', {
       connectedProfileName: state.currentProfile,
       servicePath: state.currentServicePath,
       offlineProfileName: null,
@@ -266,7 +271,12 @@ async function performImport() {
     // every validation step regardless of what JS sent.
     const buf = await importFile.arrayBuffer();
     const bytes = Array.from(new Uint8Array(buf));
-    const outcome = await invoke('import_edmx_bytes', {
+    // `import_edmx_bytes` returns `SaveOutcome` directly (no trace —
+    // path B doesn't touch the network). `timedInvoke` is a
+    // pass-through for that shape but it still drives the global
+    // spinner, which is a noticeable UX win on multi-MB imports
+    // because the bytes-upload + atomic write can take a moment.
+    const outcome = await timedInvoke('import_edmx_bytes', {
       bytes,
       originalFilename: importFile.name,
       targetOfflineProfile: targetProfile,
