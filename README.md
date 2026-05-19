@@ -7,7 +7,8 @@
 [![Rust 1.85+](https://img.shields.io/badge/Rust-1.85+-orange.svg)](https://rustup.rs)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#)
 
-> **Want to see it first?** Take the [visual tour in the Showcase](./docs/SHOWCASE.md) — system setup, SAP View annotation overlay, F4 value-help picker, Fiori-readiness linter, and pre-flight validator. Screenshots before commitment.
+> [!TIP]
+> 📸 **Take the [visual tour in the Showcase](./docs/SHOWCASE.md) before reading further** — system setup, SAP View annotation overlay, F4 value-help picker, Fiori-readiness linter, and pre-flight validator. Screenshots before commitment.
 
 ![sap-odata-explorer — desktop app with SAP View overlay, F4 reference tooltip, and FilterRestrictions warning](docs/images/hero.png)
 
@@ -47,6 +48,7 @@ This project is aimed at a narrower problem: understand a real SAP OData service
 - **Favorites and history** — star services (full object cached locally so they appear instantly on profile switch) and replay recent queries
 - **Copy helpers** — copy rows, columns, generated query URLs, request/response bodies, or curl commands
 - **Filter helper** — click a cell value to turn it into a filter
+- **Offline mode** — save a service's `$metadata` from a connected system, or import an EDMX file from disk (API Hub download, GW_CLIENT "Save Response", `curl > out.xml`). Cached services browse through the same UI as live ones — describe, lint, annotations, all work without network access. The route-around for customer sites where the unsigned exe can't be installed on the SAP host: pull `$metadata` over `curl` / `/IWFND/GW_CLIENT` / browser, hand the file to a consultant running the explorer on their own laptop.
 - **Local-first** — single-binary CLI and desktop app, no server component, no runtime dependencies (Windows / Linux / macOS source builds)
 
 ## Installation
@@ -113,6 +115,7 @@ Run `sap-odata profile where` to print the exact path in use. Basic-auth passwor
 5. Click **Search** to browse services and pick one. If your system has the V4 catalog SICF node inactive (`/IWFND/CONFIG` V4 node off — a common customer config), the sidebar shows a hint to paste the full `/sap/opu/odata4/...` path directly into the search box.
 6. Click an entity set in the sidebar → click property names to add them to `$select`, navigation properties to `$expand` → **Run**
 7. Toggle **SAP View** in the status bar to overlay SAP/UI5 annotation hints (entity titles, description pairings, criticality colors, filter restrictions, selection-field chips). Toggle **Inspector** to see the full HTTP trace for the last call.
+8. **Offline mode** is in the header: **Save offline** (visible when a service is loaded on a connected profile) caches the `$metadata` under a `<NAME> (offline)` bucket; **Import EDMX** opens a file picker for EDMX files hand-pulled outside the tool. Offline profiles appear in the picker with an `[OFFLINE]` badge; selecting one lets you browse the cached services normally — Run / query / value-help are disabled (no network).
 
 ### CLI
 
@@ -129,6 +132,13 @@ sap-odata -p DEV -s API_WAREHOUSE_2 run Warehouse --top 5
 # Any command with --verbose prints the full HTTP trace to stderr
 # (same data as the desktop app's Inspector, with auth headers redacted).
 sap-odata -v -p DEV -s API_WAREHOUSE_2 run Warehouse --top 1
+
+# Offline mode — capture from a live system or import a file from disk
+sap-odata -p DEV -s API_WAREHOUSE_2 offline save           # cache $metadata under DEV (offline)
+sap-odata offline import ./from-customer.edmx              # ingest a file the user already has
+sap-odata offline list                                     # list buckets
+sap-odata offline list --profile "DEV (offline)"           # list services in a bucket
+sap-odata offline delete --profile "DEV (offline)"         # remove a bucket (asks for confirm)
 ```
 
 If you prefer scripted setup, `sap-odata profile add ...` is still available for direct profile creation.
@@ -150,6 +160,10 @@ If you prefer scripted setup, `sap-odata profile add ...` is still available for
 | `metadata` | Dump raw `$metadata` XML |
 | `lint [<entity>]` | Fiori-readiness checklist — check a service's annotations against list-report / object-page expectations, with ABAP CDS fix hints. `--min-severity pass\|warn\|miss` to filter. |
 | `annotations` | List every SAP/UI5 annotation parsed from `$metadata`, grouped by vocabulary. `--namespace` / `--filter` to narrow. |
+| `offline save` | Cache the connected service's `$metadata` for offline browsing. Requires `-p PROFILE -s SERVICE`. |
+| `offline import <file>` | Import an EDMX file (API Hub, GW_CLIENT, curl dump). No connection needed. `--offline-profile NAME` to target a specific bucket. |
+| `offline list [--profile NAME]` | List offline buckets, or services within one. |
+| `offline delete --profile NAME [--service-id ID]` | Remove a whole bucket or one service. `-y` skips the confirm prompt. |
 
 See [CLI-REFERENCE.md](docs/CLI-REFERENCE.md) for all options (or run `sap-odata <command> --help`).
 

@@ -4,9 +4,23 @@ All notable changes to this project are documented here. Format loosely follows 
 
 ## [Unreleased]
 
-CLI ergonomics polish, a dedicated service-health subcommand, a centralised error-hint layer used by both surfaces, and two desktop UX additions — profile edit-in-place and a V4-catalog-miss workaround hint.
+**Headline:** offline EDMX library — capture `$metadata` from a connected SAP system or import an EDMX file from disk, then browse it in the same desktop UI without any network connection. Designed as a route-around for the unsigned-exe install friction at customer sites: someone with `curl` / `/IWFND/GW_CLIENT` / browser access can pull a `$metadata` document and hand it to a consultant running the explorer on their own laptop.
 
-### New
+Also: CLI ergonomics polish, a dedicated service-health subcommand, a centralised error-hint layer used by both surfaces, profile edit-in-place, and a V4-catalog-miss workaround hint.
+
+### New — Offline mode
+
+- **"Save offline" button (desktop)** captures the bytes of a connected service's `$metadata` to the offline library under a `<NAME> (offline)` bucket attributed to the source system. Same atomic-write discipline as the rest of the config: temp file + rename + parent-dir sync, cross-process lockfile, content-hash-verified byte-identical skip on re-save.
+- **"Import EDMX" modal (desktop)** accepts files from any reasonable source — SAP API Hub `.edmx`, `/IWFND/GW_CLIENT` "Save Response" `.xml`, browser save-as on `<base>/$metadata`, `curl > out.xml`. Validated through an 11-step pipeline before persistence: size cap, gzip / HTTP-headers sniff, BOM strip, byte-level XXE scan (DOCTYPE / ENTITY), UTF-8 decode, wrong-root classification (HTML login page → friendly hint, Atom service doc, OData error envelope), XML parse, EDMX root + namespace check, Schema presence.
+- **`OFFLINE` badge in the profile picker** with source-system attribution ("DEV (offline) — from DEV" / "Imported — imports"). Run / query / value-help buttons disabled for offline profiles (UI gating mirrors backend `assert_network_allowed`).
+- **CLI parity:** `sap-odata offline save`, `offline import <FILE>`, `offline list [--profile NAME]`, `offline delete --profile NAME [--service-id ID]`. All four work without any configured profile — useful for receiving a hand-carried EDMX file on a fresh consultant laptop.
+- **Label auto-derivation** from `Schema Namespace`. V4 SAP services (`com.sap.gateway.srvd.*` and `srvd_a2x` family) render as `<SVC>_<N>` with leading zeros stripped (e.g. `com.sap.gateway.srvd_a2x.api_warehouse_order_task_2.v0001` → `API_WAREHOUSE_ORDER_TASK_2_1` — the canonical name a consultant sees in SEGW / `/IWFND/MAINT_SERVICE`). V2 services use the trailing dot-segment; URL-shaped or non-ASCII namespaces fall through to the filename stem.
+- **Global name uniqueness** across `connections` + `offline_profiles` enforced at every add path (desktop add-profile modal, CLI `profile add`, CLI `setup` wizard, path-A save, path-B import) plus at dispatch time (`MetadataSource::resolve` fails closed on collision) so the no-network guarantee is closed at the boundary, not just the entry points.
+- **TOML schema extensions:** `[offline_profiles.*]` (bucket metadata) and `[[offline_services]]` (one row per cached service with `id`, `label`, `source_service_path`, `edmx_file`, `sha256`, `size_bytes`, `odata_version`, attribution timestamps, optional note). Backward-compatible with pre-offline `connections.toml` (every field defaults).
+- **Storage layout** — `{config}/offline/<slug(profile)>/<service_id>.edmx` where `service_id` is `<slug(label)>-<8-hex>`. Hash-suffixed filenames are tool-generated; no raw user input flows into a filename component except via the slugifier. Path-traversal safety via `safe_join_under` (syntactic) + `canonicalize_under` (runtime symlink/reparse-point boundary check with strict-descendancy).
+- **`userinfo` (`user:pass@host`) stripped from `source_url` at save time** so consultant credentials never land in an offline-pack hand-carried to a peer.
+
+### New — Other
 
 - **Profile edit (desktop)**: pencil button next to the profile dropdown opens the existing add-profile modal in edit mode. URL, password, auth mode, language, and the Kerberos-delegation toggle are editable; profile name and basic-auth username are intentionally locked (both feed the OS keyring entry key, so changing them requires delete + re-add). Blank password keeps the existing keyring entry.
 - **V4 catalog-miss UX hint (desktop)**: when the V4 ServiceGroups catalog returns 403/404 (common on customer systems where the `/IWFND/CONFIG` V4 SICF node isn't active), the sidebar shows an amber footer pointing to the paste-full-path workaround (`/sap/opu/odata4/...`). Pasted paths already bypass the catalog via the existing `isServicePath` shortcut; the hint is purely educational.
