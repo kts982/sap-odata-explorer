@@ -38,6 +38,13 @@ export async function loadProfiles() {
     const profiles = await invoke('get_profiles');
     state.profileMap = new Map(profiles.map(p => [p.name, p]));
     const select = document.getElementById('profileSelect');
+    // Capture the previously-selected profile so we can restore it
+    // after the rebuild. Without this, callers that refresh the list
+    // after a state-changing operation (save offline, import EDMX)
+    // would see the dropdown reset to "Select profile..." while
+    // `state.currentProfile` still points at the prior name —
+    // commands keep running against it but the UI doesn't reflect it.
+    const previouslySelected = state.currentProfile;
     select.innerHTML = '<option value="">Select profile...</option>';
     for (const p of profiles) {
       const opt = document.createElement('option');
@@ -56,6 +63,15 @@ export async function loadProfiles() {
         opt.textContent = `${p.name} — ${p.base_url.replace('https://', '')}`;
       }
       select.appendChild(opt);
+    }
+    // Restore the active selection if the profile still exists in
+    // the (possibly mutated) profile list. If it doesn't — e.g. the
+    // user just deleted it — clear `state.currentProfile` and let
+    // updateProfileAuthUi render the empty-selection state.
+    if (previouslySelected && state.profileMap.has(previouslySelected)) {
+      select.value = previouslySelected;
+    } else if (previouslySelected) {
+      state.currentProfile = null;
     }
     updateProfileAuthUi(select.value || state.currentProfile);
   } catch (e) {

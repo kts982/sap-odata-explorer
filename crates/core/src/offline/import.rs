@@ -393,8 +393,21 @@ pub fn derive_label_from_schema_namespace(namespace: &str) -> String {
         return String::new();
     }
 
-    // V4 SAP service-definition namespace.
-    if let Some(stripped) = ns.strip_prefix("com.sap.gateway.srvd.") {
+    // V4 SAP service-definition namespace. SAP uses several variants
+    // under the `com.sap.gateway.<family>.<svc>.v<NNNN>` shape:
+    //   - `srvd`       — RAP service definitions
+    //   - `srvd_a2x`   — RAP A2X bindings (application-to-application)
+    //   - `iwbep` etc. — older OData V2 IWBEP services
+    // The trailing `_<suffix>` after `srvd` (or after any other family
+    // name) varies by service kind but the surrounding shape is stable.
+    // Strip the `com.sap.gateway.<family>.` prefix where `<family>` is
+    // the first dotted segment, then apply the same `<svc>.v<NNNN>`
+    // logic. This catches both `srvd` and `srvd_a2x` (and future
+    // variants) under a single rule.
+    if let Some(after_gateway) = ns.strip_prefix("com.sap.gateway.")
+        && let Some(family_end) = after_gateway.find('.')
+    {
+        let stripped = &after_gateway[family_end + 1..];
         // Look for the `.v<digits>` version suffix. If present and the
         // digit sequence is non-empty, emit `<SVC>_<N>` where N has
         // leading zeros stripped. Otherwise emit `<SVC>` only.
@@ -749,6 +762,17 @@ mod tests {
         let v = validate_edmx(&bytes).expect("API Hub EDMX should validate");
         assert_eq!(v.odata_version, ODataVersion::V4);
         assert!(!v.schema_namespace.is_empty());
+        // The API Hub file uses the `srvd_a2x` namespace family
+        // (RAP A2X binding), not `srvd`. The label-derivation rule
+        // must recognize the family-segment shape and produce
+        // `API_WAREHOUSE_ORDER_TASK_2_1` — the canonical service
+        // name a consultant would see in SEGW / API Hub. Earlier
+        // versions of this rule only matched `srvd` and would have
+        // returned the version-suffix `v0001` here.
+        assert_eq!(
+            derive_label_from_schema_namespace(&v.schema_namespace),
+            "API_WAREHOUSE_ORDER_TASK_2_1"
+        );
     }
 
     #[ignore = "requires gitignored .dev/ fixtures; run with `cargo test -- --ignored`"]
@@ -805,6 +829,38 @@ mod tests {
         assert_eq!(
             derive_label_from_schema_namespace("com.sap.gateway.srvd.zorder_management.v0002"),
             "ZORDER_MANAGEMENT_2"
+        );
+    }
+
+    #[test]
+    fn derives_label_from_v4_srvd_a2x_namespace() {
+        // RAP A2X binding namespace shape — observed on real API Hub
+        // V4 services (e.g. `OP_WAREHOUSEORDER_0001.edmx`). The
+        // namespace family segment is `srvd_a2x` instead of `srvd`;
+        // the rule must still extract the service core + version.
+        assert_eq!(
+            derive_label_from_schema_namespace(
+                "com.sap.gateway.srvd_a2x.api_warehouse_order_task_2.v0001"
+            ),
+            "API_WAREHOUSE_ORDER_TASK_2_1"
+        );
+        // Real SAP API Hub example: ZCUSTOMERS_O4 service.
+        assert_eq!(
+            derive_label_from_schema_namespace("com.sap.gateway.srvd_a2x.zcustomers_o4.v0001"),
+            "ZCUSTOMERS_O4_1"
+        );
+    }
+
+    #[test]
+    fn derives_label_from_other_gateway_families() {
+        // Future-proofing: the rule strips the
+        // `com.sap.gateway.<family>.` prefix uniformly so unknown
+        // family segments (e.g. a hypothetical `srvd_v2`) still produce
+        // a sensible label rather than falling through to the
+        // trailing-segment fallback.
+        assert_eq!(
+            derive_label_from_schema_namespace("com.sap.gateway.someotherfamily.my_service.v0003"),
+            "MY_SERVICE_3"
         );
     }
 

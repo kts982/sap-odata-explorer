@@ -20,8 +20,17 @@
 import { state } from './state.js';
 import { invoke } from './vendor/tauri-core.js';
 import { setStatus } from './status.js';
-import { loadProfiles } from './services.js';
+import { loadProfiles, searchServices } from './services.js';
+import { getActiveTab } from './tabs.js';
 import { isOfflineProfile } from './auth.js';
+
+// Mirror of the Rust side's `MAX_IMPORT_SIZE_BYTES`. Kept here so the
+// JS preflight can reject before `arrayBuffer()` is called — otherwise
+// the webview pulls the entire file into memory just for Rust to
+// reject it, which can freeze the UI on a multi-GB selection. The
+// backend remains the source of truth; if these numbers ever diverge,
+// the backend's stricter rejection still applies.
+const MAX_IMPORT_SIZE_BYTES = 10 * 1024 * 1024;
 
 // Hidden file input used for the Import-EDMX modal's Browse button.
 // One-shot per click — the file is read immediately, the input value
@@ -97,9 +106,35 @@ async function saveCurrentServiceOffline() {
     // A new offline bucket may have been created; refresh the picker
     // so the user can pick it.
     await loadProfiles();
+    // If the user happens to be viewing that bucket already (rare for
+    // path A — they'd typically be on the connected profile — but
+    // possible across tabs), refresh the sidebar so the new row shows.
+    await refreshServicesIfActiveProfile(outcome.offline_profile_name);
   } catch (e) {
     setStatus('Save offline failed: ' + e);
   }
+}
+
+/// If the just-mutated offline bucket is the user's currently-active
+/// profile, the cached services list (sidebar) needs to be refreshed
+/// so the new / updated row shows up immediately. Without this, the
+/// `change`-event-driven cache survives across import / save calls
+/// and the user has to restart the app (or switch profiles and back)
+/// to see the new entry. Bug discovered in 2026-05-19 smoke testing.
+async function refreshServicesIfActiveProfile(outcomeProfileName) {
+  if (!outcomeProfileName) return;
+  if (state.currentProfile !== outcomeProfileName) return;
+  // Bust both caches: the global one used by `searchServices` for its
+  // single-shot dedupe, and the per-tab one used to render the sidebar
+  // after a tab-switch. Mirrors the profile-change reset in app.js.
+  state.cachedServices = null;
+  state.lastSearchQuery = null;
+  const tab = getActiveTab();
+  if (tab) {
+    tab.cachedServices = null;
+    tab.lastSearchQuery = null;
+  }
+  await searchServices('');
 }
 
 function summarizeOutcome(outcome) {
@@ -165,15 +200,39 @@ function triggerBrowse() {
   input.type = 'file';
   input.accept = '.edmx,.xml,application/xml,text/xml';
   input.addEventListener('change', () => {
-    if (input.files && input.files.length > 0) {
-      importFile = input.files[0];
-      document.getElementById('impFilePath').value = importFile.name;
-      // Hide stale error/success state from a previous attempt.
-      document.getElementById('impError').classList.add('hidden');
-      document.getElementById('impSuccess').classList.add('hidden');
+    if (!input.files || input.files.length === 0) return;
+    const picked = input.files[0];
+    const errEl = document.getElementById('impError');
+    const okEl = document.getElementById('impSuccess');
+    errEl.classList.add('hidden');
+    okEl.classList.add('hidden');
+
+    // **Size preflight on the File object, before `arrayBuffer()`.**
+    // The browser exposes `File.size` cheaply (from the directory
+    // entry, no read), so we can reject huge selections without
+    // pulling them into memory. Without this, picking a 5 GB file
+    // would freeze the webview while it slurped the whole thing
+    // just for the Rust side to reject it.
+    if (picked.size > MAX_IMPORT_SIZE_BYTES) {
+      importFile = null;
+      document.getElementById('impFilePath').value = '';
+      errEl.textContent =
+        `File is ${formatBytes(picked.size)}; the offline-import cap is ${formatBytes(MAX_IMPORT_SIZE_BYTES)}. Real $metadata is rarely above 2 MB — this is probably the wrong file.`;
+      errEl.classList.remove('hidden');
+      return;
     }
+
+    importFile = picked;
+    document.getElementById('impFilePath').value = picked.name;
   });
   input.click();
+}
+
+function formatBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 async function performImport() {
@@ -184,6 +243,16 @@ async function performImport() {
 
   if (!importFile) {
     errEl.textContent = 'Pick a file first.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  // Re-check size at submit time. The picker already preflighted, but
+  // the File reference is from a one-shot input; in theory the
+  // underlying file could have been swapped between Browse and Import.
+  // Cheap insurance.
+  if (importFile.size > MAX_IMPORT_SIZE_BYTES) {
+    errEl.textContent =
+      `File is ${formatBytes(importFile.size)}; the offline-import cap is ${formatBytes(MAX_IMPORT_SIZE_BYTES)}.`;
     errEl.classList.remove('hidden');
     return;
   }
@@ -210,6 +279,11 @@ async function performImport() {
     setStatus(`Imported '${importFile.name}': ${summary}`);
     // Refresh the picker so the user can select the (possibly new) bucket.
     await loadProfiles();
+    // If the user was already viewing that bucket, the sidebar would
+    // otherwise survive on its cached services list (no `change`
+    // event fired because the picker value didn't move) — bust the
+    // cache and re-fetch so the freshly-imported row appears.
+    await refreshServicesIfActiveProfile(outcome.offline_profile_name);
     // Auto-close after a brief moment so the user sees the success line.
     setTimeout(() => closeImportModal(), 1200);
   } catch (e) {

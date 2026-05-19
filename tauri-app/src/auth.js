@@ -119,7 +119,18 @@ export async function removeCurrentProfile() {
     return;
   }
   const name = state.currentProfile;
-  if (!confirm(`Remove profile '${name}'?\n\nThis will also delete its password from the OS keyring.`)) {
+  // Branch the confirmation copy by profile kind: connected profiles
+  // hold a credential entry in the OS keyring (delete-warning relevant);
+  // offline profiles hold cached EDMX files on disk (the actual blast
+  // radius is "this bucket plus every saved/imported service in it").
+  // Using the wrong wording for an offline profile would falsely
+  // alarm the user about touching the credential store.
+  const meta = state.profileMap.get(name);
+  const isOffline = meta?.kind === 'offline';
+  const promptMsg = isOffline
+    ? `Remove offline profile '${name}'?\n\nThis deletes every cached service in this bucket. You can re-save from the live system or re-import from a file to get them back.`
+    : `Remove profile '${name}'?\n\nThis will also delete its password from the OS keyring.`;
+  if (!confirm(promptMsg)) {
     return;
   }
   try {
