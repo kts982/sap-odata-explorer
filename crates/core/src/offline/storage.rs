@@ -49,7 +49,7 @@ use super::paths::{PathError, canonicalize_under, safe_join_under};
 pub enum StorageError {
     #[error("path safety violation: {0}")]
     Path(#[from] PathError),
-    #[error("I/O error during atomic write to {path}: {source}")]
+    #[error("I/O error at {path}: {source}")]
     Io {
         path: PathBuf,
         #[source]

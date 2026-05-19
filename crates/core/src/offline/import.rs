@@ -147,6 +147,11 @@ pub enum ImportError {
     NotEdmxRoot { root_name: String },
 
     #[error(
+        "the selected path is not a regular file (directories, symlinks-to-directories, and other special files cannot be imported as EDMX)."
+    )]
+    NotARegularFile,
+
+    #[error(
         "EDMX wrapper found but no Schema element with a non-empty Namespace — this metadata is empty or truncated."
     )]
     NoSchema,

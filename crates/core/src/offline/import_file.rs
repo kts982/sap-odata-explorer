@@ -375,9 +375,7 @@ pub fn import_edmx_file(
         source: e,
     })?;
     if !pre_meta.is_file() {
-        return Err(SaveError::Validation(ImportError::NotEdmxRoot {
-            root_name: "(not a regular file)".to_string(),
-        }));
+        return Err(SaveError::Validation(ImportError::NotARegularFile));
     }
 
     // 1b. Open the file once, stat the handle, bounded-read.
@@ -690,9 +688,12 @@ mod tests {
         fs::create_dir(&dir_path).unwrap();
         let mut config = ConfigFile::default();
         let err = import_edmx_file(&mut config, &cfg_dir, opts(dir_path, None, None)).unwrap_err();
+        // Distinct variant so the user-facing message says "not a
+        // regular file" rather than the awkward
+        // "document root is `<(not a regular file)>`" of the old shape.
         assert!(matches!(
             err,
-            SaveError::Validation(ImportError::NotEdmxRoot { .. })
+            SaveError::Validation(ImportError::NotARegularFile)
         ));
         cleanup(&dir);
     }
