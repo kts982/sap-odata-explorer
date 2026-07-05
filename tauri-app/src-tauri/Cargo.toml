@@ -2,6 +2,8 @@
 name = "sap-odata-explorer-app"
 version = "0.1.0"
 edition = "2024"
+# Desktop app ships as GitHub Release binaries, never to crates.io.
+publish = false
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -6,9 +6,12 @@ resolver = "2"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+repository = "https://github.com/kts982/sap-odata-explorer"
 
 [workspace.dependencies]
-sap-odata-core = { path = "crates/core" }
+# `version` alongside `path`: local builds resolve via path, `cargo publish`
+# rewrites the dependency to the crates.io version.
+sap-odata-core = { path = "crates/core", version = "0.1.0" }
 anyhow = "1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }

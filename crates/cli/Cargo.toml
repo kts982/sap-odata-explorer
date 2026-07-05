@@ -2,6 +2,12 @@
 name = "sap-odata-cli"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Command-line SAP OData explorer: service discovery, metadata browsing, queries, annotations lint, service health checks, offline EDMX — a fast alternative to /IWFND/GW_CLIENT"
+readme = "../../README.md"
+keywords = ["sap", "odata", "cli", "gateway", "abap"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "sap-odata"

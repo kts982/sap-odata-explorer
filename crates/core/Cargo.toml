@@ -2,6 +2,12 @@
 name = "sap-odata-core"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "SAP OData engine: catalog discovery, V2/V4 metadata parsing, annotations, Fiori-readiness lint, query building, auth/session handling, offline EDMX"
+readme = "../../README.md"
+keywords = ["sap", "odata", "metadata", "edmx", "gateway"]
+categories = ["api-bindings", "parser-implementations"]
 
 [dependencies]
 anyhow.workspace = true
