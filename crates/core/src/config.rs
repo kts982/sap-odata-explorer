@@ -212,11 +212,16 @@ pub fn load_config() -> anyhow::Result<(ConfigFile, ConfigDir)> {
 }
 
 /// Save the config file to the given directory.
+///
+/// Writes via the same temp-file + rename + parent-dir-sync helper the
+/// offline store uses, so a crash mid-write can never leave a truncated
+/// `connections.toml` behind (the offline transaction paths already write
+/// atomically under `SaveLock`; this closes the connected-profile / CLI /
+/// portable-init writes too).
 pub fn save_config(config: &ConfigFile, config_dir: &Path) -> anyhow::Result<PathBuf> {
     std::fs::create_dir_all(config_dir)?;
-    let config_path = config_dir.join(CONFIG_FILENAME);
     let content = toml::to_string_pretty(config)?;
-    std::fs::write(&config_path, &content)?;
+    let config_path = crate::offline::write_toml_atomically(config_dir, CONFIG_FILENAME, &content)?;
     Ok(config_path)
 }
 
