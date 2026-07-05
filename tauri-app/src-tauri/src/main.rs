@@ -1775,6 +1775,48 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(AppState::default())
+        .setup(|_app| {
+            // Non-destructive integrity sweep of the offline library at
+            // boot: reports orphaned EDMX files (on disk, not indexed) and
+            // indexed services whose file is gone, so a crash-interrupted
+            // or hand-edited store surfaces in diagnostics instead of as a
+            // confusing "service won't open" later. Runs off the main
+            // thread — startup never blocks on filesystem walking. The
+            // explicit `sap_odata` target matches the subscriber directive
+            // above; a bare warn! from this binary would be filtered out.
+            std::thread::spawn(|| match config::load_config() {
+                Ok((cfg, config_dir)) => {
+                    let offline_root = config_dir.path.join("offline");
+                    match offline::sweep_offline_dir(&offline_root, &cfg.offline_services) {
+                        Ok(report) => {
+                            for orphan in &report.orphan_files {
+                                tracing::warn!(
+                                    target: "sap_odata",
+                                    "offline sweep: EDMX file has no index entry (safe to delete manually): {}",
+                                    orphan.display()
+                                );
+                            }
+                            for missing in &report.missing_files {
+                                tracing::warn!(
+                                    target: "sap_odata",
+                                    "offline sweep: service '{}' in profile '{}' is missing its EDMX file (expected {}); re-save or delete the service",
+                                    missing.id,
+                                    missing.profile,
+                                    missing.expected_path.display()
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(target: "sap_odata", "offline sweep failed: {e}")
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(target: "sap_odata", "offline sweep skipped, config load failed: {e}")
+                }
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_profiles,
             get_services,
