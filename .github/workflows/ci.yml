@@ -5,10 +5,18 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Weekly advisory sweep: the RustSec DB changes without commits, and
+  # during idle periods push-triggered audits never run (quick-xml got
+  # two high-severity advisories in June 2026 while main sat untouched
+  # for 7 weeks). Scheduled runs execute the audit job only.
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
 
 jobs:
   test:
     name: Build & Test (${{ matrix.os }})
+    if: github.event_name != 'schedule'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -76,6 +84,7 @@ jobs:
 
   frontend-lint:
     name: Frontend safeHtml lint
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
