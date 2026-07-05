@@ -48,9 +48,13 @@ export function wireOfflineButtons() {
   const cancelBtn = document.getElementById('btnImpCancel');
   const browseBtn = document.getElementById('btnImpBrowse');
   const saveImportBtn = document.getElementById('btnImpSave');
+  const soModal = document.getElementById('saveOfflineModal');
+  const soCloseBtn = document.getElementById('btnSaveOfflineClose');
+  const soCancelBtn = document.getElementById('btnSoCancel');
+  const soSubmitBtn = document.getElementById('btnSoSave');
 
   if (saveBtn) {
-    saveBtn.addEventListener('click', saveCurrentServiceOffline);
+    saveBtn.addEventListener('click', openSaveOfflineModal);
   }
   if (importBtn) {
     importBtn.addEventListener('click', openImportModal);
@@ -67,6 +71,15 @@ export function wireOfflineButtons() {
   if (saveImportBtn) {
     saveImportBtn.addEventListener('click', performImport);
   }
+  if (soCloseBtn) {
+    soCloseBtn.addEventListener('click', closeSaveOfflineModal);
+  }
+  if (soCancelBtn) {
+    soCancelBtn.addEventListener('click', closeSaveOfflineModal);
+  }
+  if (soSubmitBtn) {
+    soSubmitBtn.addEventListener('click', performSaveOffline);
+  }
 
   // Dismiss on backdrop click (matches the existing addProfile modal pattern).
   if (modal) {
@@ -74,13 +87,20 @@ export function wireOfflineButtons() {
       if (e.target === modal) closeImportModal();
     });
   }
+  if (soModal) {
+    soModal.addEventListener('click', (e) => {
+      if (e.target === soModal) closeSaveOfflineModal();
+    });
+  }
 }
 
-/// Save-for-offline: call save_service_offline against the active
-/// connected profile + currently-loaded service. The user gets a
-/// status-bar confirmation; on success we reload profiles (a new
-/// `<NAME> (offline)` bucket may have been created).
-async function saveCurrentServiceOffline() {
+/// Open the save-offline modal for the active connected profile +
+/// currently-loaded service. The modal lets the user override the
+/// target bucket / label / note before the capture; submitting with
+/// everything blank behaves exactly like the old one-click save
+/// (backend defaults: bucket `<connected> (offline)`, label derived
+/// from the Schema Namespace).
+async function openSaveOfflineModal() {
   if (!state.currentProfile) {
     setStatus('Select a profile first');
     return;
@@ -93,6 +113,35 @@ async function saveCurrentServiceOffline() {
     setStatus('Load a service first');
     return;
   }
+  const modal = document.getElementById('saveOfflineModal');
+  if (!modal) return;
+  document.getElementById('soServicePath').textContent = state.currentServicePath;
+  document.getElementById('soLabel').value = '';
+  document.getElementById('soNote').value = '';
+  document.getElementById('soError').classList.add('hidden');
+  document.getElementById('soSuccess').classList.add('hidden');
+  const defaultBucket = `${state.currentProfile} (offline)`;
+  await populateOfflineBucketDropdown('soProfile', `${defaultBucket} (default)`, defaultBucket);
+  modal.classList.remove('hidden');
+}
+
+function closeSaveOfflineModal() {
+  const modal = document.getElementById('saveOfflineModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+/// Submit the save-offline modal: call save_service_offline with the
+/// collected overrides (empty fields → null → backend defaults).
+async function performSaveOffline() {
+  const errEl = document.getElementById('soError');
+  const okEl = document.getElementById('soSuccess');
+  errEl.classList.add('hidden');
+  okEl.classList.add('hidden');
+
+  const labelOverride = document.getElementById('soLabel').value.trim() || null;
+  const note = document.getElementById('soNote').value.trim() || null;
+  const targetProfile = document.getElementById('soProfile').value.trim() || null;
+
   setStatus(`Saving ${state.currentServicePath} from '${state.currentProfile}' offline...`);
   try {
     // `save_service_offline` touches the network (fetch_metadata_xml)
@@ -102,11 +151,13 @@ async function saveCurrentServiceOffline() {
     const outcome = await timedInvoke('save_service_offline', {
       connectedProfileName: state.currentProfile,
       servicePath: state.currentServicePath,
-      offlineProfileName: null,
-      labelOverride: null,
-      note: null,
+      offlineProfileName: targetProfile,
+      labelOverride,
+      note,
     });
     const summary = summarizeOutcome(outcome);
+    okEl.textContent = `Saved: ${summary}`;
+    okEl.classList.remove('hidden');
     setStatus(`Offline save: ${summary}`);
     // A new offline bucket may have been created; refresh the picker
     // so the user can pick it.
@@ -115,8 +166,37 @@ async function saveCurrentServiceOffline() {
     // path A — they'd typically be on the connected profile — but
     // possible across tabs), refresh the sidebar so the new row shows.
     await refreshServicesIfActiveProfile(outcome.offline_profile_name);
+    // Auto-close after a brief moment so the user sees the success line.
+    setTimeout(() => closeSaveOfflineModal(), 1200);
   } catch (e) {
+    errEl.textContent = String(e);
+    errEl.classList.remove('hidden');
     setStatus('Save offline failed: ' + e);
+  }
+}
+
+/// Delete one cached service from the active offline bucket. Wired to
+/// the per-row `✕` in the sidebar (app.js click delegation). The GUI
+/// parity half of CLI `offline delete --service-id`; the bucket itself
+/// is kept — removing the whole bucket stays on the profile Remove
+/// button.
+export async function deleteOfflineServiceRow(serviceId) {
+  const profile = state.currentProfile;
+  if (!profile || !serviceId || !isOfflineProfile(profile)) return;
+  const ok = confirm(
+    `Delete '${serviceId}' from offline profile '${profile}'?\n\n` +
+    'The cached EDMX file is removed from disk. The bucket itself is kept.'
+  );
+  if (!ok) return;
+  try {
+    const msg = await invoke('delete_offline_service', {
+      profileName: profile,
+      serviceId,
+    });
+    setStatus(String(msg));
+    await refreshServicesIfActiveProfile(profile);
+  } catch (e) {
+    setStatus('Delete failed: ' + e);
   }
 }
 
@@ -164,7 +244,7 @@ async function openImportModal() {
   document.getElementById('impNote').value = '';
   document.getElementById('impError').classList.add('hidden');
   document.getElementById('impSuccess').classList.add('hidden');
-  await populateImportProfileDropdown();
+  await populateOfflineBucketDropdown('impProfile', 'Imported (default)', 'Imported');
   modal.classList.remove('hidden');
 }
 
@@ -174,16 +254,23 @@ function closeImportModal() {
   importFile = null;
 }
 
-/// Populate the target-offline-profile dropdown with the user's
-/// existing offline buckets (plus a default "Imported" entry).
-async function populateImportProfileDropdown() {
-  const sel = document.getElementById('impProfile');
-  sel.innerHTML = '<option value="">Imported (default)</option>';
+/// Populate a target-offline-profile dropdown with the user's existing
+/// offline buckets. The first entry is always the given default (empty
+/// value → backend picks its own default bucket); `excludeName` skips
+/// the bucket the default already represents so it isn't listed twice.
+/// Shared by the Import-EDMX and Save-offline modals.
+async function populateOfflineBucketDropdown(selectId, defaultLabel, excludeName) {
+  const sel = document.getElementById(selectId);
+  sel.innerHTML = '';
+  const def = document.createElement('option');
+  def.value = '';
+  def.textContent = defaultLabel;
+  sel.appendChild(def);
   try {
     const profiles = await invoke('get_profiles');
     for (const p of profiles) {
       if (p.kind !== 'offline') continue;
-      if (p.name === 'Imported') continue; // already the default
+      if (p.name === excludeName) continue; // already the default
       const opt = document.createElement('option');
       opt.value = p.name;
       opt.textContent = p.name;
@@ -192,7 +279,7 @@ async function populateImportProfileDropdown() {
   } catch (e) {
     // Non-fatal: if get_profiles fails, the modal still works — the
     // user can submit and Tauri will surface a friendlier error.
-    console.warn('Failed to load offline profiles for import dropdown:', e);
+    console.warn('Failed to load offline profiles for dropdown:', e);
   }
 }
 

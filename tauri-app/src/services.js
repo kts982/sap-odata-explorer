@@ -25,6 +25,7 @@ import {
 import { getActiveTab, renderTabBar } from './tabs.js';
 import {
   isBrowserAuthProfile,
+  isOfflineProfile,
   updateProfileAuthUi,
   browserAuthMessage,
 } from './auth.js';
@@ -229,11 +230,19 @@ export function makeSvcItem(svc, starred) {
   div.dataset.action = 'pick-service';
   div.dataset.svc = JSON.stringify(svc);
   const badgeClass = svc.version === 'V4' ? 'badge-v4' : 'badge-v2';
+  // Offline buckets get a per-service delete affordance. For offline
+  // profiles `technical_name` IS the offline service_id (the backend's
+  // get_services maps it that way), so it doubles as the delete key.
+  // Live catalogs never show this — deleting a row only makes sense
+  // for locally-cached EDMX entries.
+  const del = isOfflineProfile(state.currentProfile)
+    ? safeHtml`<span class="svc-star" data-action="delete-offline-service" data-svc-id="${svc.technical_name}" title="Delete from offline library">✕</span>`
+    : '';
   div.innerHTML = safeHtml`
     <div class="flex items-center gap-1.5">
       <span class="text-[9px] px-1 py-px rounded-sm font-mono ${badgeClass}">${svc.version || ''}</span>
       <span class="text-[13px] text-ox-text truncate font-mono flex-1">${svc.technical_name}</span>
-      <span class="svc-star${starred ? ' starred' : ''}" data-action="toggle-favorite" data-svc-name="${svc.technical_name}">${starred ? '★' : '☆'}</span>
+      <span class="svc-star${starred ? ' starred' : ''}" data-action="toggle-favorite" data-svc-name="${svc.technical_name}">${starred ? '★' : '☆'}</span>${raw(del)}
     </div>
     <div class="text-[11px] text-ox-muted truncate mt-0.5 pl-7">${svc.title || svc.description || ''}</div>
   `;

@@ -420,6 +420,47 @@
     </div>
   </div>
 
+  <!-- Save-offline modal: bucket / label / note overrides for the header
+       "Save offline" button. Submitting with everything blank matches the
+       old one-click behavior (backend defaults apply). -->
+  <div id="saveOfflineModal" class="hidden fixed inset-0 z-50 modal-overlay flex items-center justify-center">
+    <div class="modal-content bg-ox-panel border border-ox-border rounded-lg shadow-2xl w-[480px]">
+      <div class="px-5 py-3 border-b border-ox-border flex items-center justify-between">
+        <h3 class="text-sm font-medium text-ox-text">Save service offline</h3>
+        <button id="btnSaveOfflineClose" class="text-ox-dim hover:text-ox-text text-xs px-2 py-0.5 rounded-sm hover:bg-ox-hover">close</button>
+      </div>
+      <div class="p-5 space-y-3">
+        <div>
+          <div class="text-[10px] uppercase tracking-widest text-ox-dim font-medium mb-1">Service</div>
+          <div id="soServicePath" class="text-sm font-mono text-ox-text break-all"></div>
+        </div>
+        <div>
+          <label for="soProfile" class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Target offline profile</label>
+          <select id="soProfile"
+            class="bg-ox-surface text-ox-text text-sm border border-ox-border rounded-md px-3 py-1.5 w-full outline-hidden">
+          </select>
+          <div class="text-[10px] text-ox-dim mt-1">Defaults to a bucket named after the connected profile. Pick another bucket to group services differently.</div>
+        </div>
+        <div>
+          <label for="soLabel" class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Label (optional)</label>
+          <input id="soLabel" type="text" placeholder="Auto-derived from Schema Namespace"
+            class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-hidden" />
+        </div>
+        <div>
+          <label for="soNote" class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Note (optional)</label>
+          <input id="soNote" type="text" placeholder="e.g. Captured before the upgrade"
+            class="bg-ox-surface text-ox-text text-sm border border-ox-border rounded-md px-3 py-1.5 w-full outline-hidden" />
+        </div>
+        <div id="soError" class="text-ox-red text-xs hidden"></div>
+        <div id="soSuccess" class="text-ox-green text-xs hidden"></div>
+      </div>
+      <div class="px-5 py-3 border-t border-ox-border flex items-center justify-end gap-2">
+        <button id="btnSoCancel" class="btn-ghost text-xs px-3 py-1 rounded-sm">Cancel</button>
+        <button id="btnSoSave" class="btn-primary text-xs px-4 py-1 rounded-sm">Save offline</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Filter tooltip (shared singleton) -->
   <div id="filterTooltip" class="hidden"></div>
 

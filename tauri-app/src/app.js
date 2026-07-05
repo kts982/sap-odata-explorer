@@ -20,7 +20,7 @@ import {
   removeCurrentProfile,
   signInCurrentProfile,
 } from './auth.js';
-import { wireOfflineButtons } from './offline.js';
+import { wireOfflineButtons, deleteOfflineServiceRow } from './offline.js';
 import { getFavorites, toggleFavorite } from './favorites.js';
 import {
   loadProfiles,
@@ -484,6 +484,9 @@ document.addEventListener('DOMContentLoaded', () => {
       try { svc = parent ? JSON.parse(parent.dataset.svc) : { technical_name: el.dataset.svcName }; }
       catch { svc = { technical_name: el.dataset.svcName }; }
       toggleFavorite(svc, el);
+    } else if (action === 'delete-offline-service') {
+      e.stopPropagation();
+      deleteOfflineServiceRow(el.dataset.svcId);
     }
   });
 });
