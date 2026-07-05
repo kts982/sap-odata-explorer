@@ -132,7 +132,7 @@ Run `sap-odata profile where` to print the exact path in use. Basic-auth passwor
 5. Click **Search** to browse services and pick one. If your system has the V4 catalog SICF node inactive (`/IWFND/CONFIG` V4 node off — a common customer config), the sidebar shows a hint to paste the full `/sap/opu/odata4/...` path directly into the search box.
 6. Click an entity set in the sidebar → click property names to add them to `$select`, navigation properties to `$expand` → **Run**
 7. Toggle **SAP View** in the status bar to overlay SAP/UI5 annotation hints (entity titles, description pairings, criticality colors, filter restrictions, selection-field chips). Toggle **Inspector** to see the full HTTP trace for the last call.
-8. **Offline mode** is in the header: **Save offline** (visible when a service is loaded on a connected profile) caches the `$metadata` under a `<NAME> (offline)` bucket; **Import EDMX** opens a file picker for EDMX files hand-pulled outside the tool. Offline profiles appear in the picker with an `[OFFLINE]` badge; selecting one lets you browse the cached services normally — Run / query / value-help are disabled (no network).
+8. **Offline mode** is in the header: **Save offline** (visible when a service is loaded on a connected profile) opens a small dialog — pick a target bucket, label, and note, or just hit Save for the defaults — and caches the `$metadata` under a `<NAME> (offline)` bucket; **Import EDMX** opens a file picker for EDMX files hand-pulled outside the tool. Offline profiles appear in the picker with an `[OFFLINE]` badge; selecting one lets you browse the cached services normally — Run / query / value-help are disabled (no network), and each cached row has a `✕` to remove it from the library.
 
 ### CLI
 
