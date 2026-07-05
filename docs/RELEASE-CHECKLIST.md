@@ -4,7 +4,7 @@ Use this before publishing a GitHub release.
 
 ## Release posture
 
-- Mark early releases as pre-release / alpha unless code signing, CI packaging, and broader auth validation are complete.
+- From v0.1.0 on, releases ship as normal (non-prerelease) GitHub releases with the unsigned status documented in the release notes and README. Code signing remains a forward item, not a release gate. Use the pre-release flag only for genuinely unstable interface previews.
 - Keep the README's responsible-use note and SAP non-affiliation note visible.
 - Do not position the project as an autonomous API agent or bulk extraction tool.
 
@@ -66,3 +66,12 @@ Each release **must** attach exactly these five assets so the Installation table
 - Label unsigned Windows artifacts clearly in release notes.
 - Do not attach archives that contain `tmp/`, local configs, traces, credentials, or customer metadata.
 - Submit the four binaries to VirusTotal before publishing. Unsigned Windows binaries normally pick up 1-3 single-vendor ML/reputation hits; the rule to ship on is **Microsoft Defender clean across all artifacts**. Include per-asset SHA256 + VT URLs in a `## Verification` section of the release notes so users can re-check independently — especially helpful for the locked-down-environment audience downloading the portable exe.
+- If VirusTotal's *Microsoft* engine flags a binary, verify with **live Defender** before blocking the release: `MpCmdRun.exe -Scan -ScanType 3 -File <exe>` (exit 0 = clean). VT runs Defender in a more aggressive configuration than the shipping product; its `!ml` hits are config-driven and do not clear on rescan. Live-clean means proceed.
+
+## Distribution channels (after the GitHub release is live)
+
+Run in this order — every channel below references the published release assets.
+
+1. **crates.io** — `cargo publish -p sap-odata-core`, then `cargo publish -p sap-odata-cli` (retry after ~1 min if the CLI publish can't resolve the core version yet). Requires a `cargo login` session with a token scoped to `publish-new`/`publish-update`. Published versions are immutable (yank-only) — treat the publish as part of the release, not a draft.
+2. **Scoop** — in [`kts982/scoop-bucket`](https://github.com/kts982/scoop-bucket): bump `version`, `url`, and `hash` in `bucket/sap-odata.json` (CLI) and `bucket/sap-odata-explorer.json` (portable GUI). Hashes come from the release's `SHA256SUMS.txt`; the manifests' `checkver`/`autoupdate` blocks template the URLs so this is mostly mechanical.
+3. **winget** — manifests live under `packaging/winget/manifests/k/kts982/SAPODataExplorer/<ver>/` (schema 1.12.0, three YAML files). `winget validate` the directory, then `wingetcreate submit --prtitle "Add version: kts982.SAPODataExplorer version <ver>"` (first submission: "New package: …"). The wingetcreate GitHub token is cached machine-wide. wingetbot validation usually runs within minutes; reviewer approval takes hours. A `/AzurePipelines run` PR comment re-triggers flaky single-vendor AV hits.

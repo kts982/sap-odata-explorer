@@ -70,6 +70,23 @@ The CLI and the desktop app share the same `connections.toml` and Windows Creden
 > [!WARNING]
 > Binaries are **unsigned**. Windows SmartScreen will show an "unrecognized app" warning — click **More info → Run anyway**. Code signing is planned.
 
+### Package managers
+
+**Cargo** (CLI, any OS with Rust 1.85+ — builds from source, no SmartScreen involved):
+
+```bash
+cargo install sap-odata-cli
+# → `sap-odata` on your PATH
+```
+
+**Scoop** (Windows):
+
+```powershell
+scoop bucket add kts982 https://github.com/kts982/scoop-bucket
+scoop install sap-odata            # CLI
+scoop install sap-odata-explorer   # Desktop app (portable)
+```
+
 ### Build from source (Linux, macOS, or if you prefer)
 
 **Prerequisites:** Rust 1.85+ ([rustup.rs](https://rustup.rs)) and Node.js 20+ (for the desktop app frontend build).

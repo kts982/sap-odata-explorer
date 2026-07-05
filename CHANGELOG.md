@@ -4,6 +4,35 @@ All notable changes to this project are documented here. Format loosely follows 
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-07-05
+
+**First non-prerelease release.** The interfaces that alpha.1–alpha.4 iterated on — CLI command surface, `connections.toml` schema, offline library layout, `parse_metadata` — are now treated as stable within 0.1.x. Binaries remain unsigned (SmartScreen warning documented in the README); the new package-manager channels below don't depend on signing.
+
+### New — Distribution channels
+
+- **crates.io**: `cargo install sap-odata-cli` builds the CLI from source on any OS with Rust 1.85+ — no SmartScreen, no binary trust question. The shared engine is published alongside as `sap-odata-core`.
+- **Scoop (Windows)**: `scoop bucket add kts982 https://github.com/kts982/scoop-bucket`, then `scoop install sap-odata` (CLI) or `scoop install sap-odata-explorer` (desktop portable).
+- **winget**: submission of the MSI as `kts982.SAPODataExplorer` (available once the winget-pkgs PR is merged; the README gains the install line then).
+
+### New — Offline library polish
+
+- **Per-service delete in the sidebar**: rows in an offline bucket get a `✕` affordance that removes one cached service (confirmation + status-bar result). Closes the GUI-vs-CLI parity gap with `offline delete --service-id`; the bucket itself is kept — bucket removal stays on the profile **−** button.
+- **Save-offline options modal**: the header "Save offline" button now opens a small modal offering target-bucket / label / note overrides before capture. Submitting with everything blank matches the old one-click behavior (backend defaults: bucket `<connected> (offline)`, label derived from Schema Namespace).
+- **Boot-time integrity sweep**: at desktop-app startup, a background thread reconciles the offline index against the files on disk and logs orphaned EDMX files and missing-file services (warn level). Non-destructive — the sweep reports, nothing is deleted.
+
+### Fixes
+
+- **`connections.toml` writes are now crash-safe**: `save_config` routes through the offline store's atomic temp-file + rename + parent-dir-sync helper instead of a truncate-in-place write, so a crash mid-save can no longer leave a torn config. (The offline transaction paths already wrote atomically; this closes the connected-profile / CLI / portable-init paths.)
+
+### Security / CI
+
+- **Dependency advisory fix**: transitive `quick-xml` 0.38.4 (via `plist` → `tauri`, macOS-target-only — not compiled into Windows binaries) carried two DoS advisories (RUSTSEC-2026-0194/0195); bumped `plist` to 1.10 which pulls the patched 0.41.
+- **Weekly scheduled `cargo audit` run** (+ manual dispatch) so RustSec advisories are caught during idle periods, not only on push.
+
+### Internals
+
+- crates.io publish metadata on `sap-odata-core` / `sap-odata-cli`; the desktop app crate is marked `publish = false`.
+
 ## [0.1.0-alpha.4] — 2026-05-19
 
 **Headline:** offline EDMX library — capture `$metadata` from a connected SAP system or import an EDMX file from disk, then browse it in the same desktop UI without any network connection. Designed as a route-around for the unsigned-exe install friction at customer sites: someone with `curl` / `/IWFND/GW_CLIENT` / browser access can pull a `$metadata` document and hand it to a consultant running the explorer on their own laptop.
