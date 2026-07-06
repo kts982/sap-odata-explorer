@@ -175,6 +175,7 @@ If you prefer scripted setup, `sap-odata profile add ...` is still available for
 | `build <set> [query]` | Dry-run: print the OData URL, no HTTP call |
 | `run <set> [query]` | Execute query, show results as table |
 | `metadata` | Dump raw `$metadata` XML |
+| `verify` | Smoke-test every entity set with a small `$top` probe; exit code reflects failures (CI-friendly) |
 | `lint [<entity>]` | Fiori-readiness checklist — check a service's annotations against list-report / object-page expectations, with ABAP CDS fix hints. `--min-severity pass\|warn\|miss` to filter. |
 | `annotations` | List every SAP/UI5 annotation parsed from `$metadata`, grouped by vocabulary. `--namespace` / `--filter` to narrow. |
 | `offline save` | Cache the connected service's `$metadata` for offline browsing. Requires `-p PROFILE -s SERVICE`. |
@@ -183,6 +184,27 @@ If you prefer scripted setup, `sap-odata profile add ...` is still available for
 | `offline delete --profile NAME [--service-id ID]` | Remove a whole bucket or one service. `-y` skips the confirm prompt. |
 
 See [CLI-REFERENCE.md](docs/CLI-REFERENCE.md) for all options (or run `sap-odata <command> --help`).
+
+### Use with AI agents
+
+The CLI is deliberately agent-friendly: `--json` on every command, clean
+stdout (banners and HTTP traces go to stderr), meaningful exit codes, and a
+strictly read-only SAP surface. [`skills/sap-odata-cli/SKILL.md`](skills/sap-odata-cli/SKILL.md)
+is a ready-made skill that teaches a coding agent the safe workflows —
+discovery, describe, queries, lint, offline EDMX — plus the failure
+playbook (SSO expiry, keyring states, unpublished V4 catalogs).
+
+For [Claude Code](https://claude.com/claude-code), copy the folder into your
+skills directory:
+
+```powershell
+# personal (all projects)          # or per-project
+~/.claude/skills/sap-odata-cli/    <project>/.claude/skills/sap-odata-cli/
+```
+
+For other agents (Cursor, Codex, ...), reference the file from your rules /
+`AGENTS.md`. The skill assumes profiles already exist — agents are told to
+never run the interactive `setup` wizard and never to handle passwords.
 
 ## Authentication
 
