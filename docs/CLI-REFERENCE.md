@@ -17,7 +17,10 @@ Full command reference for `sap-odata`. For a quick start, see the [main README]
   - [`build`](#build)
   - [`run`](#run)
   - [`metadata`](#metadata)
+  - [`lint`](#lint)
+  - [`annotations`](#annotations)
   - [`verify`](#verify)
+  - [`offline`](#offline)
   - [`signout`](#signout)
 - [HTTP trace (`--verbose`)](#http-trace---verbose)
 - [Configuration file](#configuration-file)
@@ -405,6 +408,79 @@ sap-odata -p DEV -s API_BUSINESS_PARTNER verify --top 5 --json
 ```
 
 Exit code is `0` when every probe succeeded, `1` if any probe failed. SAP V4 framework sets (`SAP__*`, `__*` prefixes) are skipped — they're runtime plumbing, not part of the data model under test.
+
+### `offline`
+
+Manage the offline EDMX library — locally cached `$metadata` documents.
+Cached services live in buckets ("offline profiles") stored under
+`{config}/offline/<bucket-slug>/<service_id>.edmx` next to `connections.toml`
+(`sap-odata profile where` prints the config location).
+
+**Browsing cached services (entities / describe / lint / annotations) is
+currently a desktop-app feature** — select the `[OFFLINE]` profile there. The
+CLI manages the library; the cached files themselves are plain EDMX XML, so
+any XML-capable tool can read them directly. CLI-side offline browsing is a
+roadmap item.
+
+#### `offline save`
+
+Capture a connected service's `$metadata` into the library. Requires
+`-p PROFILE -s SERVICE`. Re-saving is byte-identical-aware: unchanged
+metadata is skipped, changed metadata overwrites in place under the same
+stable `service_id`.
+
+| Flag | Purpose |
+|---|---|
+| `--offline-profile <name>` | Target bucket. Defaults to `<connected> (offline)`; created if missing. Must not collide with a connected profile name. |
+| `--label <text>` | Override the auto-derived display label (derivation reads the Schema Namespace; V4 SAP services render as e.g. `UI_PHYSSTOCKPROD_1`). |
+| `--note <text>` | Free-form note attached to the entry. |
+
+```bash
+sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 offline save
+sap-odata -p DEV -s API_BUSINESS_PARTNER offline save --offline-profile "Customer X" --note "captured before upgrade"
+```
+
+#### `offline import`
+
+Ingest an EDMX file from disk — no connected profile needed. Accepts SAP API
+Hub `.edmx`, `/IWFND/GW_CLIENT` "Save Response" XML, browser save-as on
+`<base>/$metadata`, or a `curl` dump. The file runs through the full
+validation pipeline (size cap, gzip/HTTP-header sniff, XXE scan, wrong-root
+classification, EDMX structure checks) before anything is persisted.
+
+| Flag | Purpose |
+|---|---|
+| `<file>` (positional) | Path to the EDMX/XML file. Regular file, UTF-8, ≤ 10 MB. |
+| `--offline-profile <name>` | Target bucket. Defaults to `Imported`. |
+| `--label <text>` | Override the auto-derived label (falls back to the filename stem for unknown shapes). |
+| `--note <text>` | Free-form note. |
+
+```bash
+sap-odata offline import api_bp_metadata.xml
+sap-odata offline import warehouse.edmx --offline-profile "Customer X" --label WAREHOUSE_V2
+```
+
+#### `offline list`
+
+```bash
+sap-odata offline list                       # all buckets
+sap-odata offline list --profile "DEV (offline)"   # services + ids in one bucket
+```
+
+With `--profile`, each row shows the `service_id` (used by `-s` and
+`offline delete --service-id`), label, OData version, size, and attribution.
+
+#### `offline delete`
+
+Remove one cached service (`--service-id`) or an entire bucket (omit it).
+Prompts for confirmation unless `-y` is passed. Bucket deletion removes every
+cached file, the bucket directory, and the index entry — same path-boundary
+checks as the GUI's Remove button.
+
+```bash
+sap-odata offline delete --profile "DEV (offline)" --service-id ui_physstockprod_1-a1b2c3d4
+sap-odata offline delete --profile "Imported" -y
+```
 
 ### `signout`
 
