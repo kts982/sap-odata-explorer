@@ -332,10 +332,8 @@ fn classify_wrong_root(xml: &str) -> Option<ImportError> {
     let trimmed = xml.trim_start();
     // Skip optional XML declaration.
     let after_decl = if trimmed.starts_with("<?xml") {
-        match trimmed.find("?>") {
-            Some(end) => trimmed[end + 2..].trim_start(),
-            None => return None,
-        }
+        let end = trimmed.find("?>")?;
+        trimmed[end + 2..].trim_start()
     } else {
         trimmed
     };
