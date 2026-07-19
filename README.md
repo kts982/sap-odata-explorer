@@ -79,6 +79,12 @@ cargo install sap-odata-cli
 # → `sap-odata` on your PATH
 ```
 
+**WinGet** (Windows — desktop app, MSI):
+
+```powershell
+winget install kts982.SAPODataExplorer
+```
+
 **Scoop** (Windows):
 
 ```powershell
