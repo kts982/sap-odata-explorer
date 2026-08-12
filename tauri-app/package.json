@@ -9,8 +9,8 @@
     "tauri": "tauri"
   },
   "devDependencies": {
-    "@tailwindcss/cli": "^4.2.2",
-    "@tauri-apps/api": "^2.10.1",
+    "@tailwindcss/cli": "^4.3.3",
+    "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/cli": "^2",
     "tailwindcss": "^4.2.2"
   }
