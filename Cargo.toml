@@ -31,7 +31,7 @@ directories = "6"
 base64 = "0.22"
 flate2 = "1"
 dialoguer = "0.11"
-sha2 = "0.10"
+sha2 = "0.11"
 time = { version = "0.3", features = ["formatting", "macros"] }
 
 [workspace.dependencies.windows]
