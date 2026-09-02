@@ -35,7 +35,7 @@ sha2 = "0.11"
 time = { version = "0.3", features = ["formatting", "macros"] }
 
 [workspace.dependencies.windows]
-version = "0.61"
+version = "0.62"
 features = [
   "Win32_Security_Authentication_Identity",
   "Win32_Security_Credentials",
