@@ -60,17 +60,25 @@ pub fn parse_metadata(xml: &str) -> Result<ServiceMetadata, crate::error::ODataE
         match version {
             ODataVersion::V4 => {
                 annotation_labels.extend(parse_v4_annotation_labels(schema_node));
-                let alias = schema_node.attribute("Alias").unwrap_or("");
-                annotations.extend(parse_v4_annotations(schema_node, alias));
+                annotations.extend(parse_v4_annotations(schema_node));
                 annotations::apply_v4_typed_annotations(
                     &mut entity_types,
                     &entity_sets,
                     schema_node,
-                    alias,
                 );
             }
             ODataVersion::V2 => {
                 annotations.extend(parse_v2_sap_annotations(schema_node));
+                // SAP V2 services can also carry vocabulary annotations in
+                // `<Annotations Target>` blocks (Capabilities restrictions,
+                // Measures, …) next to the inline `sap:*` attributes. Same
+                // typed pass as V4; labels stay with `sap:label`.
+                annotations.extend(parse_v4_annotations(schema_node));
+                annotations::apply_v4_typed_annotations(
+                    &mut entity_types,
+                    &entity_sets,
+                    schema_node,
+                );
             }
         }
     }
@@ -326,11 +334,11 @@ const SAP_DATA_NS: &str = "http://www.sap.com/Protocols/SAPData";
 /// schema level. Inline `<Annotation>` children directly under `<Property>`
 /// or `<EntityType>` aren't handled in this first slice — SAP services
 /// typically put everything under explicit `<Annotations>` blocks.
-fn parse_v4_annotations(schema: &roxmltree::Node, alias: &str) -> Vec<RawAnnotation> {
+fn parse_v4_annotations(schema: &roxmltree::Node) -> Vec<RawAnnotation> {
     let mut out = Vec::new();
     for annots_node in children_by_tag(schema, "Annotations") {
         let raw_target = annots_node.attribute("Target").unwrap_or("");
-        let target = strip_alias_prefix(raw_target, alias).to_string();
+        let target = strip_alias_prefix(raw_target).to_string();
         for annot in children_by_tag(&annots_node, "Annotation") {
             let term = match annot.attribute("Term") {
                 Some(t) if !t.is_empty() => t.to_string(),
@@ -446,13 +454,12 @@ fn capitalize_first(s: &str) -> String {
 /// Returns a map: "EntityTypeName/PropertyName" → label string.
 fn parse_v4_annotation_labels(schema: &roxmltree::Node) -> HashMap<String, String> {
     let mut labels = HashMap::new();
-    let alias = schema.attribute("Alias").unwrap_or("");
 
     for annots_node in children_by_tag(schema, "Annotations") {
         let target = annots_node.attribute("Target").unwrap_or("");
         // Target is like "SAP__self.WarehouseType/EWMWarehouse" or "SAP__self.WarehouseType"
         // Normalize: strip the alias prefix
-        let target = strip_alias_prefix(target, alias);
+        let target = strip_alias_prefix(target);
 
         for annot in children_by_tag(&annots_node, "Annotation") {
             let term = annot.attribute("Term").unwrap_or("");
@@ -469,18 +476,22 @@ fn parse_v4_annotation_labels(schema: &roxmltree::Node) -> HashMap<String, Strin
     labels
 }
 
-/// Strip alias prefix: "SAP__self.TypeName" → "TypeName", "SAP__self.TypeName/Prop" → "TypeName/Prop"
-pub(super) fn strip_alias_prefix<'a>(target: &'a str, alias: &str) -> &'a str {
-    if !alias.is_empty()
-        && let Some(rest) = target.strip_prefix(alias)
-    {
-        return rest.strip_prefix('.').unwrap_or(rest);
-    }
-    // Fallback: strip first dot-segment if it looks like a namespace
-    if let Some(dot_pos) = target.find('.') {
-        &target[dot_pos + 1..]
-    } else {
-        target
+/// Strip the namespace or alias qualifier from an annotation target:
+/// `SAP__self.TypeName` → `TypeName`, `my.app.Service.Books/title` →
+/// `Books/title`, `ns.Container/Orders` → `Container/Orders`.
+///
+/// EDM simple identifiers can't contain dots, so the qualifier is
+/// everything up to the last dot of the first path segment — whether it's
+/// the schema alias, a multi-part namespace (CAP, unaliased schemas), or
+/// a full namespace used although an alias exists. Dots inside an
+/// overload signature (`ns.Approve(ns.OrderType)`) are not part of it.
+pub(super) fn strip_alias_prefix(target: &str) -> &str {
+    let head_end = target.find('/').unwrap_or(target.len());
+    let head = &target[..head_end];
+    let name_end = head.find('(').unwrap_or(head.len());
+    match head[..name_end].rfind('.') {
+        Some(dot) => &target[dot + 1..],
+        None => target,
     }
 }
 
@@ -555,6 +566,147 @@ mod tests {
     </Schema>
   </edmx:DataServices>
 </edmx:Edmx>"#;
+
+    #[test]
+    fn strip_alias_prefix_handles_aliases_namespaces_and_overloads() {
+        assert_eq!(strip_alias_prefix("SAP__self.OrderType"), "OrderType");
+        assert_eq!(
+            strip_alias_prefix("SAP__self.OrderType/Product"),
+            "OrderType/Product"
+        );
+        assert_eq!(strip_alias_prefix("my.app.CatalogService.Books"), "Books");
+        assert_eq!(
+            strip_alias_prefix("my.app.CatalogService.Books/title"),
+            "Books/title"
+        );
+        assert_eq!(
+            strip_alias_prefix("my.ns.Container/Orders"),
+            "Container/Orders"
+        );
+        assert_eq!(
+            strip_alias_prefix("SAP__self.Approve(SAP__self.OrderType)"),
+            "Approve(SAP__self.OrderType)"
+        );
+        assert_eq!(strip_alias_prefix("OrderType"), "OrderType");
+    }
+
+    #[test]
+    fn full_namespace_targets_are_applied() {
+        // CAP-style: dotted namespace, no alias — and a target spelled with
+        // the full namespace although an alias exists. Both used to lose
+        // every typed annotation.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="my.app.CatalogService">
+      <EntityType Name="Books">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.Int32" Nullable="false"/>
+        <Property Name="title" Type="Edm.String"/>
+        <Property Name="authorName" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="EntityContainer"><EntitySet Name="Books" EntityType="my.app.CatalogService.Books"/></EntityContainer>
+      <Annotations Target="my.app.CatalogService.Books">
+        <Annotation Term="UI.HeaderInfo">
+          <Record>
+            <PropertyValue Property="TypeName" String="Book"/>
+            <PropertyValue Property="TypeNamePlural" String="Books"/>
+          </Record>
+        </Annotation>
+        <Annotation Term="UI.LineItem">
+          <Collection>
+            <Record Type="UI.DataField"><PropertyValue Property="Value" Path="title"/></Record>
+          </Collection>
+        </Annotation>
+      </Annotations>
+      <Annotations Target="my.app.CatalogService.Books/ID">
+        <Annotation Term="Common.Text" Path="title"/>
+      </Annotations>
+    </Schema>
+    <Schema Namespace="com.sap.gateway.srvd.zorders.v0001" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="SAP__self.OrderType"/></EntityContainer>
+      <Annotations Target="com.sap.gateway.srvd.zorders.v0001.OrderType">
+        <Annotation Term="SAP__UI.HeaderInfo">
+          <Record><PropertyValue Property="TypeName" String="Order"/></Record>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let books = meta.find_entity_type("Books").unwrap();
+        assert!(
+            books.header_info.is_some(),
+            "HeaderInfo on a dotted-namespace target"
+        );
+        assert_eq!(books.line_item.len(), 1);
+        assert_eq!(
+            books
+                .properties
+                .iter()
+                .find(|p| p.name == "ID")
+                .unwrap()
+                .text_path
+                .as_deref(),
+            Some("title")
+        );
+        let orders = meta.find_entity_type("OrderType").unwrap();
+        assert!(
+            orders.header_info.is_some(),
+            "full namespace although an alias exists"
+        );
+    }
+
+    #[test]
+    fn v2_annotations_blocks_are_applied() {
+        // SAP V2 services ship Capabilities in `<Annotations>` blocks next
+        // to the inline sap:* attributes (seen on S/4HANA API services).
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="1.0" xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx" xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata" xmlns:sap="http://www.sap.com/Protocols/SAPData">
+  <edmx:DataServices m:DataServiceVersion="2.0">
+    <Schema Namespace="API_ORDERS_SRV" xmlns="http://schemas.microsoft.com/ado/2008/09/edm">
+      <EntityType Name="A_OrderType">
+        <Key><PropertyRef Name="Order"/></Key>
+        <Property Name="Order" Type="Edm.String" Nullable="false" sap:label="Order"/>
+        <Property Name="Note" Type="Edm.String" sap:label="Note"/>
+      </EntityType>
+      <EntityContainer Name="API_ORDERS_SRV_Entities" m:IsDefaultEntityContainer="true">
+        <EntitySet Name="A_Order" EntityType="API_ORDERS_SRV.A_OrderType"/>
+      </EntityContainer>
+      <Annotations Target="API_ORDERS_SRV.API_ORDERS_SRV_Entities/A_Order" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+        <Annotation Term="Capabilities.FilterRestrictions">
+          <Record>
+            <PropertyValue Property="NonFilterableProperties">
+              <Collection><PropertyPath>Note</PropertyPath></Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        assert_eq!(meta.version, ODataVersion::V2);
+        let et = meta.find_entity_type("A_OrderType").unwrap();
+        let note = et.properties.iter().find(|p| p.name == "Note").unwrap();
+        assert_eq!(
+            note.filterable,
+            Some(false),
+            "Capabilities from a V2 Annotations block"
+        );
+        assert!(
+            meta.annotations
+                .iter()
+                .any(|a| a.term.ends_with("FilterRestrictions")),
+            "raw annotation recorded for the inspector"
+        );
+        // sap:* attributes still parse as before.
+        assert_eq!(note.label.as_deref(), Some("Note"));
+    }
 
     #[test]
     fn test_parse_v2_metadata() {

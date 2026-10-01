@@ -40,7 +40,6 @@ pub(super) fn apply_v4_typed_annotations(
     entity_types: &mut [EntityType],
     entity_sets: &[EntitySet],
     schema: &roxmltree::Node,
-    alias: &str,
 ) {
     // Entity-type-level `UI.TextArrangement` defaults, applied after the
     // loop so `Common.Text` annotations declared later in the file are
@@ -49,7 +48,7 @@ pub(super) fn apply_v4_typed_annotations(
 
     for annots_node in children_by_tag(schema, "Annotations") {
         let raw_target = annots_node.attribute("Target").unwrap_or("");
-        let target = strip_alias_prefix(raw_target, alias);
+        let target = strip_alias_prefix(raw_target);
 
         for annot in children_by_tag(&annots_node, "Annotation") {
             let term = annot.attribute("Term").unwrap_or("");

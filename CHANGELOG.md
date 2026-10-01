@@ -38,6 +38,11 @@ All notable changes to this project are documented here. Format loosely follows 
 - `UI.LineItem` keeps `DataFieldWithUrl` / `WithIntentBasedNavigation` / `WithNavigationPath` / `WithAction` columns (only `DataFieldFor*` are not columns).
 - An entity-level `UI.TextArrangement` applies only to properties with a `Common.Text`, so `text_arrangement_lonely` no longer flags the description columns themselves.
 
+### Fixes — Metadata parsing
+
+- Annotation targets written with a **full or multi-part namespace** (CAP-style `my.app.CatalogService.Books`, or the full namespace although the schema declares an alias) were silently dropped — HeaderInfo, LineItem, Text and friends lost, lint reporting false misses. Targets are now resolved by stripping the qualifier up to the last dot of the first path segment.
+- **V2 `<Annotations>` blocks are read.** SAP V2 services carry vocabulary annotations (Capabilities restrictions, Measures, …) in `<Annotations>` blocks next to the inline `sap:*` attributes; they were ignored entirely. They now go through the same typed pass as V4 and show in the annotation inspector.
+
 ### Fixes — Desktop app
 
 - **Stale responses no longer win.** A slower, older response could render into the same tab: a catalog from the previous profile after a profile switch, rows from the previous entity set, or an earlier run overwriting a re-run.
