@@ -20,7 +20,11 @@ pub enum ODataError {
     #[error("service not found: {0}")]
     ServiceNotFound(String),
 
-    #[error("response parse error: {0}")]
+    /// Non-success HTTP status ("server returned 400 Bad Request …") or
+    /// an unparseable body ("invalid JSON response: …"). The message is
+    /// self-describing; no prefix, since most of these are not parse
+    /// failures at all.
+    #[error("{0}")]
     ResponseParse(String),
 
     #[error("invalid URL: {0}")]

@@ -698,15 +698,27 @@ fn extract_sap_error_code(body: &str) -> Option<String> {
 
 /// Try to extract a meaningful error message from a SAP error response body.
 fn extract_sap_error(body: &str) -> Option<String> {
-    // Try JSON: { "error": { "message": { "value": "..." } } }
+    // JSON envelopes:
+    // - V2: { "error": { "message": { "lang": "en", "value": "..." } } }
+    // - V4: { "error": { "code": "...", "message": "...", "details": [ { "message": "..." } ] } }
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(body)
-        && let Some(msg) = json
-            .get("error")
-            .and_then(|e| e.get("message"))
-            .and_then(|m| m.get("value"))
-            .and_then(|v| v.as_str())
+        && let Some(err) = json.get("error")
     {
-        return Some(msg.to_string());
+        fn non_empty(v: Option<&serde_json::Value>) -> Option<&str> {
+            v?.as_str().map(str::trim).filter(|t| !t.is_empty())
+        }
+        let message = err.get("message");
+        let text = non_empty(message)
+            .or_else(|| non_empty(message.and_then(|m| m.get("value"))))
+            .or_else(|| {
+                err.get("details")?
+                    .as_array()?
+                    .iter()
+                    .find_map(|e| non_empty(e.get("message")))
+            });
+        if let Some(text) = text {
+            return Some(text.to_string());
+        }
     }
     // Try XML: look for <message>...</message>
     if let Ok(doc) = roxmltree::Document::parse(body) {

@@ -16,8 +16,8 @@ const SERVICE_PATH: &str = "/sap/opu/odata/test";
 // ── SAP error envelopes ───────────────────────────────────────────────────
 
 #[tokio::test]
-async fn extracts_message_from_v4_json_error_envelope() {
-    // OData V4/V2 error JSON shape: { "error": { "message": { "value": "..." } } }
+async fn extracts_message_from_v2_json_error_envelope() {
+    // OData V2 error JSON shape: { "error": { "message": { "value": "..." } } }
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -49,6 +49,73 @@ async fn extracts_message_from_v4_json_error_envelope() {
         }
         other => panic!("expected ResponseParse, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn extracts_message_from_v4_json_error_envelope() {
+    // OData V4 shape: `message` is a plain string, not `{ value }`. Body
+    // modelled on a real SAP RAP response to a bad $filter.
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path(SERVICE_PATH))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path(format!("{SERVICE_PATH}/$metadata")))
+        .respond_with(ResponseTemplate::new(400).set_body_raw(
+            r#"{"error":{"code":"/IWCOR/CX_OD_EXPR_PARSER_ERROR/0123456789ABCDEF0123456789ABCDEF","message":"Invalid token 'NoSuchProperty' at position '1'","@SAP__common.ExceptionCategory":"Client_Error","innererror":{"ErrorDetails":{"@SAP__common.Application":{"ServiceRepository":"SRVD"}}}}}"#,
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
+    let client = common::basic_client(&server);
+    let err = client
+        .fetch_metadata(SERVICE_PATH)
+        .await
+        .expect_err("400 should fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Invalid token 'NoSuchProperty' at position '1'"),
+        "expected V4 SAP message to be surfaced, got: {msg}"
+    );
+    assert!(
+        !msg.contains("parse error"),
+        "an HTTP 400 is not a parse error: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn extracts_message_from_v4_error_details_when_top_level_is_empty() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path(SERVICE_PATH))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path(format!("{SERVICE_PATH}/$metadata")))
+        .respond_with(ResponseTemplate::new(400).set_body_raw(
+            r#"{"error":{"code":"X/1","message":"","details":[{"code":"X/2","message":"Plant 1000 is locked"}]}}"#,
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
+    let client = common::basic_client(&server);
+    let err = client
+        .fetch_metadata(SERVICE_PATH)
+        .await
+        .expect_err("400 should fail");
+    assert!(
+        err.to_string().contains("Plant 1000 is locked"),
+        "got: {err}"
+    );
 }
 
 #[tokio::test]
