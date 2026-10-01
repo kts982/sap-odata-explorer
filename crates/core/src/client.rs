@@ -275,6 +275,15 @@ impl SapClient {
                 .read_response_text(trace_id, resp)
                 .await
                 .unwrap_or_default();
+            if is_unknown_service_403(status, &body) {
+                return Err(response_error(
+                    status,
+                    &response_url,
+                    response_content_type.as_deref(),
+                    &body,
+                    &self.connection.auth,
+                ));
+            }
             return Err(ODataError::AuthFailed(auth_error_detail(
                 status,
                 &response_url,
@@ -531,6 +540,14 @@ fn response_content_type(resp: &Response) -> Option<String> {
         .map(String::from)
 }
 
+/// SAP Gateway answers a request for an unregistered service (wrong
+/// path, wrong version, not activated) with 403 and "No service found for
+/// namespace …" — not an authorization problem, despite the status.
+fn is_unknown_service_403(status: StatusCode, body: &str) -> bool {
+    status == StatusCode::FORBIDDEN
+        && extract_sap_error(body).is_some_and(|m| m.contains("No service found for namespace"))
+}
+
 fn response_error(
     status: StatusCode,
     url: &str,
@@ -538,16 +555,21 @@ fn response_error(
     body: &str,
     auth: &AuthConfig,
 ) -> ODataError {
-    if status == StatusCode::NOT_FOUND {
+    if status == StatusCode::NOT_FOUND || is_unknown_service_403(status, body) {
         let path = url::Url::parse(url)
             .ok()
             .map(|parsed| parsed.path().to_string())
             .unwrap_or_else(|| url.to_string());
-        let hint = response_hint(status, url, content_type, body, auth);
-        return ODataError::ServiceNotFound(match hint {
-            Some(hint) => format!("{path}\n  Hint: {hint}"),
-            None => path,
-        });
+        let mut detail = path;
+        if status == StatusCode::FORBIDDEN
+            && let Some(msg) = extract_sap_error(body)
+        {
+            detail.push_str(&format!("\n  SAP error: {msg}"));
+        }
+        if let Some(hint) = response_hint(status, url, content_type, body, auth) {
+            detail.push_str(&format!("\n  Hint: {hint}"));
+        }
+        return ODataError::ServiceNotFound(detail);
     }
 
     if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
@@ -624,6 +646,13 @@ pub fn response_hint(
                     .to_string(),
             );
         }
+    }
+
+    if is_unknown_service_403(status, body) {
+        return Some(
+            "SAP Gateway has no service registered under this path. Check the path and its version (`services` lists registered service URLs) and that the service is activated — /IWFND/MAINT_SERVICE for V2, /IWFND/V4_ADMIN for V4. This 403 is not an authorization problem."
+                .to_string(),
+        );
     }
 
     if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {

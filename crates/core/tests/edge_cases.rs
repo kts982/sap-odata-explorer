@@ -384,3 +384,53 @@ async fn transport_errors_include_the_root_cause() {
     let tail = msg.split("): ").nth(1).unwrap_or("");
     assert!(!tail.trim().is_empty(), "missing root cause: {msg}");
 }
+
+#[tokio::test]
+async fn gateway_403_no_service_found_is_reported_as_service_not_found() {
+    // SAP Gateway answers an unregistered service path with 403 — not an
+    // auth problem, so it must not get the "check password / SU53" hint.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(SERVICE_PATH))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{SERVICE_PATH}/$metadata")))
+        .respond_with(ResponseTemplate::new(403).set_body_raw(
+            r#"{"error":{"code":"/IWFND/MED/170","message":{"lang":"en","value":"No service found for namespace '', name 'ZSAMPLE_ORDERS_SRV', version '0001'"}}}"#,
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
+    let client = common::basic_client(&server);
+    let err = client.fetch_metadata(SERVICE_PATH).await.unwrap_err();
+    assert!(matches!(err, ODataError::ServiceNotFound(_)), "got {err:?}");
+    let msg = err.to_string();
+    assert!(msg.contains("No service found for namespace"), "{msg}");
+    assert!(msg.contains("not an authorization problem"), "{msg}");
+    assert!(
+        !msg.contains("SU53"),
+        "must not blame authorizations: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn gateway_403_no_service_found_on_the_session_request() {
+    // Same SAP answer, but already on the session-establishing GET of the
+    // service root (the usual case for a mistyped path).
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(SERVICE_PATH))
+        .respond_with(ResponseTemplate::new(403).set_body_raw(
+            r#"{"error":{"code":"/IWFND/MED/170","message":{"lang":"en","value":"No service found for namespace '', name 'X', version '0001'"}}}"#,
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
+    let client = common::basic_client(&server);
+    let err = client.fetch_metadata(SERVICE_PATH).await.unwrap_err();
+    assert!(matches!(err, ODataError::ServiceNotFound(_)), "got {err:?}");
+}
