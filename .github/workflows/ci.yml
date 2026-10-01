@@ -114,3 +114,8 @@ jobs:
         # future regression in html.js (e.g. dropping quote escaping)
         # fails the build immediately, not after a security review.
         run: node scripts/test-safe-html.mjs
+      - name: OData filter-literal formatting
+        # V2 and V4 spell Guid / DateTime / DateTimeOffset / Date / Time
+        # literals differently; every $filter the desktop app writes for
+        # the user goes through formatODataLiteral.
+        run: node scripts/test-odata-literals.mjs

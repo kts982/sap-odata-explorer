@@ -16,9 +16,9 @@
 
 import { state } from './state.js';
 import { safeHtml, raw } from './html.js';
-import { formatODataLiteral } from './format.js';
+import { formatODataLiteral, serviceODataVersion, containsClause } from './format.js';
 import { setStatus } from './status.js';
-import { getActiveTab } from './tabs.js';
+import { getActiveTab, currentDescribeInfo } from './tabs.js';
 
 // SAP view helper: render small pills for property-level restrictions.
 // We only surface *deviations from the default* — filterable/sortable/
@@ -236,7 +236,7 @@ export function renderSelectionFieldsBar(info) {
 
 export function openFilterBar() {
   const tab = getActiveTab();
-  const info = tab && tab._lastDescribeInfo;
+  const info = currentDescribeInfo(tab);
   if (!info || !Array.isArray(info.selection_fields) || info.selection_fields.length === 0) {
     setStatus('This entity declares no UI.SelectionFields.');
     return;
@@ -333,8 +333,9 @@ export function onFilterBarOpChange(selectEl) {
 // using the property's edm_type. Clauses are joined with `and`.
 export function buildFilterBarExpression() {
   const tab = getActiveTab();
-  const info = tab && tab._lastDescribeInfo;
+  const info = currentDescribeInfo(tab);
   if (!info) return '';
+  const version = serviceODataVersion(tab);
   const propByName = new Map(info.properties.map(p => [p.name, p]));
   const clauses = [];
   const rows = document.querySelectorAll('#fbRows [data-fb-row]');
@@ -345,14 +346,14 @@ export function buildFilterBarExpression() {
     const op = row.querySelector('[data-fb="op"]').value;
     const val = row.querySelector('[data-fb="value"]').value.trim();
     if (val === '') return;
-    const lit = formatODataLiteral(val, prop.edm_type);
+    const lit = formatODataLiteral(val, prop.edm_type, version);
     let clause;
     switch (op) {
       case 'eq': case 'ne': case 'gt': case 'ge': case 'lt': case 'le':
         clause = `${name} ${op} ${lit}`;
         break;
       case 'contains':
-        clause = `contains(${name},${lit})`;
+        clause = containsClause(name, lit, version);
         break;
       case 'startswith':
         clause = `startswith(${name},${lit})`;
@@ -366,7 +367,7 @@ export function buildFilterBarExpression() {
         if (!highVal) {
           clause = `${name} ge ${lit}`; // degraded form — no upper bound given
         } else {
-          const highLit = formatODataLiteral(highVal, prop.edm_type);
+          const highLit = formatODataLiteral(highVal, prop.edm_type, version);
           clause = `(${name} ge ${lit} and ${name} le ${highLit})`;
         }
         break;

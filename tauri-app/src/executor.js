@@ -16,7 +16,7 @@ import { state } from './state.js';
 import { setStatus } from './status.js';
 import { safeHtml } from './html.js';
 import { tabScope, timedInvoke } from './api.js';
-import { getActiveTab } from './tabs.js';
+import { getActiveTab, currentDescribeInfo } from './tabs.js';
 import { showSapViewWarnings, validateQueryRestrictions } from './query.js';
 import { isBrowserAuthProfile, browserAuthMessage } from './auth.js';
 import { addToHistory } from './history.js';
@@ -60,9 +60,8 @@ export async function executeQuery(asJson = false) {
   // server's response is the final word. We just make the context
   // visible before hitting send.
   if (state.sapViewEnabled) {
-    const tab = getActiveTab();
-    const info = tab && tab._lastDescribeInfo;
-    if (info && info.name && state.currentEntitySet === document.getElementById('queryEntitySet').textContent) {
+    const info = currentDescribeInfo(getActiveTab());
+    if (info && info.name) {
       showSapViewWarnings(validateQueryRestrictions(params, info));
     } else {
       showSapViewWarnings([]);
@@ -73,7 +72,7 @@ export async function executeQuery(asJson = false) {
 
   setStatus(`Querying ${state.currentEntitySet}...`);
   const queryStart = performance.now();
-  const scope = tabScope();
+  const scope = tabScope('query');
 
   try {
     const data = await timedInvoke('run_query', {

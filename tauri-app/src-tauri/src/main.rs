@@ -86,6 +86,10 @@ struct EntitySetInfo {
 struct EntityListResponse {
     entity_sets: Vec<EntitySetInfo>,
     annotation_summary: AnnotationSummary,
+    /// "V2" or "V4", from the parsed `$metadata`. The frontend needs it to
+    /// format filter literals, and a pasted service path has no catalog
+    /// entry to take it from.
+    odata_version: &'static str,
 }
 
 #[derive(Serialize)]
@@ -892,6 +896,10 @@ async fn get_entities(
         data: EntityListResponse {
             entity_sets,
             annotation_summary,
+            odata_version: match meta.version {
+                sap_odata_core::metadata::ODataVersion::V2 => "V2",
+                sap_odata_core::metadata::ODataVersion::V4 => "V4",
+            },
         },
         trace,
     })

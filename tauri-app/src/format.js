@@ -107,15 +107,58 @@ export function formatSapTime(s) {
   return s;
 }
 
-// OData v4 literal formatting by edm type — enough for the picker's
-// `local eq <lit>` clauses. Falls back to single-quoted strings for
-// unknown types since that's what SAP services overwhelmingly expect.
-export function formatODataLiteral(value, edmType) {
-  const t = (edmType || '').replace('Edm.', '');
+// OData version ('V2' | 'V4') of a tab's service: the $metadata-derived
+// value once loaded, else SAP's path convention (/sap/opu/odata4/ = V4).
+export function serviceODataVersion(tab) {
+  if (tab && tab.serviceVersion) return tab.serviceVersion;
+  const path = (tab && tab.servicePath) || '';
+  return path.includes('/sap/opu/odata/') ? 'V2' : 'V4';
+}
+
+// `/Date(1700000000000)/` or `/Date(1700000000000+0060)/` — the V2 JSON
+// date shape, which is what result cells and value-help rows carry.
+function parseMsDate(s) {
+  const m = /^\/Date\((-?\d+)(?:[+-]\d{4})?\)\/$/.exec(s);
+  return m ? new Date(Number(m[1])) : null;
+}
+
+function isoWithoutMillis(d) {
+  return d.toISOString().replace(/\.000Z$/, 'Z');
+}
+
+// `13:20` / `13:20:05` → `PT13H20M05S` (V2 Edm.Time).
+function clockToDuration(s) {
+  const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(s);
+  return m ? `PT${m[1].padStart(2, '0')}H${m[2]}M${m[3] || '00'}S` : s;
+}
+
+// `PT13H20M05S` → `13:20:05` (V4 Edm.TimeOfDay).
+function durationToClock(s) {
+  const m = /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$/.exec(s);
+  if (!m) return s;
+  const pad = v => String(v || 0).padStart(2, '0');
+  return `${pad(m[1])}:${pad(m[2])}:${pad(m[3])}`;
+}
+
+const NUMERIC_LITERAL = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+
+// OData literal for `<property> eq <lit>`-style clauses, by EDM type and
+// OData version. V2 and V4 disagree on most non-string types: V2 needs
+// `guid'…'`, `datetime'…'`, `datetimeoffset'…'`, `time'PT…'`; V4 writes
+// GUIDs, dates, times and timestamps bare. Values are accepted in the
+// shapes the UI sees — what the user typed, or a raw V2/V4 JSON value
+// from a result cell / value-help row (`/Date(…)/`, `PT…`, ISO).
+// Unknown types fall back to a quoted string.
+export function formatODataLiteral(value, edmType, version = 'V4') {
+  if (value === null || value === undefined) return 'null';
+  const t = (edmType || '').replace(/^Edm\./, '');
+  const v2 = version === 'V2';
   const s = String(value);
+  const quoted = () => `'${s.replace(/'/g, "''")}'`;
+  const bare = s.trim();
   switch (t) {
     case 'Boolean':
-      return s === 'true' || s === 'false' ? s : `'${s.replace(/'/g, "''")}'`;
+      return bare === 'true' || bare === 'false' ? bare : quoted();
     case 'Byte':
     case 'SByte':
     case 'Int16':
@@ -124,16 +167,47 @@ export function formatODataLiteral(value, edmType) {
     case 'Decimal':
     case 'Double':
     case 'Single':
-      return s;
-    case 'Guid':
-      return `guid'${s}'`;
-    case 'DateTime':
-      return `datetime'${s}'`;
-    case 'DateTimeOffset':
-      return s;
+      // Anything non-numeric stays quoted so the server reports a type
+      // error instead of reading it as part of the expression.
+      return NUMERIC_LITERAL.test(bare) ? bare : quoted();
+    case 'Guid': {
+      const g = bare.replace(/^guid'(.*)'$/i, '$1');
+      return v2 ? `guid'${g}'` : g;
+    }
+    case 'DateTime': {
+      // V2-only type, offset-less: datetime'2026-01-01T00:00:00'.
+      const d = parseMsDate(bare);
+      let iso = d ? isoWithoutMillis(d).replace(/Z$/, '') : bare;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) iso += 'T00:00:00';
+      return `datetime'${iso}'`;
+    }
+    case 'DateTimeOffset': {
+      const d = parseMsDate(bare);
+      let iso = d ? isoWithoutMillis(d) : bare;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) iso += 'T00:00:00Z';
+      return v2 ? `datetimeoffset'${iso}'` : iso;
+    }
+    case 'Date': {
+      const d = parseMsDate(bare);
+      return d ? d.toISOString().slice(0, 10) : bare;
+    }
+    case 'TimeOfDay':
+      return durationToClock(bare);
+    case 'Time':
+      return `time'${clockToDuration(bare)}'`;
+    case 'Duration':
+      return `duration'${bare}'`;
     default:
-      return `'${s.replace(/'/g, "''")}'`;
+      return quoted();
   }
+}
+
+// `contains(prop, lit)` in V4; V2 has no `contains` and spells the same
+// test `substringof(lit, prop)`.
+export function containsClause(property, literal, version) {
+  return version === 'V2'
+    ? `substringof(${literal},${property})`
+    : `contains(${property},${literal})`;
 }
 
 // Compact summary of a ValueList's parameter bindings for the marker

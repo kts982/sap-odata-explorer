@@ -22,7 +22,7 @@ import {
   timedInvoke,
   updateServicePathBar,
 } from './api.js';
-import { getActiveTab, renderTabBar } from './tabs.js';
+import { getActiveTab, renderTabBar, describeContextKey } from './tabs.js';
 import {
   isBrowserAuthProfile,
   isOfflineProfile,
@@ -136,7 +136,7 @@ export async function searchServices(query) {
   }
 
   setStatus(query ? `Searching '${query}'...` : 'Loading catalog...');
-  const scope = tabScope();
+  const scope = tabScope('service');
 
   try {
     if (!state.cachedServices) {
@@ -374,7 +374,7 @@ export async function pickService(svc) {
 export async function resolveAndLoadService(input, versionHint) {
   if (!state.currentProfile) return;
   setStatus(`Resolving '${input}'...`);
-  const scope = tabScope();
+  const scope = tabScope('service');
 
   try {
     let path;
@@ -418,6 +418,12 @@ export async function resolveAndLoadService(input, versionHint) {
     if (tab) {
       tab.entitySets = entities;
       tab.annotationSummary = summary;
+      // Authoritative version from $metadata (pasted paths have no
+      // catalog hint). Drives filter-literal syntax and the path badge.
+      if (response.odata_version) {
+        tab.serviceVersion = response.odata_version;
+        updateServicePathBar(tab);
+      }
     }
     renderEntityList(entities);
     renderAnnotationBadge(summary);
@@ -495,7 +501,7 @@ export async function selectEntity(entitySetName, element) {
   resetResultsArea();
 
   setStatus(`Describing ${entitySetName}...`);
-  const scope = tabScope();
+  const scope = tabScope('entity');
   try {
     const info = await timedInvoke('describe_entity', {
       profileName: state.currentProfile,
@@ -503,6 +509,7 @@ export async function selectEntity(entitySetName, element) {
       entitySet: entitySetName,
     });
     if (!scope.active()) return;
+    if (tab) tab._lastDescribeContext = describeContextKey(tab);
     renderDescribe(info);
     setStatus(`${entitySetName} — ${info.properties.length} props, ${info.nav_properties.length} navs`);
   } catch (e) {

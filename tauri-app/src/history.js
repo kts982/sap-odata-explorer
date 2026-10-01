@@ -14,10 +14,15 @@ import { state } from './state.js';
 import { safeHtml, raw } from './html.js';
 import { getActiveTab } from './tabs.js';
 import { executeQuery } from './executor.js';
+import { selectEntity } from './services.js';
+import { setStatus } from './status.js';
 
 export function addToHistory(tab, params, rowCount, elapsed) {
   const entry = {
     ts: new Date(),
+    // Where the query ran — replay refuses a different profile/service.
+    profile: tab.profile,
+    servicePath: tab.servicePath,
     entitySet: params.entity_set,
     params: { ...params },
     rowCount,
@@ -51,7 +56,7 @@ export function renderHistoryPanel(tab) {
   const rows = tab.queryHistory.map((h, i) => {
     const time = h.ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     return safeHtml`
-      <div class="history-item" data-action="replay-history" data-idx="${i}">
+      <div class="history-item" data-action="replay-history" data-idx="${i}" title="${h.profile || ''} · ${h.servicePath || ''}">
         <span class="text-ox-amber shrink-0">${h.entitySet}</span>
         <span class="text-ox-dim flex-1 truncate">${h.summary}</span>
         <span class="text-ox-dim shrink-0">${h.rowCount}r</span>
@@ -68,16 +73,24 @@ export function renderHistoryPanel(tab) {
   panel.innerHTML = html;
 }
 
-export function replayHistory(idx) {
+export async function replayHistory(idx) {
   const tab = getActiveTab();
   if (!tab) return;
   const h = tab.queryHistory[idx];
   if (!h) return;
-  // Restore entity set and params into query bar
-  if (h.entitySet) {
-    state.currentEntitySet = h.entitySet;
-    tab.entitySet = h.entitySet;
-    document.getElementById('queryEntitySet').textContent = h.entitySet;
+  // The entry's entity set only exists on the service it ran against.
+  if (h.profile !== tab.profile || h.servicePath !== tab.servicePath) {
+    const svc = (h.servicePath || '').split('/').filter(Boolean).pop() || h.servicePath;
+    setStatus(`That query ran on ${h.profile} · ${svc} — open that service to replay it`);
+    return;
+  }
+  // Another entity set: select it so describe info (SAP View reshaping,
+  // pre-flight warnings) matches the replayed query.
+  if (h.entitySet && h.entitySet !== state.currentEntitySet) {
+    const row = [...document.querySelectorAll('[data-action="select-entity"]')]
+      .find(el => el.dataset.entityName === h.entitySet);
+    await selectEntity(h.entitySet, row || null);
+    if (getActiveTab() !== tab || state.currentEntitySet !== h.entitySet) return;
   }
   document.getElementById('qSelect').value  = h.params.select  || '';
   document.getElementById('qFilter').value  = h.params.filter  || '';

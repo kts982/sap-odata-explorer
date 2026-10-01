@@ -9,8 +9,8 @@
 
 import { state } from './state.js';
 import { safeHtml, raw } from './html.js';
-import { formatODataLiteral } from './format.js';
-import { getActiveTab } from './tabs.js';
+import { formatODataLiteral, serviceODataVersion } from './format.js';
+import { getActiveTab, currentDescribeInfo } from './tabs.js';
 
 // Show the "Fiori cols" button when SAP View is on and UI.LineItem is
 // present. Filter to DataFields whose value_path is an actual property
@@ -134,7 +134,7 @@ export function renderFioriFilterButton(info) {
 // variant doesn't get picked over a populated qualified one.
 export function applyFioriFilter() {
   const tab = getActiveTab();
-  const info = tab && tab._lastDescribeInfo;
+  const info = currentDescribeInfo(tab);
   if (!info || !Array.isArray(info.selection_variants) || info.selection_variants.length === 0) return;
   const btn = document.getElementById('btnFioriFilter');
   const idx = btn && btn.dataset.variantIndex
@@ -154,7 +154,7 @@ export function applyFioriFilter() {
 //     that property, optionally wrapped in `not (...)` for sign=E.
 //   - Properties are AND-joined overall.
 // Returns an empty string when the variant has no usable clauses.
-export function buildSelectionVariantFilter(variant, info) {
+export function buildSelectionVariantFilter(variant, info, version = serviceODataVersion(getActiveTab())) {
   if (!variant) return '';
   const propByName = new Map(
     Array.isArray(info && info.properties) ? info.properties.map(p => [p.name, p]) : []
@@ -163,7 +163,7 @@ export function buildSelectionVariantFilter(variant, info) {
   for (const param of variant.parameters || []) {
     const prop = propByName.get(param.property_name);
     if (!prop) continue;
-    const lit = formatODataLiteral(param.property_value, prop.edm_type);
+    const lit = formatODataLiteral(param.property_value, prop.edm_type, version);
     andParts.push(`${param.property_name} eq ${lit}`);
   }
   for (const opt of variant.select_options || []) {
@@ -171,7 +171,7 @@ export function buildSelectionVariantFilter(variant, info) {
     if (!prop) continue;
     const rangeClauses = [];
     for (const range of opt.ranges || []) {
-      const clause = rangeToFilter(prop, range);
+      const clause = rangeToFilter(prop, range, version);
       if (clause) rangeClauses.push(clause);
     }
     if (rangeClauses.length === 0) continue;
@@ -188,8 +188,8 @@ export function buildSelectionVariantFilter(variant, info) {
 // are skipped because their OData translation depends on server-side
 // substringof/contains support and the wildcard syntax mismatch — not
 // worth mis-rendering for an MVP.
-export function rangeToFilter(prop, range) {
-  const lit = formatODataLiteral(range.low, prop.edm_type);
+export function rangeToFilter(prop, range, version = serviceODataVersion(getActiveTab())) {
+  const lit = formatODataLiteral(range.low, prop.edm_type, version);
   const name = prop.name;
   let clause;
   switch (range.option) {
@@ -201,13 +201,13 @@ export function rangeToFilter(prop, range) {
     case 'le': clause = `${name} le ${lit}`; break;
     case 'bt': {
       if (range.high === null || range.high === undefined) return '';
-      const hi = formatODataLiteral(range.high, prop.edm_type);
+      const hi = formatODataLiteral(range.high, prop.edm_type, version);
       clause = `(${name} ge ${lit} and ${name} le ${hi})`;
       break;
     }
     case 'nb': {
       if (range.high === null || range.high === undefined) return '';
-      const hi = formatODataLiteral(range.high, prop.edm_type);
+      const hi = formatODataLiteral(range.high, prop.edm_type, version);
       // Invert BT: outside the closed interval.
       clause = `(${name} lt ${lit} or ${name} gt ${hi})`;
       break;

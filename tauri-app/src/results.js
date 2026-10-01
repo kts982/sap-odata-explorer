@@ -17,9 +17,9 @@
 
 import { state } from './state.js';
 import { safeHtml, raw } from './html.js';
-import { formatDisplayValue, criticalityDot } from './format.js';
+import { formatDisplayValue, criticalityDot, formatODataLiteral, serviceODataVersion } from './format.js';
 import { setStatus } from './status.js';
-import { getActiveTab } from './tabs.js';
+import { getActiveTab, currentDescribeInfo } from './tabs.js';
 import {
   showStatsBar,
   hideStatsBar,
@@ -72,7 +72,7 @@ export function renderResults(data, elapsedMs, params) {
   // and to hide text-companion columns when they're already folded
   // into their ID column.
   const tab = getActiveTab();
-  const info = tab && tab._lastDescribeInfo;
+  const info = currentDescribeInfo(tab);
   const sapShape = state.sapViewEnabled && info && Array.isArray(info.properties);
   const propByName = sapShape ? new Map(info.properties.map(p => [p.name, p])) : null;
   // Text-companion columns that will be folded into their ID column's
@@ -344,13 +344,27 @@ export function copyODataUrl() {
 
 let filterTooltipTimeout = null;
 
+// `col eq <literal>` for a clicked result cell, typed by the column's
+// EDM type when it's a property of the described entity (Int, Decimal,
+// Boolean, Guid, dates…) and spelled for the service's OData version.
+// Unknown columns fall back to a quoted string.
+function cellFilterClause(col, val) {
+  const tab = getActiveTab();
+  const info = currentDescribeInfo(tab);
+  const prop = info && Array.isArray(info.properties)
+    ? info.properties.find(p => p.name === col)
+    : null;
+  const lit = formatODataLiteral(val, prop ? prop.edm_type : 'Edm.String', serviceODataVersion(tab));
+  return `${col} eq ${lit}`;
+}
+
 export function showFilterTooltip(col, val, x, y) {
   clearTimeout(filterTooltipTimeout);
   const tt = document.getElementById('filterTooltip');
-  const escapedVal = val.replace(/'/g, "''"); // OData escapes single quotes by doubling
-  tt.textContent = `Filter: ${col} eq '${val}'`;
+  const clause = cellFilterClause(col, val);
+  tt.textContent = `Filter: ${clause}`;
   tt.dataset.col = col;
-  tt.dataset.val = escapedVal;
+  tt.dataset.clause = clause;
   tt.style.left = `${x}px`;
   tt.style.top  = `${y + 8}px`;
   tt.style.display = 'block';
@@ -365,11 +379,9 @@ export function hideFilterTooltip() {
 
 export function applyFilterFromTooltip() {
   const tt = document.getElementById('filterTooltip');
-  const col = tt.dataset.col;
-  const val = tt.dataset.val;
-  if (!col) return;
-  const filterVal = `${col} eq '${val}'`;
-  document.getElementById('qFilter').value = filterVal;
+  const clause = tt.dataset.clause;
+  if (!tt.dataset.col || !clause) return;
+  document.getElementById('qFilter').value = clause;
   hideFilterTooltip();
   // Auto-run
   executeQuery(false);

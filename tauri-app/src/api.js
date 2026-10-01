@@ -26,12 +26,42 @@ import {
   renderTraceInspector,
 } from './trace.js';
 
-export function tabScope() {
+// Request context levels, outermost first. A tab switch is not the only
+// way a response goes stale: within one tab, a newer request at the same
+// level (re-run with a narrower filter) or a context change above it
+// (another entity set, a pasted service path, another profile) must win
+// over a slower older response. Starting work at a level bumps that
+// level's generation and every inner one; `scope.active()` is false once
+// the generation it captured has moved on.
+//   service — catalog search and service load (they replace each other)
+//   entity  — describe
+//   query   — run_query
+const REQUEST_LEVELS = ['service', 'entity', 'query'];
+
+function bumpGenerations(tab, level) {
+  if (!tab._requestGen) tab._requestGen = {};
+  const from = REQUEST_LEVELS.indexOf(level);
+  for (const l of REQUEST_LEVELS.slice(from < 0 ? 0 : from)) {
+    tab._requestGen[l] = (tab._requestGen[l] || 0) + 1;
+  }
+  return tab._requestGen[level];
+}
+
+export function tabScope(level) {
   const originTabId = state.activeTabId;
+  const tab = getTab(originTabId);
+  const gen = level && tab ? bumpGenerations(tab, level) : null;
   return {
     originTabId,
-    active: () => state.activeTabId === originTabId,
+    active: () =>
+      state.activeTabId === originTabId &&
+      (gen === null || tab._requestGen[level] === gen),
   };
+}
+
+// Make every in-flight request of this tab stale (profile switch).
+export function invalidateTabRequests(tab) {
+  if (tab) bumpGenerations(tab, REQUEST_LEVELS[0]);
 }
 
 export async function timedInvoke(cmd, args) {

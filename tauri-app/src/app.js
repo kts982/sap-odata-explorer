@@ -6,9 +6,10 @@
 // this file is intentionally just glue.
 
 import { state } from './state.js';
-import { timedInvoke, updateServicePathBar } from './api.js';
+import { timedInvoke, updateServicePathBar, invalidateTabRequests } from './api.js';
 import {
   getActiveTab,
+  currentDescribeInfo,
   addTab,
   closeTab,
   switchTab,
@@ -90,8 +91,9 @@ import {
   showFilterTooltip,
   hideFilterTooltip,
   applyFilterFromTooltip,
+  renderResults,
 } from './results.js';
-import { clearQueryResultCache } from './resultCache.js';
+import { clearQueryResultCache, hasCachedQueryResult } from './resultCache.js';
 import {
   showAddProfileModal,
   showEditProfileModal,
@@ -110,7 +112,11 @@ document.getElementById('profileSelect').addEventListener('change', (e) => {
   const tab = getActiveTab();
   if (!tab) return;
 
+  // Responses still in flight for the previous profile must not land.
+  invalidateTabRequests(tab);
   tab.profile = profile;
+  tab._lastDescribeInfo = null;
+  tab._lastDescribeContext = null;
   tab.servicePath = null;
   tab.serviceVersion = null;
   tab.entitySet = null;
@@ -192,14 +198,20 @@ function toggleSapView() {
   // Re-render describe panel in place if the active tab has one up.
   // renderDescribe also refreshes the selection-fields chip bar.
   const tab = getActiveTab();
-  if (tab && tab._lastDescribeInfo) {
-    renderDescribe(tab._lastDescribeInfo);
+  const info = currentDescribeInfo(tab);
+  if (info) {
+    renderDescribe(info);
   } else {
     // No cached describe — still hide any stale chip bar and quick-actions.
     renderSelectionFieldsBar(null);
     renderFioriColsButton(null);
     renderFioriFilterButton(null);
     renderFioriReadinessBadge(null);
+  }
+  // Results grid column order, text folding and formatting follow SAP
+  // View too — re-render the cached rows in the new mode.
+  if (tab && hasCachedQueryResult(tab) && !tab._lastQueryAsJson) {
+    renderResults(tab._lastQueryData, tab._lastQueryElapsed, tab._lastQueryParams);
   }
   // Clear any lingering warnings from the previous mode.
   if (!state.sapViewEnabled) showSapViewWarnings([]);

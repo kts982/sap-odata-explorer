@@ -15,10 +15,10 @@
 
 import { state } from './state.js';
 import { safeHtml, raw } from './html.js';
-import { valueListSummary, formatODataLiteral } from './format.js';
+import { valueListSummary, formatODataLiteral, serviceODataVersion } from './format.js';
 import { setStatus } from './status.js';
 import { timedInvoke } from './api.js';
-import { getActiveTab } from './tabs.js';
+import { getActiveTab, currentDescribeInfo } from './tabs.js';
 import { extractRows } from './results.js';
 
 // State held per-open: the full Property info, the ValueList that will
@@ -45,7 +45,7 @@ let _vlActiveVariantIndex = 0;
 
 export async function openValueListPicker(propertyName) {
   const tab = getActiveTab();
-  const info = tab && tab._lastDescribeInfo;
+  const info = currentDescribeInfo(tab);
   if (!info) return;
   const prop = info.properties.find(p => p.name === propertyName);
   if (!prop) return;
@@ -124,7 +124,7 @@ export async function selectVariant(index) {
   _vlActiveVariantIndex = index;
   const variant = _vlVariants[index];
   const tab = getActiveTab();
-  const info = tab && tab._lastDescribeInfo;
+  const info = currentDescribeInfo(tab);
   const prop = _vlActiveProperty;
   const title = document.getElementById('vlTitle');
   const subtitle = document.getElementById('vlSubtitle');
@@ -280,8 +280,13 @@ function buildInitialVlFilter(prop, info, vl) {
   // Echo Constant parameters unconditionally — they're fixed filters.
   for (const param of vl.parameters) {
     if (param.kind === 'constant' && param.constant !== null && param.constant !== undefined) {
-      const needsQuotes = isNaN(Number(param.constant)) && param.constant !== 'true' && param.constant !== 'false';
-      const lit = needsQuotes ? `'${param.constant.replace(/'/g, "''")}'` : param.constant;
+      // The value-help property's type isn't known here. Booleans and
+      // plain integers stay bare; everything else is a string — including
+      // code-like digits with a leading zero (NUMC `01`), which are
+      // Edm.String in OData, and the empty constant (`''`).
+      const c = String(param.constant);
+      const bare = c === 'true' || c === 'false' || /^-?(0|[1-9]\d*)$/.test(c);
+      const lit = bare ? c : `'${c.replace(/'/g, "''")}'`;
       clauses.push(`${param.value_list_property} eq ${lit}`);
     }
   }
@@ -379,7 +384,7 @@ export function pickValueListRow(rowIndex) {
   const row = results._vlRows[rowIndex];
   if (!row) return;
   const tab = getActiveTab();
-  const info = tab && tab._lastDescribeInfo;
+  const info = currentDescribeInfo(tab);
   if (!info) return;
   const clauses = [];
   for (const param of vl.parameters) {
@@ -390,7 +395,11 @@ export function pickValueListRow(rowIndex) {
     const value = row[param.value_list_property];
     if (value === null || value === undefined) continue;
     const localProp = info.properties.find(p => p.name === param.local_property);
-    const lit = formatODataLiteral(value, localProp ? localProp.edm_type : 'Edm.String');
+    const lit = formatODataLiteral(
+      value,
+      localProp ? localProp.edm_type : 'Edm.String',
+      serviceODataVersion(tab),
+    );
     clauses.push(`${param.local_property} eq ${lit}`);
   }
   if (clauses.length === 0) {

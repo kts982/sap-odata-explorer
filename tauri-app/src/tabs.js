@@ -62,6 +62,22 @@ export function getActiveTab() {
   return getTab(state.activeTabId);
 }
 
+// The profile / service / entity set a describe response belongs to.
+export function describeContextKey(tab) {
+  return JSON.stringify([tab.profile, tab.servicePath, tab.entitySet]);
+}
+
+// The tab's cached describe info, but only while it still belongs to the
+// tab's current profile / service / entity set. Results reshaping,
+// pre-flight warnings, Fiori quick actions and the value-help picker all
+// read it; after a history replay into another entity set, a pasted
+// service path or a profile switch, stale info would apply the wrong
+// entity's annotations.
+export function currentDescribeInfo(tab) {
+  if (!tab || !tab._lastDescribeInfo) return null;
+  return tab._lastDescribeContext === describeContextKey(tab) ? tab._lastDescribeInfo : null;
+}
+
 export function addTab(opts = {}) {
   // New tabs land in the "Select profile..." default — no inherit
   // from the active tab. Same mental model as opening a new browser
@@ -203,8 +219,8 @@ export function restoreTabUI() {
   // not the value at the time this tab was last rendered.
   if (tab._describePanelHidden === false) {
     document.getElementById('describePanel').classList.remove('hidden');
-    if (tab._lastDescribeInfo) {
-      renderDescribe(tab._lastDescribeInfo);
+    if (currentDescribeInfo(tab)) {
+      renderDescribe(currentDescribeInfo(tab));
     } else {
       document.getElementById('entityTitle').textContent = tab._describeTitle || '';
       document.getElementById('describeContent').innerHTML = tab._describeHtml || '';
