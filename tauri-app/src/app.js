@@ -13,6 +13,7 @@ import {
   addTab,
   closeTab,
   switchTab,
+  renderTabBar,
   saveCurrentTabState,
 } from './tabs.js';
 import {
@@ -170,6 +171,7 @@ document.getElementById('profileSelect').addEventListener('change', (e) => {
   resetResultsArea();
   renderTraceSummary(tab);
   updateProfileAuthUi(profile);
+  renderTabBar();
 
   if (profile) {
     setStatus(`Connected to ${profile}`);

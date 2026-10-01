@@ -418,6 +418,7 @@ mod tests {
                 insecure_tls: false,
                 sso_delegate: false,
                 aliases: BTreeMap::new(),
+                environment: None,
             },
         );
         cfg.offline_profiles.insert(
@@ -557,6 +558,7 @@ mod tests {
                 insecure_tls: false,
                 sso_delegate: false,
                 aliases: BTreeMap::new(),
+                environment: None,
             },
         );
         cfg.offline_profiles.insert(
@@ -619,6 +621,7 @@ mod tests {
                 insecure_tls: false,
                 sso_delegate: false,
                 aliases: BTreeMap::new(),
+                environment: None,
             },
         );
         cfg.offline_profiles.insert(

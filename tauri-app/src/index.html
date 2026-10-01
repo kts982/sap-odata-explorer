@@ -82,6 +82,9 @@
         <button id="btnAddTab" title="New tab">+</button>
       </div>
 
+      <!-- Environment band: PRD / QAS profiles (set in the profile dialog) -->
+      <div id="envBand" class="hidden px-4 py-0.5 text-[10px] font-mono uppercase tracking-widest text-center border-b"></div>
+
       <!-- Service path display -->
       <div id="servicePathBar">
         <span id="servicePathVersion" class="text-[10px] px-1 py-px rounded-sm font-mono badge-v4"></span>
@@ -165,8 +168,8 @@
         <span id="statPager" class="hidden flex items-center gap-1">
           <span class="text-ox-border">·</span>
           <span id="statRange" class="text-ox-text"></span>
-          <button id="btnPagePrev" class="btn-ghost text-[11px] px-1.5 rounded-sm" title="Previous page">&#8249; prev</button>
-          <button id="btnPageNext" class="btn-ghost text-[11px] px-1.5 rounded-sm" title="Next page">next &#8250;</button>
+          <button id="btnPagePrev" class="btn-ghost text-[11px] px-1.5 rounded-sm disabled:opacity-30 disabled:cursor-default" title="Previous page">&#8249; prev</button>
+          <button id="btnPageNext" class="btn-ghost text-[11px] px-1.5 rounded-sm disabled:opacity-30 disabled:cursor-default" title="Next page">next &#8250;</button>
         </span>
         <span class="ml-auto flex items-center gap-1">
           <button id="btnCopyTsv" class="btn-ghost text-[11px] px-1.5 rounded-sm" title="Copy these rows as tab-separated text — pastes straight into Excel">copy TSV</button>
@@ -260,6 +263,17 @@
             <input id="mpLang" type="text" value="EN"
               class="bg-ox-surface text-ox-text text-sm font-mono border border-ox-border rounded-md px-3 py-1.5 w-full outline-hidden" />
           </div>
+        </div>
+        <div>
+          <label for="mpEnv" class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Environment</label>
+          <select id="mpEnv"
+            class="bg-ox-surface text-ox-text text-sm border border-ox-border rounded-md px-3 py-1.5 w-full outline-hidden">
+            <option value="">(not set)</option>
+            <option value="DEV">DEV — development</option>
+            <option value="QAS">QAS — quality / test</option>
+            <option value="PRD">PRD — production</option>
+          </select>
+          <div class="text-[10px] text-ox-dim mt-1">PRD and QAS profiles are marked with a colored band and tab edge.</div>
         </div>
         <div>
           <label for="mpAuthMode" class="text-[10px] uppercase tracking-widest text-ox-dim font-medium block mb-1">Authentication</label>

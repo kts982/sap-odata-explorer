@@ -204,6 +204,9 @@ input:focus, select:focus {
   flex-shrink: 0;
 }
 .tab-item:hover .tab-close { opacity: 1; }
+/* Environment marks (profile "Environment" field). */
+.tab-item.env-prd { box-shadow: inset 0 2px 0 var(--color-ox-red); }
+.tab-item.env-qas { box-shadow: inset 0 2px 0 var(--color-ox-amber); }
 .tab-item .tab-close:hover { color: #ff5c5c; background: rgba(255,92,92,0.12); }
 
 #btnAddTab {

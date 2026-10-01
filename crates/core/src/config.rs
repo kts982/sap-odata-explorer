@@ -83,6 +83,33 @@ pub struct ConnectionProfile {
     /// Service path aliases: short name → full OData service path.
     #[serde(default)]
     pub aliases: BTreeMap<String, String>,
+    /// Landscape tier label — `DEV`, `QAS` or `PRD` (see
+    /// [`ENVIRONMENTS`]). The desktop marks PRD / QAS profiles visually
+    /// and the CLI notes PRD on stderr; nothing else depends on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
+}
+
+/// Recognised [`ConnectionProfile::environment`] values.
+pub const ENVIRONMENTS: &[&str] = &["DEV", "QAS", "PRD"];
+
+/// Normalise a user-supplied environment label: case-insensitive match
+/// against [`ENVIRONMENTS`] (plus a few common aliases); empty → None.
+pub fn normalize_environment(value: &str) -> Result<Option<String>, String> {
+    let v = value.trim().to_ascii_uppercase();
+    let canonical = match v.as_str() {
+        "" | "NONE" => return Ok(None),
+        "DEV" | "DEVELOPMENT" => "DEV",
+        "QAS" | "QA" | "TEST" | "TST" => "QAS",
+        "PRD" | "PROD" | "PRODUCTION" => "PRD",
+        _ => {
+            return Err(format!(
+                "unknown environment '{value}' — use one of {}",
+                ENVIRONMENTS.join(", ")
+            ));
+        }
+    };
+    Ok(Some(canonical.to_string()))
 }
 
 fn default_client() -> String {
@@ -541,6 +568,7 @@ mod tests {
             insecure_tls: true,
             sso_delegate: false,
             aliases: Default::default(),
+            environment: None,
         }
     }
 
@@ -603,6 +631,43 @@ mod tests {
         let err = save_connections(&snapshot, &dir).unwrap_err();
         assert!(err.to_string().contains("offline bucket"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn environment_labels_normalise_and_round_trip() {
+        assert_eq!(
+            normalize_environment("prod").unwrap().as_deref(),
+            Some("PRD")
+        );
+        assert_eq!(
+            normalize_environment(" qa ").unwrap().as_deref(),
+            Some("QAS")
+        );
+        assert_eq!(
+            normalize_environment("DEV").unwrap().as_deref(),
+            Some("DEV")
+        );
+        assert_eq!(normalize_environment("").unwrap(), None);
+        assert_eq!(normalize_environment("none").unwrap(), None);
+        assert!(normalize_environment("banana").is_err());
+
+        // Older configs have no `environment` key; unset values aren't written.
+        let legacy: ConfigFile = toml::from_str(
+            "[connections.DEV]
+base_url = \"https://sap.corp\"
+",
+        )
+        .unwrap();
+        assert_eq!(legacy.connections["DEV"].environment, None);
+        let written = toml::to_string_pretty(&legacy).unwrap();
+        assert!(!written.contains("environment"), "{written}");
+        let mut tagged = legacy;
+        tagged.connections.get_mut("DEV").unwrap().environment = Some("PRD".into());
+        assert!(
+            toml::to_string_pretty(&tagged)
+                .unwrap()
+                .contains("environment = \"PRD\"")
+        );
     }
 
     #[test]
@@ -734,6 +799,7 @@ mod tests {
                 insecure_tls: false,
                 sso_delegate: false,
                 aliases: BTreeMap::new(),
+                environment: None,
             },
         );
         let mut offline_profiles = BTreeMap::new();

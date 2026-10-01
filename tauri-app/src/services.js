@@ -61,7 +61,8 @@ export async function loadProfiles() {
           : 'imports';
         opt.textContent = `${p.name} [OFFLINE] — ${suffix}`;
       } else {
-        opt.textContent = `${p.name} — ${p.base_url.replace('https://', '')}`;
+        const env = p.environment ? ` [${p.environment}]` : '';
+        opt.textContent = `${p.name}${env} — ${p.base_url.replace('https://', '')}`;
       }
       select.appendChild(opt);
     }
@@ -75,6 +76,7 @@ export async function loadProfiles() {
       state.currentProfile = null;
     }
     updateProfileAuthUi(select.value || state.currentProfile);
+    renderTabBar(); // environment edges follow edited profiles
   } catch (e) {
     setStatus('Error loading profiles: ' + e);
   }

@@ -498,6 +498,12 @@ enum ProfileAction {
         /// Create portable config next to the executable
         #[arg(long)]
         portable: bool,
+
+        /// Landscape tier: DEV, QAS or PRD (`none` clears it). PRD
+        /// profiles are marked in the desktop app and noted on stderr.
+        /// Omitted on a re-run: the current value is kept.
+        #[arg(long = "env", value_name = "DEV|QAS|PRD")]
+        environment: Option<String>,
     },
 
     /// Remove a connection profile
@@ -880,6 +886,9 @@ fn resolve_connection(cli: &Cli) -> Result<SapConnection> {
                 name
             )
         })?;
+        if profile.environment.as_deref() == Some("PRD") {
+            eprintln!("  \u{26a0} '{name}' is a production (PRD) system");
+        }
         let conn = config::resolve_connection(name, profile)
             .with_context(|| format!("failed to resolve profile '{name}'"))?;
         (Some(conn), Some(name.clone()))
@@ -1225,6 +1234,14 @@ async fn cmd_setup_wizard() -> Result<()> {
         _ => unreachable!(),
     };
 
+    let env_choices = ["(none)", "DEV", "QAS", "PRD"];
+    let env_idx = Select::with_theme(&theme)
+        .with_prompt("Environment (marks production systems)")
+        .items(env_choices)
+        .default(0)
+        .interact()?;
+    let environment = (env_idx > 0).then(|| env_choices[env_idx].to_string());
+
     // Build profile — preserve existing aliases if updating
     let existing_aliases = config::load_config()
         .ok()
@@ -1242,6 +1259,7 @@ async fn cmd_setup_wizard() -> Result<()> {
         insecure_tls: false,
         sso_delegate: false,
         aliases: existing_aliases,
+        environment,
     };
 
     // Store password in keyring if Basic auth
@@ -1355,6 +1373,7 @@ async fn handle_profile_command(action: &ProfileAction, json: bool) -> Result<()
             sso_delegate,
             plaintext,
             portable,
+            environment,
         } => cmd_profile_add(
             name,
             url,
@@ -1366,6 +1385,7 @@ async fn handle_profile_command(action: &ProfileAction, json: bool) -> Result<()
             *sso_delegate,
             *plaintext,
             *portable,
+            environment.as_deref(),
         ),
         ProfileAction::Remove { name } => cmd_profile_remove(name),
         ProfileAction::Test { name } => cmd_profile_test(name).await,
@@ -1425,6 +1445,7 @@ fn cmd_profile_list(json: bool) -> Result<()> {
                     "username": profile.username,
                     "password_source": profile_password_source(name, profile).0,
                     "insecure_tls": profile.insecure_tls,
+                    "environment": profile.environment,
                     "aliases": profile.aliases,
                 })
             })
@@ -1442,6 +1463,7 @@ fn cmd_profile_list(json: bool) -> Result<()> {
     table.load_style(UTF8_FULL);
     table.set_header(vec![
         Cell::new("Profile").fg(Color::DarkCyan),
+        Cell::new("Env").fg(Color::DarkCyan),
         Cell::new("URL").fg(Color::DarkCyan),
         Cell::new("Client").fg(Color::DarkCyan),
         Cell::new("Language").fg(Color::DarkCyan),
@@ -1452,8 +1474,15 @@ fn cmd_profile_list(json: bool) -> Result<()> {
     for (name, profile) in &cfg.connections {
         let auth_info = profile_password_source(name, profile).1;
 
+        let env = profile.environment.as_deref().unwrap_or("");
+        let env_cell = match env {
+            "PRD" => Cell::new(env).fg(Color::Red),
+            "QAS" => Cell::new(env).fg(Color::Yellow),
+            _ => Cell::new(env),
+        };
         table.add_row(vec![
             Cell::new(name),
+            env_cell,
             Cell::new(&profile.base_url),
             Cell::new(&profile.client),
             Cell::new(&profile.language),
@@ -1491,7 +1520,13 @@ fn cmd_profile_add(
     sso_delegate: bool,
     plaintext: bool,
     portable: bool,
+    environment: Option<&str>,
 ) -> Result<()> {
+    // Validate before touching anything.
+    let environment = environment
+        .map(config::normalize_environment)
+        .transpose()
+        .map_err(|e| anyhow::anyhow!(e))?;
     let (mut cfg, config_dir) = config::load_config().context("failed to load config")?;
 
     // Global name-uniqueness check (step 7's connected-side enforcement).
@@ -1558,6 +1593,11 @@ fn cmd_profile_add(
         insecure_tls: carry.insecure_tls,
         sso_delegate: sso && sso_delegate,
         aliases: existing_aliases,
+        // `--env none` clears it; omitted keeps the current value.
+        environment: match environment {
+            Some(env) => env,
+            None => old_profile.as_ref().and_then(|p| p.environment.clone()),
+        },
     };
 
     // Store a given password in the keyring unless plaintext requested.

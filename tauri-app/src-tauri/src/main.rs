@@ -49,6 +49,9 @@ struct ProfileInfo {
     /// profiles and for the catch-all `Imported` bucket.
     #[serde(skip_serializing_if = "Option::is_none")]
     source_profile: Option<String>,
+    /// Landscape tier (`DEV` / `QAS` / `PRD`) of a connected profile.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    environment: Option<String>,
     /// UTC ISO-8601 timestamp when the offline bucket was created.
     /// `None` for connected profiles.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -733,6 +736,7 @@ fn get_profiles() -> Result<Vec<ProfileInfo>, String> {
             aliases,
             source_profile: None,
             created_at: None,
+            environment: profile.environment.clone(),
         }
     });
 
@@ -761,6 +765,7 @@ fn get_profiles() -> Result<Vec<ProfileInfo>, String> {
                 Some(bucket.source_profile.clone())
             },
             created_at: Some(bucket.created_at.clone()),
+            environment: None,
         });
 
     Ok(connected.chain(offline).collect())
@@ -1212,7 +1217,11 @@ fn add_profile(
     // --sso-delegate flag. Option<bool> so older callers that don't pass it
     // continue to work; treated as false when absent.
     #[allow(non_snake_case)] allow_sso_delegate: Option<bool>,
+    // `DEV` / `QAS` / `PRD`; None or "" = no label. Option so older
+    // callers that don't pass it keep working.
+    environment: Option<String>,
 ) -> Result<String, String> {
+    let environment = config::normalize_environment(environment.as_deref().unwrap_or(""))?;
     let (mut cfg, _) = config::load_config().map_err(|e| format!("Config error: {e}"))?;
 
     // **Global name uniqueness across connections + offline_profiles.**
@@ -1276,6 +1285,7 @@ fn add_profile(
         insecure_tls: carry.insecure_tls,
         sso_delegate: sso && allow_sso_delegate.unwrap_or(false),
         aliases: existing_aliases,
+        environment,
     };
     // Runs after the new config is saved, so a failed save never loses the
     // old credential.

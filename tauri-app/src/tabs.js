@@ -122,7 +122,10 @@ export function renderTabBar() {
 
   for (const tab of state.tabs) {
     const el = document.createElement('div');
-    el.className = 'tab-item' + (tab.id === state.activeTabId ? ' active' : '');
+    const env = tab.profile && state.profileMap ? state.profileMap.get(tab.profile)?.environment : null;
+    el.className = 'tab-item'
+      + (tab.id === state.activeTabId ? ' active' : '')
+      + (env === 'PRD' ? ' env-prd' : env === 'QAS' ? ' env-qas' : '');
     el.dataset.tabId = tab.id;
 
     const titleEl = document.createElement('span');

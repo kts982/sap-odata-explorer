@@ -469,3 +469,60 @@ fn profile_add_without_password_does_not_claim_a_keyring_write() {
     assert!(!text.contains("stored in OS keyring"), "{text}");
     assert!(text.contains("No password stored"), "{text}");
 }
+
+// ── environment labels (SSO profile: no keyring involvement) ──
+
+#[test]
+fn profile_env_is_set_kept_cleared_and_validated() {
+    let sb = Sandbox::new("profile_env");
+    let name = "ZZ_CONTRACT_ENV_7F3A";
+    let add = |extra: &[&str]| {
+        let mut args = vec![
+            "profile",
+            "add",
+            name,
+            "--url",
+            "https://prd.example.com",
+            "--sso",
+        ];
+        args.extend_from_slice(extra);
+        sb.run(&args)
+    };
+    let env_of = || profile_json(&sb, name)["environment"].clone();
+
+    assert!(add(&["--env", "prod"]).status.success());
+    assert_eq!(env_of(), "PRD");
+    // Re-run without --env keeps it.
+    assert!(add(&[]).status.success());
+    assert_eq!(env_of(), "PRD");
+
+    // A PRD profile is noted on stderr (build sends no request).
+    let out = sb.run(&[
+        "-p",
+        name,
+        "-s",
+        "/sap/opu/odata/sap/ZSRV",
+        "build",
+        "Items",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("production (PRD)"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!stdout(&out).contains("PRD"), "notice must stay off stdout");
+
+    // Unknown value: rejected, nothing changed.
+    let out = add(&["--env", "banana"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("unknown environment"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(env_of(), "PRD");
+
+    assert!(add(&["--env", "none"]).status.success());
+    assert_eq!(env_of(), serde_json::Value::Null);
+}

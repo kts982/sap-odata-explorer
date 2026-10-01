@@ -1003,6 +1003,7 @@ mod tests {
                 insecure_tls: false,
                 sso_delegate: false,
                 aliases: BTreeMap::new(),
+                environment: None,
             },
         );
 

@@ -35,7 +35,28 @@ export function isOfflineProfile(profileName = state.currentProfile) {
   return getProfileMeta(profileName)?.kind === 'offline';
 }
 
+// Band under the tab bar for PRD / QAS profiles — the one place the
+// environment shows while you work.
+function updateEnvBand(profileName) {
+  const band = document.getElementById('envBand');
+  if (!band) return;
+  const env = getProfileMeta(profileName)?.environment;
+  band.classList.remove('bg-ox-red/15', 'text-ox-red', 'border-ox-red/40', 'bg-ox-amber/10', 'text-ox-amber', 'border-ox-amber/40');
+  if (env === 'PRD') {
+    band.textContent = `${profileName} · PRD — production system`;
+    band.classList.add('bg-ox-red/15', 'text-ox-red', 'border-ox-red/40');
+    band.classList.remove('hidden');
+  } else if (env === 'QAS') {
+    band.textContent = `${profileName} · QAS — quality system`;
+    band.classList.add('bg-ox-amber/10', 'text-ox-amber', 'border-ox-amber/40');
+    band.classList.remove('hidden');
+  } else {
+    band.classList.add('hidden');
+  }
+}
+
 export function updateProfileAuthUi(profileName = state.currentProfile) {
+  updateEnvBand(profileName);
   const signInBtn  = document.getElementById('btnProfileSignIn');
   const signOutBtn = document.getElementById('btnProfileSignOut');
   const editBtn    = document.getElementById('btnEditProfile');

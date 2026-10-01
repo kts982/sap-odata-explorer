@@ -47,6 +47,7 @@ export function showAddProfileModal() {
   document.getElementById('mpUrl').value = '';
   document.getElementById('mpClient').value = '100';
   document.getElementById('mpLang').value = 'EN';
+  document.getElementById('mpEnv').value = '';
   document.getElementById('mpAuthMode').value = 'basic';
   document.getElementById('mpUser').value = '';
   document.getElementById('mpPass').value = '';
@@ -79,6 +80,7 @@ export function showEditProfileModal(profileName) {
   document.getElementById('mpUrl').value = meta.base_url || '';
   document.getElementById('mpClient').value = meta.client || '100';
   document.getElementById('mpLang').value = meta.language || 'EN';
+  document.getElementById('mpEnv').value = meta.environment || '';
   document.getElementById('mpAuthMode').value = meta.auth_mode || 'basic';
   document.getElementById('mpUser').value = meta.username || '';
   document.getElementById('mpPass').value = '';
@@ -115,6 +117,7 @@ export async function saveProfileModal() {
   const url      = document.getElementById('mpUrl').value.trim();
   const client   = document.getElementById('mpClient').value.trim();
   const language = document.getElementById('mpLang').value.trim();
+  const environment = document.getElementById('mpEnv').value;
   const authMode = document.getElementById('mpAuthMode').value;
   const user     = authMode === 'basic' ? document.getElementById('mpUser').value.trim() : '';
   const pass     = authMode === 'basic' ? document.getElementById('mpPass').value : '';
@@ -153,7 +156,7 @@ export async function saveProfileModal() {
   const doSave = async (allowPlaintextFallback) => {
     return await invoke('add_profile', {
       name, baseUrl: url, client, language, authMode, username: user, password: pass,
-      allowPlaintextFallback, allowSsoDelegate,
+      allowPlaintextFallback, allowSsoDelegate, environment,
     });
   };
 
