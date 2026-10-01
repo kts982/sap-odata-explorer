@@ -34,8 +34,8 @@ This project is aimed at a narrower problem: understand a real SAP OData service
 
 - **Service discovery** — browse V2 and V4 services from SAP Gateway catalogs with search
 - **Entity explorer** — inspect entity sets, properties, keys, navigation properties, and labels
-- **Visual query builder** — build `$select`, `$expand`, `$filter`, `$orderby`, `$top`, and `$skip` interactively
-- **Results grid** — view tabular results with expandable nested data from `$expand`
+- **Visual query builder** — build `$select`, `$expand`, `$filter`, `$orderby`, `$top`, and `$skip` interactively, with **autocomplete** from the entity's metadata (properties, navigations, operators, functions)
+- **Results grid** — tabular results with expandable nested data from `$expand`, **paging with totals** (follows server-driven next links), **row details** with one-click navigation drill-down, and **copy as TSV / CSV** (TSV pastes straight into Excel)
 - **HTTP inspector** — per-tab request/response trace in the desktop app (headers, body preview, timing) with copy-as-curl; same data on the CLI via `--verbose`
 - **SAP-aware error hints** — 404/403/5xx responses get actionable hints pointing at `/IWFND/MAINT_SERVICE`, `/IWFND/ERROR_LOG`, `ST22`, or the browser SSO sign-in flow when appropriate
 - **SAP View** — opt-in overlay that reads a service's SAP/UI5 annotations and renders the explorer as a Fiori-aware view: Fiori-ordered columns, filter chips, value-help (F4) pickers, restriction validation. Toggle from the status bar. See [docs/SAP-VIEW.md](./docs/SAP-VIEW.md) for the full annotation list.
@@ -45,10 +45,13 @@ This project is aimed at a narrower problem: understand a real SAP OData service
 - **Service aliases** — use short names for long service paths
 - **Auto resolution** — type `API_WAREHOUSE_2` and resolve it from the catalog
 - **Tabs** — keep multiple independent workspaces open, each with its own profile, service, and trace
-- **Favorites and history** — star services (full object cached locally so they appear instantly on profile switch) and replay recent queries
+- **Favorites and history** — star services — catalog entries or pasted paths — and replay recent queries; history is kept per profile and service across restarts, with pinning
+- **Environment labels** — mark profiles DEV / QAS / PRD; production systems get a red band in the desktop app and a notice on the CLI
+- **Hand-offs** — copy the current query as a `sap-odata` CLI command, or an entity as markdown ("copy for AI") for an AI chat or a ticket
+- **Sample service** — no SAP system at hand? The start screen opens a bundled synthetic service to try SAP View, the linter and the query bar
 - **Copy helpers** — copy rows, columns, generated query URLs, request/response bodies, or curl commands
 - **Filter helper** — click a cell value to turn it into a filter
-- **Offline mode** — save a service's `$metadata` from a connected system, or import an EDMX file from disk (API Hub download, GW_CLIENT "Save Response", `curl > out.xml`). Cached services browse through the same UI as live ones — describe, lint, annotations, all work without network access. The route-around for customer sites where the unsigned exe can't be installed on the SAP host: pull `$metadata` over `curl` / `/IWFND/GW_CLIENT` / browser, hand the file to a consultant running the explorer on their own laptop.
+- **Offline mode** — save a service's `$metadata` from a connected system, or import an EDMX file from disk (API Hub download, GW_CLIENT "Save Response", `curl > out.xml`). Cached services browse through the same UI as live ones — describe, lint, annotations, all work without network access, in the desktop app and on the CLI (`sap-odata -p "<bucket>" -s <service> describe …`). The route-around for customer sites where the unsigned exe can't be installed on the SAP host: pull `$metadata` over `curl` / `/IWFND/GW_CLIENT` / browser, hand the file to a consultant running the explorer on their own laptop.
 - **Local-first** — single-binary CLI and desktop app, no server component, no runtime dependencies (Windows / Linux / macOS source builds)
 
 ## Installation
