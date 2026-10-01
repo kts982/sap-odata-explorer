@@ -386,3 +386,86 @@ fn build_json_is_a_json_string() {
         "{v}"
     );
 }
+
+// ── profile add re-runs (no keyring writes) ──
+//
+// Profile names are deliberately unusual: session / keyring cleanup is
+// keyed by profile name in the real OS keyring, which a config-dir
+// sandbox doesn't isolate. None of these cases writes a credential.
+
+fn profile_json(sb: &Sandbox, name: &str) -> serde_json::Value {
+    let out = sb.run(&["--json", "profile", "list"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let all: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    all.as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == name)
+        .cloned()
+        .expect("profile listed")
+}
+
+#[test]
+fn profile_add_rerun_keeps_browser_sso_mode() {
+    let sb = Sandbox::new("rerun_browser");
+    sb.write_file(
+        "connections.toml",
+        "[connections.ZZ_CONTRACT_BROWSER_7F3A]\nbase_url = \"https://old.example.com\"\nbrowser_sso = true\n",
+    );
+    let out = sb.run(&[
+        "profile",
+        "add",
+        "ZZ_CONTRACT_BROWSER_7F3A",
+        "--url",
+        "https://new.example.com",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let p = profile_json(&sb, "ZZ_CONTRACT_BROWSER_7F3A");
+    assert_eq!(p["auth"], "browser_sso", "{p}");
+    assert_eq!(p["base_url"], "https://new.example.com");
+}
+
+#[test]
+fn profile_add_blank_password_keeps_plaintext_password_and_insecure_tls() {
+    let sb = Sandbox::new("rerun_plaintext");
+    sb.write_file(
+        "connections.toml",
+        "[connections.ZZ_CONTRACT_PLAIN_7F3A]\nbase_url = \"https://dev.example.com\"\nusername = \"u\"\npassword = \"secret\"\ninsecure_tls = true\n",
+    );
+    let out = sb.run(&[
+        "profile",
+        "add",
+        "ZZ_CONTRACT_PLAIN_7F3A",
+        "--url",
+        "https://dev.example.com",
+        "--user",
+        "u",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("Password unchanged"),
+        "{}",
+        stdout(&out)
+    );
+    let p = profile_json(&sb, "ZZ_CONTRACT_PLAIN_7F3A");
+    assert_eq!(p["password_source"], "plaintext", "{p}");
+    assert_eq!(p["insecure_tls"], true, "{p}");
+}
+
+#[test]
+fn profile_add_without_password_does_not_claim_a_keyring_write() {
+    let sb = Sandbox::new("add_no_password");
+    let out = sb.run(&[
+        "profile",
+        "add",
+        "ZZ_CONTRACT_NOPW_7F3A",
+        "--url",
+        "https://dev.example.com",
+        "--user",
+        "u",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(!text.contains("stored in OS keyring"), "{text}");
+    assert!(text.contains("No password stored"), "{text}");
+}

@@ -1525,56 +1525,64 @@ fn cmd_profile_add(
         ),
     }
 
+    // `profile add` has no Browser SSO flag: re-running it on a Browser SSO
+    // profile without credentials (e.g. to change the URL) keeps that mode
+    // instead of silently converting the profile to Basic.
+    let keep_browser = !sso
+        && user.is_empty()
+        && password.is_empty()
+        && old_profile.as_ref().is_some_and(|p| p.browser_sso);
+    let is_basic = !sso && !keep_browser;
+    let carry =
+        config::profile_carry_over(old_profile.as_ref(), is_basic, user, !password.is_empty());
+    let same_basic_user = old_profile
+        .as_ref()
+        .is_some_and(|p| !p.sso && !p.browser_sso && p.username == user);
+
     let profile = ConnectionProfile {
         base_url: url.to_string(),
         client: client.to_string(),
         language: language.to_string(),
-        username: user.to_string(),
-        password: if plaintext && !sso {
+        username: if keep_browser {
+            String::new()
+        } else {
+            user.to_string()
+        },
+        password: if is_basic && plaintext && !password.is_empty() {
             Some(password.to_string())
         } else {
-            None
+            carry.plaintext_password.clone()
         },
         sso,
-        browser_sso: false,
-        insecure_tls: false,
+        browser_sso: keep_browser,
+        insecure_tls: carry.insecure_tls,
         sso_delegate: sso && sso_delegate,
         aliases: existing_aliases,
     };
 
-    // SSO profiles don't need password storage
-    if sso {
-        cfg.connections.insert(name.to_string(), profile);
-        let save_path = if portable {
-            config::init_portable_config(&cfg)?
-        } else if config_dir.path.as_os_str().is_empty() {
-            let dir = config::get_or_create_config_dir()?;
-            config::save_config(&cfg, &dir.path)?
-        } else {
-            config::save_config(&cfg, &config_dir.path)?
-        };
-        println!(
-            "  Profile '{}' saved with SSO to {}",
-            name,
-            save_path.display()
-        );
-        return Ok(());
-    }
-
-    // Store password in keyring unless plaintext requested.
+    // Store a given password in the keyring unless plaintext requested.
     // Fail closed: do NOT silently fall back to plaintext on keyring failure —
     // that's exactly the kind of surprise an enterprise security review rejects.
     // The user has to explicitly opt in with --plaintext.
-    if !plaintext {
+    let password_note = if !is_basic {
+        None
+    } else if !password.is_empty() && !plaintext {
         if let Err(e) = config::set_password_in_keyring(name, user, password) {
             anyhow::bail!(
-                "could not store password in OS keyring: {e}\n\
-                 Re-run with --plaintext to store the password in the config file instead \
-                 (not recommended), or fix the keyring backend and retry."
+                "could not store password in OS keyring: {e}
+                 Re-run with --plaintext to store the password in the config file instead                  (not recommended), or fix the keyring backend and retry."
             );
         }
-        println!("  Password stored in OS keyring.");
-    }
+        Some("Password stored in OS keyring.")
+    } else if !password.is_empty() {
+        Some("Password stored in the config file (plaintext).")
+    } else if carry.plaintext_password.is_some() {
+        Some("Password unchanged (kept in the config file).")
+    } else if same_basic_user {
+        Some("Password unchanged (existing keyring entry kept).")
+    } else {
+        Some("No password stored — pass --password, or set SAP_PASSWORD when running commands.")
+    };
 
     cfg.connections.insert(name.to_string(), profile);
 
@@ -1587,7 +1595,30 @@ fn cmd_profile_add(
         config::save_config(&cfg, &config_dir.path)?
     };
 
-    println!("  Profile '{}' saved to {}", name, save_path.display());
+    if let Some(note) = password_note {
+        println!("  {note}");
+    }
+    // After the save, so a failed save never loses the old credential.
+    if let Some(old_user) = carry.orphaned_keyring_user.as_deref() {
+        match config::delete_password_from_keyring(name, old_user) {
+            Ok(()) => println!("  Removed the previous keyring entry (user: {old_user})."),
+            Err(e) => println!(
+                "  Warning: could not remove the previous keyring entry (user: {old_user}): {e}"
+            ),
+        }
+    }
+    let mode = if sso {
+        " with SSO"
+    } else if keep_browser {
+        " with Browser SSO"
+    } else {
+        ""
+    };
+    println!(
+        "  Profile '{}' saved{mode} to {}",
+        name,
+        save_path.display()
+    );
     Ok(())
 }
 

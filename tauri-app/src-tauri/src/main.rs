@@ -1119,6 +1119,15 @@ fn add_profile(
 
     let sso = auth_mode == "sso";
     let browser_sso = auth_mode == "browser";
+    // The edit dialog rebuilds the profile from its fields; keep what it
+    // doesn't show (insecure_tls, a plaintext password on a blank-password
+    // edit) and note the keyring entry an auth/username change orphans.
+    let carry = config::profile_carry_over(
+        old_profile.as_ref(),
+        auth_mode == "basic",
+        &username,
+        !password.is_empty(),
+    );
     let profile = config::ConnectionProfile {
         base_url,
         client,
@@ -1128,12 +1137,28 @@ fn add_profile(
         } else {
             username.clone()
         },
-        password: None,
+        password: carry.plaintext_password.clone(),
         sso,
         browser_sso,
-        insecure_tls: false,
+        insecure_tls: carry.insecure_tls,
         sso_delegate: sso && allow_sso_delegate.unwrap_or(false),
         aliases: existing_aliases,
+    };
+    // Runs after the new config is saved, so a failed save never loses the
+    // old credential.
+    let remove_orphaned_keyring_entry = || -> Option<String> {
+        let user = carry.orphaned_keyring_user.as_deref()?;
+        config::delete_password_from_keyring(&name, user)
+            .err()
+            .map(|e| format!("could not remove the old keyring entry (user: {user}): {e}"))
+    };
+    let with_warnings = |base: String, orphan_warning: Option<String>| -> String {
+        let warnings: Vec<String> = fp_warning.iter().cloned().chain(orphan_warning).collect();
+        if warnings.is_empty() {
+            base
+        } else {
+            format!("{base}. Warning: {}", warnings.join("; "))
+        }
     };
 
     if auth_mode == "basic" && !password.is_empty() {
@@ -1148,10 +1173,7 @@ fn add_profile(
                     .map_err(|e| format!("Config dir error: {e}"))?;
                 config::save_config(&cfg, &dir.path).map_err(|e| format!("Save error: {e}"))?;
                 let base = format!("Profile '{}' saved (password in config file)", name);
-                return Ok(match fp_warning {
-                    Some(w) => format!("{base}. Warning: {w}"),
-                    None => base,
-                });
+                return Ok(with_warnings(base, remove_orphaned_keyring_entry()));
             }
             return Err(format!(
                 "KEYRING_FAILED: could not store password in OS keyring: {e}"
@@ -1168,10 +1190,7 @@ fn add_profile(
         _ => "",
     };
     let base = format!("Profile '{}' saved{mode}", name);
-    Ok(match fp_warning {
-        Some(w) => format!("{base}. Warning: {w}"),
-        None => base,
-    })
+    Ok(with_warnings(base, remove_orphaned_keyring_entry()))
 }
 
 /// Path A: capture the bytes of a connected service's `$metadata` to the

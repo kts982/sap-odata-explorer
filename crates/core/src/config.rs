@@ -289,6 +289,52 @@ pub fn clear_session_if_connection_changed(
     }
 }
 
+/// What re-saving an existing profile must keep, or clean up, for state
+/// the edit surfaces (desktop edit dialog, `profile add` re-run) don't
+/// carry. Both rebuild the profile from their inputs; without this they
+/// silently dropped `insecure_tls`, a plaintext password, and orphaned the
+/// keyring entry on an auth-mode or username change.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ProfileCarryOver {
+    /// The existing profile's `insecure_tls` (neither surface edits it).
+    pub insecure_tls: bool,
+    /// Plaintext password to keep: still Basic, same username, no new
+    /// password given ("blank keeps the current password").
+    pub plaintext_password: Option<String>,
+    /// Username whose keyring entry the re-save makes unreachable (the
+    /// keyring key is profile + username): the profile leaves Basic auth or
+    /// changes username. Delete it once the new config is saved.
+    pub orphaned_keyring_user: Option<String>,
+}
+
+/// Decide the carry-over for re-saving profile `old` (None = new profile)
+/// as a Basic (`new_is_basic`) or SSO / Browser SSO profile.
+pub fn profile_carry_over(
+    old: Option<&ConnectionProfile>,
+    new_is_basic: bool,
+    new_username: &str,
+    new_password_given: bool,
+) -> ProfileCarryOver {
+    let Some(old) = old else {
+        return ProfileCarryOver::default();
+    };
+    let old_is_basic = !old.sso && !old.browser_sso;
+    let same_basic_user = old_is_basic && new_is_basic && old.username == new_username;
+    ProfileCarryOver {
+        insecure_tls: old.insecure_tls,
+        plaintext_password: if same_basic_user && !new_password_given {
+            old.password.clone()
+        } else {
+            None
+        },
+        orphaned_keyring_user: if old_is_basic && !old.username.is_empty() && !same_basic_user {
+            Some(old.username.clone())
+        } else {
+            None
+        },
+    }
+}
+
 /// Read a password from the OS keyring, distinguishing missing entries from
 /// real failures.
 ///
@@ -447,6 +493,67 @@ pub fn init_portable_config(config: &ConfigFile) -> anyhow::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn basic(user: &str, password: Option<&str>) -> ConnectionProfile {
+        ConnectionProfile {
+            base_url: "https://sap.corp".into(),
+            client: "100".into(),
+            language: "EN".into(),
+            username: user.into(),
+            password: password.map(String::from),
+            sso: false,
+            browser_sso: false,
+            insecure_tls: true,
+            sso_delegate: false,
+            aliases: Default::default(),
+        }
+    }
+
+    #[test]
+    fn carry_over_for_a_new_profile_is_empty() {
+        assert_eq!(
+            profile_carry_over(None, true, "u", false),
+            ProfileCarryOver::default()
+        );
+    }
+
+    #[test]
+    fn carry_over_keeps_insecure_tls_and_plaintext_password_on_blank_edit() {
+        let old = basic("u", Some("secret"));
+        let c = profile_carry_over(Some(&old), true, "u", false);
+        assert!(c.insecure_tls);
+        assert_eq!(c.plaintext_password.as_deref(), Some("secret"));
+        assert_eq!(c.orphaned_keyring_user, None);
+        // A new password replaces it.
+        assert_eq!(
+            profile_carry_over(Some(&old), true, "u", true).plaintext_password,
+            None
+        );
+    }
+
+    #[test]
+    fn carry_over_flags_the_keyring_entry_an_edit_orphans() {
+        let old = basic("u", None);
+        // Basic -> SSO / Browser SSO.
+        let c = profile_carry_over(Some(&old), false, "", false);
+        assert_eq!(c.orphaned_keyring_user.as_deref(), Some("u"));
+        assert_eq!(c.plaintext_password, None);
+        // Username change.
+        let c = profile_carry_over(Some(&old), true, "v", true);
+        assert_eq!(c.orphaned_keyring_user.as_deref(), Some("u"));
+        // Same user stays reachable.
+        assert_eq!(
+            profile_carry_over(Some(&old), true, "u", true).orphaned_keyring_user,
+            None
+        );
+        // Leaving SSO orphans nothing (no keyring entry).
+        let mut sso = basic("", None);
+        sso.sso = true;
+        assert_eq!(
+            profile_carry_over(Some(&sso), true, "u", true).orphaned_keyring_user,
+            None
+        );
+    }
 
     #[test]
     fn classify_no_storage_access_maps_to_locked() {
