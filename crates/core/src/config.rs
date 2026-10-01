@@ -120,10 +120,30 @@ pub struct ConfigDir {
     pub is_portable: bool,
 }
 
-/// Determine the config directory. Portable-first:
-/// 1. Look for connections.toml next to the executable
-/// 2. Fall back to OS-standard config dir (~/.config/sap-odata-explorer or AppData)
+/// Environment variable that pins the config directory explicitly.
+/// Takes precedence over portable and OS-standard locations. Useful for
+/// CI, for keeping separate configs side by side, and for tests.
+pub const CONFIG_DIR_ENV: &str = "SAP_ODATA_CONFIG_DIR";
+
+fn config_dir_from_env() -> Option<PathBuf> {
+    std::env::var_os(CONFIG_DIR_ENV)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
+/// Determine the config directory:
+/// 1. `SAP_ODATA_CONFIG_DIR`, if set
+/// 2. connections.toml next to the executable (portable)
+/// 3. OS-standard config dir (~/.config/sap-odata-explorer or AppData)
 pub fn find_config_dir() -> Option<ConfigDir> {
+    if let Some(path) = config_dir_from_env() {
+        debug!("Using config dir from {CONFIG_DIR_ENV}: {}", path.display());
+        return Some(ConfigDir {
+            path,
+            is_portable: false,
+        });
+    }
+
     // Try portable: next to the executable
     if let Ok(exe_path) = std::env::current_exe()
         && let Some(exe_dir) = exe_path.parent()
@@ -154,6 +174,14 @@ pub fn find_config_dir() -> Option<ConfigDir> {
 /// Get the config directory, creating it if it doesn't exist.
 /// If portable config exists next to exe, use that. Otherwise use OS config dir.
 pub fn get_or_create_config_dir() -> anyhow::Result<ConfigDir> {
+    if let Some(path) = config_dir_from_env() {
+        std::fs::create_dir_all(&path)?;
+        return Ok(ConfigDir {
+            path,
+            is_portable: false,
+        });
+    }
+
     // Check portable first
     if let Ok(exe_path) = std::env::current_exe()
         && let Some(exe_dir) = exe_path.parent()

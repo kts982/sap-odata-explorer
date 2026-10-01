@@ -59,6 +59,14 @@ export SAP_PASSWORD="..."
 sap-odata services -f business_partner
 ```
 
+`--help` lists `SAP_USER` / `SAP_PASSWORD` by name but never prints their values.
+
+`SAP_ODATA_CONFIG_DIR` pins the directory that holds `connections.toml` and the offline library. It takes precedence over both the portable location and the OS default (see [Config location](../README.md#config-location)) — handy for CI or for keeping separate configs side by side:
+
+```bash
+SAP_ODATA_CONFIG_DIR=./ci-config sap-odata offline list
+```
+
 ## Service path resolution
 
 For commands that need `--service`, the CLI resolves the value in this order:

@@ -38,11 +38,12 @@ struct Cli {
     language: Option<String>,
 
     /// Username for basic auth (overrides profile)
-    #[arg(long, env = "SAP_USER")]
+    #[arg(long, env = "SAP_USER", hide_env_values = true)]
     user: Option<String>,
 
     /// Password for basic auth (overrides profile)
-    #[arg(long, env = "SAP_PASSWORD")]
+    // hide_env_values: without it, `--help` prints `[env: SAP_PASSWORD=<value>]`.
+    #[arg(long, env = "SAP_PASSWORD", hide_env_values = true)]
     password: Option<String>,
 
     /// OData service path (e.g., /sap/opu/odata/sap/ZMY_SERVICE_SRV).

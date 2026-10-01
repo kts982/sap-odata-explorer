@@ -124,6 +124,7 @@ Profiles, aliases, and (optionally) plaintext-fallback passwords are stored in `
 |---|---|
 | Default | `%APPDATA%\sap-odata-explorer\config\connections.toml` on Windows · `~/.config/sap-odata-explorer/connections.toml` on Linux · `~/Library/Application Support/sap-odata-explorer/connections.toml` on macOS |
 | Portable | A `connections.toml` placed **next to the exe** takes precedence — useful when running from a USB stick or a copied folder on a locked-down machine. |
+| Explicit | The `SAP_ODATA_CONFIG_DIR` environment variable overrides both — useful for CI or for keeping separate configs side by side. |
 
 Run `sap-odata profile where` to print the exact path in use. Basic-auth passwords are stored in the OS keyring by default — see [Security notes](#security-notes) below.
 
