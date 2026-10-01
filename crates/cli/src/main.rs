@@ -1090,7 +1090,7 @@ fn cmd_alias_add(profile_name: &str, alias_name: &str, service_path: &str) -> Re
     profile
         .aliases
         .insert(alias_name.to_string(), service_path.to_string());
-    config::save_config(&cfg, &config_dir.path)?;
+    config::save_connections(&cfg, &config_dir.path)?;
     println!(
         "  Alias '{}' -> {} saved for profile '{}'.",
         alias_name, service_path, profile_name
@@ -1113,7 +1113,7 @@ fn cmd_alias_remove(profile_name: &str, alias_name: &str) -> Result<()> {
         );
     }
 
-    config::save_config(&cfg, &config_dir.path)?;
+    config::save_connections(&cfg, &config_dir.path)?;
     println!(
         "  Alias '{}' removed from profile '{}'.",
         alias_name, profile_name
@@ -1279,9 +1279,9 @@ async fn cmd_setup_wizard() -> Result<()> {
     cfg.connections.insert(name.clone(), profile);
     let save_path = if config_dir.path.as_os_str().is_empty() {
         let dir = config::get_or_create_config_dir()?;
-        config::save_config(&cfg, &dir.path)?
+        config::save_connections(&cfg, &dir.path)?
     } else {
-        config::save_config(&cfg, &config_dir.path)?
+        config::save_connections(&cfg, &config_dir.path)?
     };
 
     println!();
@@ -1590,9 +1590,9 @@ fn cmd_profile_add(
         config::init_portable_config(&cfg)?
     } else if config_dir.path.as_os_str().is_empty() {
         let dir = config::get_or_create_config_dir()?;
-        config::save_config(&cfg, &dir.path)?
+        config::save_connections(&cfg, &dir.path)?
     } else {
-        config::save_config(&cfg, &config_dir.path)?
+        config::save_connections(&cfg, &config_dir.path)?
     };
 
     if let Some(note) = password_note {
@@ -1646,7 +1646,7 @@ fn cmd_profile_remove(name: &str) -> Result<()> {
         warnings.push(format!("Browser SSO session — {e}"));
     }
 
-    config::save_config(&cfg, &config_dir.path)?;
+    config::save_connections(&cfg, &config_dir.path)?;
 
     if warnings.is_empty() {
         println!(

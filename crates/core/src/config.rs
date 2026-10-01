@@ -254,6 +254,41 @@ pub fn save_config(config: &ConfigFile, config_dir: &Path) -> anyhow::Result<Pat
     Ok(config_path)
 }
 
+/// Persist `config.connections` for the connected-profile writers (profile
+/// and alias add / remove, the setup wizard, the desktop profile dialog).
+///
+/// Those callers load the config, change `connections`, then write. The
+/// offline library changes `offline_profiles` / `offline_services` in the
+/// same file under `SaveLock` — from another process, or an async desktop
+/// command running meanwhile. Writing the caller's whole (stale)
+/// `ConfigFile` back could drop a just-saved offline service or resurrect
+/// a deleted one. This takes the same lock, reloads the file, replaces only
+/// the `connections` table, and re-checks that no connected profile name
+/// collides with an offline bucket created in the meantime.
+pub fn save_connections(config: &ConfigFile, config_dir: &Path) -> anyhow::Result<PathBuf> {
+    std::fs::create_dir_all(config_dir)?;
+    let _lock = crate::offline::save::SaveLock::acquire(config_dir)?;
+    let path = config_dir.join(CONFIG_FILENAME);
+    let mut on_disk: ConfigFile = if path.exists() {
+        toml::from_str(&std::fs::read_to_string(&path)?)?
+    } else {
+        ConfigFile::default()
+    };
+    if let Some(name) = config
+        .connections
+        .keys()
+        .find(|name| on_disk.offline_profiles.contains_key(*name))
+    {
+        anyhow::bail!(
+            "profile name '{name}' is now used by an offline bucket — choose another name"
+        );
+    }
+    on_disk.connections = config.connections.clone();
+    let content = toml::to_string_pretty(&on_disk)?;
+    let config_path = crate::offline::write_toml_atomically(config_dir, CONFIG_FILENAME, &content)?;
+    Ok(config_path)
+}
+
 /// Given the previous and new connection parameters for a profile, clear any
 /// persisted Browser SSO session if the connection fingerprint has changed.
 /// This prevents replaying cookies to a different SAP target after a profile
@@ -507,6 +542,67 @@ mod tests {
             sso_delegate: false,
             aliases: Default::default(),
         }
+    }
+
+    fn temp_config_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "sap_odata_cfg_{label}_{:?}",
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn save_connections_keeps_offline_entries_written_meanwhile() {
+        let dir = temp_config_dir("save_conn_merge");
+        // Caller's snapshot: loaded before an offline save happened.
+        let mut snapshot = ConfigFile::default();
+        snapshot.connections.insert("DEV".into(), basic("u", None));
+        // Meanwhile the offline store wrote a bucket to disk.
+        let mut on_disk = snapshot.clone();
+        on_disk.offline_profiles.insert(
+            "DEV (offline)".into(),
+            OfflineProfile {
+                source_profile: "DEV".into(),
+                created_at: "x".into(),
+            },
+        );
+        save_config(&on_disk, &dir).unwrap();
+
+        // The caller adds a profile and saves its stale snapshot.
+        snapshot.connections.insert("QAS".into(), basic("v", None));
+        save_connections(&snapshot, &dir).unwrap();
+
+        let content = std::fs::read_to_string(dir.join(CONFIG_FILENAME)).unwrap();
+        let back: ConfigFile = toml::from_str(&content).unwrap();
+        assert!(back.connections.contains_key("QAS"));
+        assert!(
+            back.offline_profiles.contains_key("DEV (offline)"),
+            "offline bucket written meanwhile must survive"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_connections_rejects_a_name_taken_by_an_offline_bucket_meanwhile() {
+        let dir = temp_config_dir("save_conn_collision");
+        let mut on_disk = ConfigFile::default();
+        on_disk.offline_profiles.insert(
+            "PRD".into(),
+            OfflineProfile {
+                source_profile: String::new(),
+                created_at: "x".into(),
+            },
+        );
+        save_config(&on_disk, &dir).unwrap();
+
+        let mut snapshot = ConfigFile::default();
+        snapshot.connections.insert("PRD".into(), basic("u", None));
+        let err = save_connections(&snapshot, &dir).unwrap_err();
+        assert!(err.to_string().contains("offline bucket"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -1171,7 +1171,7 @@ fn add_profile(
                 cfg.connections.insert(name.clone(), profile_with_pw);
                 let dir = config::get_or_create_config_dir()
                     .map_err(|e| format!("Config dir error: {e}"))?;
-                config::save_config(&cfg, &dir.path).map_err(|e| format!("Save error: {e}"))?;
+                config::save_connections(&cfg, &dir.path).map_err(|e| format!("Save error: {e}"))?;
                 let base = format!("Profile '{}' saved (password in config file)", name);
                 return Ok(with_warnings(base, remove_orphaned_keyring_entry()));
             }
@@ -1183,7 +1183,7 @@ fn add_profile(
 
     cfg.connections.insert(name.clone(), profile);
     let dir = config::get_or_create_config_dir().map_err(|e| format!("Config dir error: {e}"))?;
-    config::save_config(&cfg, &dir.path).map_err(|e| format!("Save error: {e}"))?;
+    config::save_connections(&cfg, &dir.path).map_err(|e| format!("Save error: {e}"))?;
     let mode = match auth_mode.as_str() {
         "sso" => " with Windows SSO",
         "browser" => " with browser SSO",
@@ -1388,7 +1388,7 @@ fn remove_profile(state: tauri::State<'_, AppState>, name: String) -> Result<Str
     if let Err(e) = sap_odata_core::session::clear(&name) {
         warnings.push(format!("Browser SSO session — {e}"));
     }
-    config::save_config(&cfg, &config_dir.path).map_err(|e| format!("Save error: {e}"))?;
+    config::save_connections(&cfg, &config_dir.path).map_err(|e| format!("Save error: {e}"))?;
     if warnings.is_empty() {
         Ok(format!("Profile '{}' removed", name))
     } else {
