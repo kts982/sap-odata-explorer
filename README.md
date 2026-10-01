@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![CI](https://github.com/kts982/sap-odata-explorer/actions/workflows/ci.yml/badge.svg)](https://github.com/kts982/sap-odata-explorer/actions/workflows/ci.yml)
-[![Rust 1.85+](https://img.shields.io/badge/Rust-1.85+-orange.svg)](https://rustup.rs)
+[![Rust 1.88+](https://img.shields.io/badge/Rust-1.88+-orange.svg)](https://rustup.rs)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#)
 
 > [!TIP]
@@ -72,7 +72,7 @@ The CLI and the desktop app share the same `connections.toml` and Windows Creden
 
 ### Package managers
 
-**Cargo** (CLI, any OS with Rust 1.85+ — builds from source, no SmartScreen involved):
+**Cargo** (CLI, any OS with Rust 1.88+ — builds from source, no SmartScreen involved):
 
 ```bash
 cargo install sap-odata-cli
@@ -95,7 +95,7 @@ scoop install sap-odata-explorer   # Desktop app (portable)
 
 ### Build from source (Linux, macOS, or if you prefer)
 
-**Prerequisites:** Rust 1.85+ ([rustup.rs](https://rustup.rs)) and Node.js 20+ (for the desktop app frontend build).
+**Prerequisites:** Rust 1.88+ for the CLI, 1.90+ for the desktop app ([rustup.rs](https://rustup.rs)), and Node.js 20+ for the desktop app frontend build.
 
 ```bash
 git clone https://github.com/kts982/sap-odata-explorer.git

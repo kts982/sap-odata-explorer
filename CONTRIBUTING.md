@@ -5,7 +5,7 @@ Thanks for your interest! This is an early-stage project — issues, discussions
 ## Development setup
 
 **Prerequisites:**
-- Rust 1.85+ ([rustup.rs](https://rustup.rs))
+- Rust 1.88+ for core + CLI, 1.90+ for the desktop app ([rustup.rs](https://rustup.rs))
 - Node.js 20+ (for Tauri app frontend build; Tailwind CSS v4 requires it)
 - Windows, Linux, or macOS
 

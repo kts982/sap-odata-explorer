@@ -5,6 +5,10 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+# Core + CLI floor: let-chains (stable in 1.88) and locked dependencies
+# (cookie_store, time). CI's `msrv` job builds both on exactly this
+# version. The desktop crate declares its own, higher floor.
+rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/kts982/sap-odata-explorer"
 

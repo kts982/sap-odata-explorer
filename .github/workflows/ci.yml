@@ -70,6 +70,20 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  msrv:
+    # Core + CLI promise `rust-version = "1.88"` (what `cargo install
+    # sap-odata-cli` users need). A dependency bump that raises the real
+    # floor fails here instead of on a user's machine.
+    name: MSRV (core + CLI on Rust 1.88)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.88
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check (locked)
+        run: cargo check -p sap-odata-core -p sap-odata-cli --locked
+
   audit:
     name: Security audit
     runs-on: ubuntu-latest
