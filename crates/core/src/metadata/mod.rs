@@ -1643,7 +1643,7 @@ mod tests {
 
     #[test]
     fn test_v4_value_list_references_and_fixed_values_are_captured() {
-        // Shape observed on HA9 (UI_PHYSSTOCKPROD_1): properties carry
+        // Shape observed on a live S/4HANA system (UI_PHYSSTOCKPROD_1): properties carry
         // Common.ValueListReferences (relative URL) plus the marker-only
         // Common.ValueListWithFixedValues.
         let xml = r#"<?xml version="1.0" encoding="utf-8"?>
@@ -2167,7 +2167,7 @@ mod tests {
               <Collection>
                 <Record Type="UI.ParameterType">
                   <PropertyValue Property="PropertyName" PropertyPath="Warehouse"/>
-                  <PropertyValue Property="PropertyValue" String="HB01"/>
+                  <PropertyValue Property="PropertyValue" String="WH01"/>
                 </Record>
               </Collection>
             </PropertyValue>
@@ -2227,7 +2227,7 @@ mod tests {
         assert_eq!(v.text.as_deref(), Some("Pending Orders"));
         assert_eq!(v.parameters.len(), 1);
         assert_eq!(v.parameters[0].property_name, "Warehouse");
-        assert_eq!(v.parameters[0].property_value, "HB01");
+        assert_eq!(v.parameters[0].property_value, "WH01");
         assert_eq!(v.select_options.len(), 2);
         let status = &v.select_options[0];
         assert_eq!(status.property_name, "Status");
