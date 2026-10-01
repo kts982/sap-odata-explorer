@@ -1734,7 +1734,6 @@ fn combine_filter_with_in(filter: Option<String>, in_values: &[String]) -> Resul
     }))
 }
 
-#[allow(clippy::too_many_arguments)]
 /// OData version implied by an SAP service path (`/sap/opu/odata4/…` is
 /// V4). `build` sends no request, so it can't read `$metadata`; the path
 /// convention decides version-specific syntax such as `$count=true` (V4)
@@ -1747,6 +1746,7 @@ fn version_from_service_path(path: &str) -> ODataVersion {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_query(
     entity_set: &str,
     select: Option<String>,
