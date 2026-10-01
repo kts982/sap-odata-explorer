@@ -1394,6 +1394,30 @@ async fn save_service_offline(
     })
 }
 
+/// The bundled synthetic sample service — written for this app, no SAP
+/// system or customer data behind it. Compiled in, so "Try the sample
+/// service" needs no file access and no network.
+const SAMPLE_SERVICE_EDMX: &str = include_str!("../resources/sample-service.edmx");
+
+/// "Try the sample service": import the bundled EDMX into the `Sample`
+/// offline bucket. Idempotent — re-importing identical bytes is a no-op
+/// that returns the existing entry.
+#[tauri::command]
+fn import_sample_service() -> Result<SaveOutcome, String> {
+    let (mut cfg, config_dir) = config::load_config().map_err(|e| format!("Config error: {e}"))?;
+    offline::import_edmx_from_bytes(
+        &mut cfg,
+        &config_dir.path,
+        SAMPLE_SERVICE_EDMX.as_bytes(),
+        Some("sample-service.edmx".to_string()),
+        Some("Sample".to_string()),
+        Some("SAMPLE_WAREHOUSE".to_string()),
+        Some("Bundled sample — synthetic metadata, no SAP system behind it".to_string()),
+        current_iso8601(),
+    )
+    .map_err(|e| format!("Sample import error: {e}"))
+}
+
 /// Bytes-based path-B import for the webview's `<input type="file">`
 /// flow. The browser's file picker hands JS a `File` object whose
 /// content is readable via `arrayBuffer()` but whose filesystem path
@@ -1986,6 +2010,7 @@ fn main() {
             add_profile,
             save_service_offline,
             import_edmx_bytes,
+            import_sample_service,
             list_offline_services,
             delete_offline_service,
             remove_profile,

@@ -12,8 +12,10 @@
 
 import { state } from './state.js';
 import { safeHtml, raw } from './html.js';
-import { criticalityHint, valueListHint } from './format.js';
-import { getActiveTab } from './tabs.js';
+import { criticalityHint, valueListHint, describeAsMarkdown, serviceODataVersion } from './format.js';
+import { copyToClipboard } from './clipboard.js';
+import { isOfflineProfile } from './auth.js';
+import { getActiveTab, currentDescribeInfo } from './tabs.js';
 import { propertyFlagHints, renderSelectionFieldsBar } from './query.js';
 import {
   renderFioriColsButton,
@@ -161,6 +163,22 @@ export function applyDescribeCollapsed(tab) {
   const collapsed = !!(tab && tab._describeCollapsed);
   document.getElementById('describeContent').classList.toggle('hidden', collapsed);
   document.getElementById('btnCollapseDescribe').textContent = collapsed ? 'expand' : 'collapse';
+}
+
+export function copyDescribeForAi() {
+  const tab = getActiveTab();
+  const info = currentDescribeInfo(tab);
+  if (!info) return;
+  // Offline services are addressed by their cache id — say so.
+  const servicePath = isOfflineProfile(state.currentProfile)
+    ? `offline copy ${state.currentServicePath} in "${state.currentProfile}"`
+    : state.currentServicePath;
+  const md = describeAsMarkdown(info, {
+    entitySet: state.currentEntitySet,
+    servicePath,
+    version: serviceODataVersion(tab),
+  });
+  copyToClipboard(md, `${state.currentEntitySet} as markdown`);
 }
 
 export function toggleDescribeCollapsed() {

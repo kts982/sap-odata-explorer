@@ -21,7 +21,7 @@ import { state } from './state.js';
 import { invoke } from './vendor/tauri-core.js';
 import { timedInvoke } from './api.js';
 import { setStatus } from './status.js';
-import { loadProfiles, searchServices } from './services.js';
+import { loadProfiles, searchServices, pickService } from './services.js';
 import { getActiveTab } from './tabs.js';
 import { isOfflineProfile } from './auth.js';
 
@@ -206,6 +206,25 @@ export async function deleteOfflineServiceRow(serviceId) {
 /// `change`-event-driven cache survives across import / save calls
 /// and the user has to restart the app (or switch profiles and back)
 /// to see the new entry. Bug discovered in 2026-05-19 smoke testing.
+// "Try the sample service": import the bundled synthetic EDMX into the
+// `Sample` bucket, switch to it and open the service — SAP View, the
+// annotation inspector, lint, the filter bar and autocomplete all work
+// without an SAP connection.
+export async function trySampleService() {
+  setStatus('Loading the sample service...');
+  try {
+    const outcome = await invoke('import_sample_service');
+    await loadProfiles();
+    const select = document.getElementById('profileSelect');
+    select.value = outcome.offline_profile_name;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await searchServices('');
+    await pickService({ technical_name: outcome.service_id, service_url: '', version: 'V4' });
+  } catch (e) {
+    setStatus('Sample service: ' + e);
+  }
+}
+
 async function refreshServicesIfActiveProfile(outcomeProfileName) {
   if (!outcomeProfileName) return;
   if (state.currentProfile !== outcomeProfileName) return;

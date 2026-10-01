@@ -1,0 +1,304 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Bundled sample service for "Try the sample service". Synthetic: written
+  for this app, no customer system or SAP content behind it. Shaped like a
+  RAP-generated V4 service so the SAP View overlay, value help markers,
+  the filter bar, autocomplete and the Fiori-readiness lint all have
+  something to show without an SAP connection.
+-->
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" Version="4.0">
+  <edmx:Reference Uri="https://sap.github.io/odata-vocabularies/vocabularies/Common.xml">
+    <edmx:Include Namespace="com.sap.vocabularies.Common.v1" Alias="SAP__common"/>
+  </edmx:Reference>
+  <edmx:Reference Uri="https://sap.github.io/odata-vocabularies/vocabularies/UI.xml">
+    <edmx:Include Namespace="com.sap.vocabularies.UI.v1" Alias="SAP__UI"/>
+  </edmx:Reference>
+  <edmx:Reference Uri="https://oasis-tcs.github.io/odata-vocabularies/vocabularies/Org.OData.Capabilities.V1.xml">
+    <edmx:Include Namespace="Org.OData.Capabilities.V1" Alias="SAP__capabilities"/>
+  </edmx:Reference>
+  <edmx:Reference Uri="https://oasis-tcs.github.io/odata-vocabularies/vocabularies/Org.OData.Measures.V1.xml">
+    <edmx:Include Namespace="Org.OData.Measures.V1" Alias="SAP__measures"/>
+  </edmx:Reference>
+  <edmx:DataServices>
+    <Schema xmlns="http://docs.oasis-open.org/odata/ns/edm" Namespace="com.sap.gateway.srvd.zsample_warehouse.v0001" Alias="SAP__self">
+
+      <EntityType Name="WarehouseOrderType">
+        <Key>
+          <PropertyRef Name="Warehouse"/>
+          <PropertyRef Name="WarehouseOrder"/>
+        </Key>
+        <Property Name="Warehouse" Type="Edm.String" Nullable="false" MaxLength="4"/>
+        <Property Name="WarehouseName" Type="Edm.String" MaxLength="40"/>
+        <Property Name="WarehouseOrder" Type="Edm.String" Nullable="false" MaxLength="10"/>
+        <Property Name="Status" Type="Edm.String" MaxLength="1"/>
+        <Property Name="StatusText" Type="Edm.String" MaxLength="20"/>
+        <Property Name="StatusCriticality" Type="Edm.Byte"/>
+        <Property Name="Queue" Type="Edm.String" MaxLength="10"/>
+        <Property Name="Priority" Type="Edm.Int16"/>
+        <Property Name="CreatedAt" Type="Edm.DateTimeOffset" Precision="7"/>
+        <Property Name="PlannedDuration" Type="Edm.Decimal" Precision="13" Scale="3"/>
+        <Property Name="DurationUnit" Type="Edm.String" MaxLength="3"/>
+        <NavigationProperty Name="_Tasks" Type="Collection(SAP__self.WarehouseTaskType)" Partner="_Order"/>
+      </EntityType>
+
+      <EntityType Name="WarehouseTaskType">
+        <Key>
+          <PropertyRef Name="Warehouse"/>
+          <PropertyRef Name="WarehouseTask"/>
+        </Key>
+        <Property Name="Warehouse" Type="Edm.String" Nullable="false" MaxLength="4"/>
+        <Property Name="WarehouseTask" Type="Edm.String" Nullable="false" MaxLength="12"/>
+        <Property Name="WarehouseOrder" Type="Edm.String" MaxLength="10"/>
+        <Property Name="Product" Type="Edm.String" MaxLength="40"/>
+        <Property Name="ProductDescription" Type="Edm.String" MaxLength="40"/>
+        <Property Name="SourceStorageBin" Type="Edm.String" MaxLength="18"/>
+        <Property Name="DestinationStorageBin" Type="Edm.String" MaxLength="18"/>
+        <Property Name="TargetQuantity" Type="Edm.Decimal" Precision="31" Scale="14"/>
+        <Property Name="QuantityUnit" Type="Edm.String" MaxLength="3"/>
+        <Property Name="IsConfirmed" Type="Edm.Boolean"/>
+        <NavigationProperty Name="_Order" Type="SAP__self.WarehouseOrderType" Partner="_Tasks"/>
+      </EntityType>
+
+      <EntityType Name="WarehouseVHType">
+        <Key>
+          <PropertyRef Name="Warehouse"/>
+        </Key>
+        <Property Name="Warehouse" Type="Edm.String" Nullable="false" MaxLength="4"/>
+        <Property Name="WarehouseName" Type="Edm.String" MaxLength="40"/>
+      </EntityType>
+
+      <EntityContainer Name="Container">
+        <EntitySet Name="WarehouseOrders" EntityType="SAP__self.WarehouseOrderType">
+          <NavigationPropertyBinding Path="_Tasks" Target="WarehouseTasks"/>
+        </EntitySet>
+        <EntitySet Name="WarehouseTasks" EntityType="SAP__self.WarehouseTaskType">
+          <NavigationPropertyBinding Path="_Order" Target="WarehouseOrders"/>
+        </EntitySet>
+        <EntitySet Name="Warehouses" EntityType="SAP__self.WarehouseVHType"/>
+      </EntityContainer>
+
+      <!-- ── Warehouse orders ─────────────────────────────────────────── -->
+      <Annotations Target="SAP__self.WarehouseOrderType">
+        <Annotation Term="SAP__UI.HeaderInfo">
+          <Record>
+            <PropertyValue Property="TypeName" String="Warehouse Order"/>
+            <PropertyValue Property="TypeNamePlural" String="Warehouse Orders"/>
+            <PropertyValue Property="Title">
+              <Record Type="SAP__UI.DataField"><PropertyValue Property="Value" Path="WarehouseOrder"/></Record>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+        <Annotation Term="SAP__UI.SelectionFields">
+          <Collection>
+            <PropertyPath>Warehouse</PropertyPath>
+            <PropertyPath>Status</PropertyPath>
+            <PropertyPath>Queue</PropertyPath>
+          </Collection>
+        </Annotation>
+        <Annotation Term="SAP__UI.LineItem">
+          <Collection>
+            <Record Type="SAP__UI.DataField">
+              <PropertyValue Property="Value" Path="WarehouseOrder"/>
+              <PropertyValue Property="Importance" EnumMember="SAP__UI.ImportanceType/High"/>
+            </Record>
+            <Record Type="SAP__UI.DataField">
+              <PropertyValue Property="Value" Path="Status"/>
+              <PropertyValue Property="Criticality" Path="StatusCriticality"/>
+            </Record>
+            <Record Type="SAP__UI.DataField"><PropertyValue Property="Value" Path="Queue"/></Record>
+            <Record Type="SAP__UI.DataField"><PropertyValue Property="Value" Path="CreatedAt"/></Record>
+            <Record Type="SAP__UI.DataField"><PropertyValue Property="Value" Path="PlannedDuration"/></Record>
+            <Record Type="SAP__UI.DataFieldForAction">
+              <PropertyValue Property="Label" String="Release"/>
+              <PropertyValue Property="Action" String="SAP__self.Release"/>
+            </Record>
+          </Collection>
+        </Annotation>
+        <Annotation Term="SAP__UI.PresentationVariant">
+          <Record>
+            <PropertyValue Property="SortOrder">
+              <Collection>
+                <Record Type="SAP__common.SortOrderType">
+                  <PropertyValue Property="Property" PropertyPath="CreatedAt"/>
+                  <PropertyValue Property="Descending" Bool="true"/>
+                </Record>
+              </Collection>
+            </PropertyValue>
+            <PropertyValue Property="RequestAtLeast">
+              <Collection>
+                <PropertyPath>Warehouse</PropertyPath>
+                <PropertyPath>DurationUnit</PropertyPath>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+        <Annotation Term="SAP__UI.SelectionVariant" Qualifier="OpenOrders">
+          <Record>
+            <PropertyValue Property="Text" String="Open orders"/>
+            <PropertyValue Property="SelectOptions">
+              <Collection>
+                <Record Type="SAP__UI.SelectOptionType">
+                  <PropertyValue Property="PropertyName" PropertyPath="Status"/>
+                  <PropertyValue Property="Ranges">
+                    <Collection>
+                      <Record Type="SAP__UI.SelectionRangeType">
+                        <PropertyValue Property="Sign" EnumMember="SAP__UI.SelectionRangeSignType/I"/>
+                        <PropertyValue Property="Option" EnumMember="SAP__UI.SelectionRangeOptionType/EQ"/>
+                        <PropertyValue Property="Low" String="O"/>
+                      </Record>
+                    </Collection>
+                  </PropertyValue>
+                </Record>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+        <Annotation Term="SAP__common.SemanticKey">
+          <Collection>
+            <PropertyPath>Warehouse</PropertyPath>
+            <PropertyPath>WarehouseOrder</PropertyPath>
+          </Collection>
+        </Annotation>
+      </Annotations>
+      <Annotations Target="SAP__self.WarehouseOrderType/Warehouse">
+        <Annotation Term="SAP__common.Label" String="Warehouse"/>
+        <Annotation Term="SAP__common.Text" Path="WarehouseName">
+          <Annotation Term="SAP__UI.TextArrangement" EnumMember="SAP__UI.TextArrangementType/TextFirst"/>
+        </Annotation>
+        <Annotation Term="SAP__common.ValueList">
+          <Record>
+            <PropertyValue Property="Label" String="Warehouses"/>
+            <PropertyValue Property="CollectionPath" String="Warehouses"/>
+            <PropertyValue Property="SearchSupported" Bool="true"/>
+            <PropertyValue Property="Parameters">
+              <Collection>
+                <Record Type="SAP__common.ValueListParameterInOut">
+                  <PropertyValue Property="LocalDataProperty" PropertyPath="Warehouse"/>
+                  <PropertyValue Property="ValueListProperty" String="Warehouse"/>
+                </Record>
+                <Record Type="SAP__common.ValueListParameterDisplayOnly">
+                  <PropertyValue Property="ValueListProperty" String="WarehouseName"/>
+                </Record>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+      </Annotations>
+      <Annotations Target="SAP__self.WarehouseOrderType/WarehouseName">
+        <Annotation Term="SAP__common.Label" String="Warehouse Name"/>
+      </Annotations>
+      <Annotations Target="SAP__self.WarehouseOrderType/WarehouseOrder">
+        <Annotation Term="SAP__common.Label" String="Warehouse Order"/>
+      </Annotations>
+      <Annotations Target="SAP__self.WarehouseOrderType/Status">
+        <Annotation Term="SAP__common.Label" String="Status"/>
+        <Annotation Term="SAP__common.Text" Path="StatusText"/>
+        <Annotation Term="SAP__UI.Criticality" Path="StatusCriticality"/>
+        <Annotation Term="SAP__common.ValueListWithFixedValues"/>
+      </Annotations>
+      <Annotations Target="SAP__self.WarehouseOrderType/StatusText">
+        <Annotation Term="SAP__common.Label" String="Status Text"/>
+      </Annotations>
+      <Annotations Target="SAP__self.WarehouseOrderType/StatusCriticality">
+        <Annotation Term="SAP__UI.Hidden"/>
+      </Annotations>
+      <Annotations Target="SAP__self.WarehouseOrderType/Queue">
+        <Annotation Term="SAP__common.Label" String="Queue"/>
+      </Annotations>
+      <Annotations Target="SAP__self.WarehouseOrderType/Priority">
+        <Annotation Term="SAP__common.Label" String="Priority"/>
+      </Annotations>
+      <Annotations Target="SAP__self.WarehouseOrderType/CreatedAt">
+        <Annotation Term="SAP__common.Label" String="Created On"/>
+        <Annotation Term="SAP__common.FieldControl" EnumMember="SAP__common.FieldControlType/ReadOnly"/>
+      </Annotations>
+      <Annotations Target="SAP__self.WarehouseOrderType/PlannedDuration">
+        <Annotation Term="SAP__common.Label" String="Planned Duration"/>
+        <Annotation Term="SAP__measures.Unit" Path="DurationUnit"/>
+      </Annotations>
+      <Annotations Target="SAP__self.WarehouseOrderType/DurationUnit">
+        <Annotation Term="SAP__common.Label" String="Duration Unit"/>
+      </Annotations>
+      <Annotations Target="SAP__self.Container/WarehouseOrders">
+        <Annotation Term="SAP__capabilities.FilterRestrictions">
+          <Record>
+            <PropertyValue Property="RequiredProperties">
+              <Collection><PropertyPath>Warehouse</PropertyPath></Collection>
+            </PropertyValue>
+            <PropertyValue Property="NonFilterableProperties">
+              <Collection><PropertyPath>StatusCriticality</PropertyPath></Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+        <Annotation Term="SAP__capabilities.SortRestrictions">
+          <Record>
+            <PropertyValue Property="NonSortableProperties">
+              <Collection><PropertyPath>StatusText</PropertyPath></Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+        <Annotation Term="SAP__capabilities.SearchRestrictions">
+          <Record><PropertyValue Property="Searchable" Bool="false"/></Record>
+        </Annotation>
+      </Annotations>
+
+      <!-- ── Warehouse tasks ──────────────────────────────────────────── -->
+      <Annotations Target="SAP__self.WarehouseTaskType">
+        <Annotation Term="SAP__UI.HeaderInfo">
+          <Record>
+            <PropertyValue Property="TypeName" String="Warehouse Task"/>
+            <PropertyValue Property="TypeNamePlural" String="Warehouse Tasks"/>
+            <PropertyValue Property="Title">
+              <Record Type="SAP__UI.DataField"><PropertyValue Property="Value" Path="WarehouseTask"/></Record>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+        <Annotation Term="SAP__UI.SelectionFields">
+          <Collection>
+            <PropertyPath>Warehouse</PropertyPath>
+            <PropertyPath>WarehouseOrder</PropertyPath>
+            <PropertyPath>Product</PropertyPath>
+          </Collection>
+        </Annotation>
+        <Annotation Term="SAP__UI.LineItem">
+          <Collection>
+            <Record Type="SAP__UI.DataField"><PropertyValue Property="Value" Path="WarehouseTask"/></Record>
+            <Record Type="SAP__UI.DataField"><PropertyValue Property="Value" Path="Product"/></Record>
+            <Record Type="SAP__UI.DataField"><PropertyValue Property="Value" Path="SourceStorageBin"/></Record>
+            <Record Type="SAP__UI.DataField"><PropertyValue Property="Value" Path="DestinationStorageBin"/></Record>
+            <Record Type="SAP__UI.DataField"><PropertyValue Property="Value" Path="TargetQuantity"/></Record>
+            <Record Type="SAP__UI.DataField"><PropertyValue Property="Value" Path="IsConfirmed"/></Record>
+          </Collection>
+        </Annotation>
+      </Annotations>
+      <Annotations Target="SAP__self.WarehouseTaskType/Product">
+        <Annotation Term="SAP__common.Label" String="Product"/>
+        <Annotation Term="SAP__common.Text" Path="ProductDescription"/>
+      </Annotations>
+      <Annotations Target="SAP__self.WarehouseTaskType/ProductDescription">
+        <Annotation Term="SAP__common.Label" String="Product Description"/>
+      </Annotations>
+      <Annotations Target="SAP__self.WarehouseTaskType/TargetQuantity">
+        <Annotation Term="SAP__common.Label" String="Target Quantity"/>
+        <Annotation Term="SAP__measures.Unit" Path="QuantityUnit"/>
+      </Annotations>
+      <Annotations Target="SAP__self.WarehouseTaskType/IsConfirmed">
+        <Annotation Term="SAP__common.Label" String="Confirmed"/>
+      </Annotations>
+
+      <!-- ── Warehouse value help ─────────────────────────────────────── -->
+      <Annotations Target="SAP__self.WarehouseVHType/Warehouse">
+        <Annotation Term="SAP__common.Label" String="Warehouse"/>
+        <Annotation Term="SAP__common.Text" Path="WarehouseName"/>
+      </Annotations>
+      <Annotations Target="SAP__self.WarehouseVHType/WarehouseName">
+        <Annotation Term="SAP__common.Label" String="Warehouse Name"/>
+      </Annotations>
+      <Annotations Target="SAP__self.Container/Warehouses">
+        <Annotation Term="SAP__capabilities.SearchRestrictions">
+          <Record><PropertyValue Property="Searchable" Bool="true"/></Record>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>

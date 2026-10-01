@@ -92,6 +92,10 @@ export function resetResultsArea() {
         <div class="text-ox-dim text-xs leading-relaxed">
           Select a <span class="text-ox-text">profile</span> &middot; search for a <span class="text-ox-text">service</span> &middot; explore <span class="text-ox-text">entities</span>
         </div>
+        <div class="text-ox-dim text-[11px] mt-4">
+          No SAP system at hand?
+          <button data-action="try-sample" class="text-ox-amber hover:text-ox-text underline underline-offset-2 transition-colors">Try the sample service</button>
+        </div>
       </div>
     </div>`;
 }

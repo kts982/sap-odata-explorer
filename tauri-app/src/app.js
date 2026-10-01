@@ -22,7 +22,7 @@ import {
   removeCurrentProfile,
   signInCurrentProfile,
 } from './auth.js';
-import { wireOfflineButtons, deleteOfflineServiceRow } from './offline.js';
+import { wireOfflineButtons, deleteOfflineServiceRow, trySampleService } from './offline.js';
 import { getFavorites, toggleFavorite } from './favorites.js';
 import {
   loadProfiles,
@@ -73,6 +73,7 @@ import {
   renderDescribe,
   hideDescribe,
   toggleDescribeCollapsed,
+  copyDescribeForAi,
   addToSelect,
   addToExpand,
 } from './describe.js';
@@ -306,6 +307,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btnCopyTsv').addEventListener('click', () => copyResultsDelimited('\t', 'TSV'));
   document.getElementById('btnCopyCsv').addEventListener('click', () => copyResultsDelimited(',', 'CSV'));
   document.getElementById('btnCollapseDescribe').addEventListener('click', toggleDescribeCollapsed);
+  document.getElementById('btnCopyDescribe').addEventListener('click', copyDescribeForAi);
   document.getElementById('btnAppVersion').addEventListener('click', onVersionClick);
   document.getElementById('btnFeedback').addEventListener('click', () => openProjectPage('feedback'));
   initAppInfo();
@@ -413,6 +415,8 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (action === 'copy-row') {
       e.stopPropagation();
       copyRowAsJson(el.dataset.key);
+    } else if (action === 'try-sample') {
+      trySampleService();
     } else if (action === 'row-detail') {
       e.stopPropagation();
       showRowDetail(el.dataset.key);

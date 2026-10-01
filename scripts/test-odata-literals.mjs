@@ -152,5 +152,36 @@ check('V2 GUID key prefixed', keyPredicate(['StockItemUUID'], guidRow, types, 'V
 check('string key quoted and escaped', keyPredicate(['Product'], guidRow, types, 'V4'), "Product='O''Brien'");
 check('missing key value → null', keyPredicate(['Missing'], guidRow, types, 'V4'), null);
 
-console.log(failures ? `\n${failures} failure(s)` : `\nall ${cases.length + 26} assertions passed`);
+// "copy for AI" markdown.
+const { describeAsMarkdown } = await import(`file://${FORMAT_MODULE.replace(/\\/g, '/')}`);
+const md = describeAsMarkdown(
+  {
+    name: 'OrderType',
+    keys: ['ID'],
+    header_info: { type_name: 'Order', type_name_plural: 'Orders', title_path: 'ID' },
+    properties: [
+      { name: 'ID', edm_type: 'Edm.String', max_length: 10, label: 'Order', is_key: true },
+      { name: 'Plant', edm_type: 'Edm.String', label: 'Plant | Site', required_in_filter: true, text_path: 'PlantName', value_list_references: ['../f4'] },
+      { name: 'SAP__Messages', edm_type: 'Collection(SAP__self.SAP__Message)' },
+    ],
+    nav_properties: [{ name: '_Items', target_type: 'n.ItemType', multiplicity: '*' }],
+    selection_fields: ['Plant'],
+    line_item: [{ value_path: 'ID' }, { value_path: 'Plant' }],
+    sort_order: [{ property: 'ID', descending: true }],
+    countable: false,
+    fiori_readiness: [
+      { severity: 'pass', code: 'profile', message: 'Evaluated as list_report.' },
+      { severity: 'warn', code: 'text_missing', message: 'Code-looking properties without Common.Text: X' },
+    ],
+  },
+  { entitySet: 'Orders', servicePath: '/sap/opu/odata4/x/0001', version: 'V4' },
+);
+check('markdown: heading + context', md.split('\n').slice(0, 2), ['## Orders (OrderType)', '/sap/opu/odata4/x/0001 · OData V4']);
+check('markdown: key row', md.includes('| ID | String(10) | Order | key |'), true);
+check('markdown: notes + escaped pipe', md.includes('| Plant | String | Plant \\| Site | required in filter, text: PlantName, value help |'), true);
+check('markdown: system fields skipped', md.includes('SAP__Messages'), false);
+check('markdown: navigation + annotations', [md.includes('_Items → ItemType (*)'), md.includes('Default sort: ID desc'), md.includes('Capabilities: no $count')], [true, true, true]);
+check('markdown: lint findings without the profile banner', [md.includes('- warn text_missing'), md.includes('profile:')], [true, false]);
+
+console.log(failures ? `\n${failures} failure(s)` : `\nall ${cases.length + 32} assertions passed`);
 process.exit(failures ? 1 : 0);

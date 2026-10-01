@@ -243,6 +243,67 @@ export function keyPredicate(keys, row, typeByName, version) {
   return parts.join(',');
 }
 
+// The described entity as compact markdown — to paste into an AI chat or
+// a ticket. `ctx` = { entitySet, servicePath, version }.
+export function describeAsMarkdown(info, ctx) {
+  if (!info) return '';
+  const cell = v => String(v ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+  const lines = [];
+  const typeName = info.name || '';
+  lines.push(`## ${ctx.entitySet || typeName} (${typeName})`);
+  const where = [ctx.servicePath, ctx.version ? `OData ${ctx.version}` : ''].filter(Boolean).join(' · ');
+  if (where) lines.push(where);
+  lines.push('');
+  if (info.keys && info.keys.length) lines.push(`Keys: ${info.keys.join(', ')}`);
+  if (info.header_info) {
+    const h = info.header_info;
+    const names = [h.type_name, h.type_name_plural].filter(Boolean).join(' / ');
+    if (names) lines.push(`Header: ${names}${h.title_path ? ` (title: ${h.title_path})` : ''}`);
+  }
+  lines.push('', '| Property | Type | Label | Notes |', '|---|---|---|---|');
+  for (const p of info.properties || []) {
+    if (p.name.startsWith('SAP__') || p.name.startsWith('__')) continue;
+    const type = (p.edm_type || '').replace(/^Edm\./, '') + (p.max_length ? `(${p.max_length})` : '');
+    const notes = [];
+    if (p.is_key) notes.push('key');
+    if (p.required_in_filter) notes.push('required in filter');
+    if (p.filterable === false) notes.push('not filterable');
+    if (p.sortable === false) notes.push('not sortable');
+    if (p.creatable === false && p.updatable === false) notes.push('read-only');
+    if (p.text_path) notes.push(`text: ${p.text_path}`);
+    if (p.unit_path) notes.push(`unit: ${p.unit_path}`);
+    if (p.iso_currency_path) notes.push(`currency: ${p.iso_currency_path}`);
+    if (p.value_list || (p.value_list_references && p.value_list_references.length)) notes.push('value help');
+    else if (p.value_list_fixed) notes.push('fixed values');
+    if (p.hidden) notes.push('hidden');
+    if (p.masked) notes.push('masked');
+    if (p.display_format) notes.push(`format: ${p.display_format}`);
+    lines.push(`| ${cell(p.name)} | ${cell(type)} | ${cell(p.label)} | ${cell(notes.join(', '))} |`);
+  }
+  const navs = info.nav_properties || [];
+  if (navs.length) {
+    lines.push('', 'Navigation: ' + navs.map(n => `${n.name} → ${String(n.target_type || '').split('.').pop()} (${n.multiplicity || '?'})`).join('; '));
+  }
+  if (info.selection_fields && info.selection_fields.length) lines.push(`Selection fields: ${info.selection_fields.join(', ')}`);
+  if (info.line_item && info.line_item.length) lines.push(`LineItem columns: ${info.line_item.map(f => f.value_path).join(', ')}`);
+  if (info.sort_order && info.sort_order.length) {
+    lines.push(`Default sort: ${info.sort_order.map(s => `${s.property} ${s.descending ? 'desc' : 'asc'}`).join(', ')}`);
+  }
+  const caps = [];
+  if (info.searchable === false) caps.push('no $search');
+  if (info.countable === false) caps.push('no $count');
+  if (info.top_supported === false) caps.push('no $top');
+  if (info.skip_supported === false) caps.push('no $skip');
+  if (info.expandable === false) caps.push('no $expand');
+  if (caps.length) lines.push(`Capabilities: ${caps.join(', ')}`);
+  const findings = (info.fiori_readiness || []).filter(f => f.code !== 'profile' && f.severity !== 'pass');
+  if (findings.length) {
+    lines.push('', 'Fiori readiness:');
+    for (const f of findings) lines.push(`- ${f.severity} ${f.code}: ${f.message}`);
+  }
+  return lines.join('\n') + '\n';
+}
+
 // Total row count from an inline-count response, or null.
 // V4 `@odata.count`; V2 `d.__count` (a string).
 export function extractTotalCount(data) {
