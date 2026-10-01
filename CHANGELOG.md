@@ -30,6 +30,7 @@ All notable changes to this project are documented here. Format loosely follows 
 - Browser SSO sessions are stored as raw bytes, nearly **tripling the cookie capacity** of the Windows credential store (~960 → 2560 compressed bytes); sessions saved by 0.1.0 still load. When saving the session fails, the desktop sign-in says so instead of silently reporting success.
 - Connected-profile writes (profile / alias add and remove, setup wizard, desktop profile dialog) **take the offline store's lock** and replace only the connections table, so they can't drop or resurrect offline-library entries written meanwhile.
 - `services -v` can no longer panic on multi-byte catalog text.
+- V4 `$search` terms the user already put in quotes are no longer quoted twice (`""red car""` → 400).
 
 ### Fixes — Fiori-readiness lint
 
@@ -46,6 +47,9 @@ All notable changes to this project are documented here. Format loosely follows 
 
 ### New — Desktop app
 
+- **Autocomplete in the query bar** from the entity's metadata: property names in `$select` / `$orderby` (then asc / desc), navigation properties in `$expand`, and in `$filter` properties and functions, then operators after a property, then `and` / `or` after a value.
+- **Paging and totals.** An opt-in **count** checkbox asks for the total; the stats bar shows `rows 21–40 of 1,843` with **prev / next**. Next follows the server's `$skiptoken` when it pages on its own (V4 services return 100 rows plus a next link when no `$top` is given), else steps `$skip` by `$top`.
+- **copy TSV / copy CSV** in the stats bar copy the current rows — TSV pastes straight into Excel. Nested values become JSON; fields with delimiters, quotes or line breaks are quoted.
 - **CLI** button next to **URL**: copies the current query as a `sap-odata … run …` command (quoted for Bash and PowerShell) — for scripts or an AI agent.
 - **collapse** in the entity-details header folds the property tables away to give the results room (remembered per tab).
 - The status bar shows the **version**; clicking it checks GitHub for a newer release (user-initiated only — no telemetry). **Feedback** opens the GitHub issue chooser.

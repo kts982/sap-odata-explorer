@@ -36,7 +36,8 @@ export function buildODataUrl(params) {
   return `${state.currentServicePath}/${params.entity_set}${qs}`;
 }
 
-export async function executeQuery(asJson = false) {
+// `opts.skiptoken` follows a server-driven next link (pager "next").
+export async function executeQuery(asJson = false, opts = {}) {
   if (!state.currentProfile || !state.currentServicePath || !state.currentEntitySet) {
     setStatus('Select a profile, service, and entity set first');
     return;
@@ -51,7 +52,8 @@ export async function executeQuery(asJson = false) {
     top:     parseInt(document.getElementById('qTop').value)  || null,
     skip:    parseInt(document.getElementById('qSkip').value) || null,
     key:     null,
-    count:   false,
+    count:   document.getElementById('qCount').checked,
+    skiptoken: opts.skiptoken || null,
   };
 
   // SAP View pre-flight: when enabled, surface restriction warnings

@@ -135,6 +135,9 @@
             class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-16 outline-hidden" />
           <input id="qSkip" type="number" placeholder="skip"
             class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-16 outline-hidden" />
+          <label class="flex items-center gap-1 text-[10px] font-mono text-ox-dim cursor-pointer" title="Ask the server for the total row count ($count / $inlinecount) — can be slow on very large sets">
+            <input id="qCount" type="checkbox" class="accent-ox-amber" /> count
+          </label>
           <button id="btnRun" class="btn-primary text-xs px-3 py-1 rounded-sm">Run</button>
           <button id="btnJson" class="btn-ghost text-xs px-2.5 py-1 rounded-sm">{&thinsp;}</button>
           <button id="btnCopyUrl" class="btn-ghost text-xs px-2 py-1 rounded-sm" title="Copy OData URL">
@@ -159,6 +162,16 @@
         <span id="statSize"></span>
         <span class="text-ox-border">·</span>
         <span id="statTiming"></span>
+        <span id="statPager" class="hidden flex items-center gap-1">
+          <span class="text-ox-border">·</span>
+          <span id="statRange" class="text-ox-text"></span>
+          <button id="btnPagePrev" class="btn-ghost text-[11px] px-1.5 rounded-sm" title="Previous page">&#8249; prev</button>
+          <button id="btnPageNext" class="btn-ghost text-[11px] px-1.5 rounded-sm" title="Next page">next &#8250;</button>
+        </span>
+        <span class="ml-auto flex items-center gap-1">
+          <button id="btnCopyTsv" class="btn-ghost text-[11px] px-1.5 rounded-sm" title="Copy these rows as tab-separated text — pastes straight into Excel">copy TSV</button>
+          <button id="btnCopyCsv" class="btn-ghost text-[11px] px-1.5 rounded-sm" title="Copy these rows as CSV">copy CSV</button>
+        </span>
       </div>
 
       <!-- SAP View warnings strip (pre-flight restriction hints) -->

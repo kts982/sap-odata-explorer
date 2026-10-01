@@ -162,6 +162,8 @@ struct QueryParams {
     key: Option<String>,
     count: Option<bool>,
     search: Option<String>,
+    /// Continuation token from a server-driven next link (`$skiptoken`).
+    skiptoken: Option<String>,
 }
 
 #[derive(Clone)]
@@ -1157,6 +1159,11 @@ async fn run_query(
     }
     if params.count.unwrap_or(false) {
         q = q.count();
+    }
+    if let Some(ref token) = params.skiptoken
+        && !token.is_empty()
+    {
+        q = q.skiptoken(token);
     }
     if let Some(ref term) = params.search {
         let trimmed = term.trim();

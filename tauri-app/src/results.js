@@ -23,6 +23,8 @@ import {
   formatODataLiteral,
   serviceODataVersion,
   buildCliCommand,
+  pagingInfo,
+  toDelimited,
 } from './format.js';
 import { isOfflineProfile } from './auth.js';
 import { setStatus } from './status.js';
@@ -235,6 +237,48 @@ export function renderResults(data, elapsedMs, params) {
   // state.lastResultRows already set above for copy operations
 
   setStatus(`${rows.length} row(s)${nestedCols.length ? ' — click badges to view expanded data' : ''}`);
+  renderPager(data, params || {}, rows.length);
+}
+
+// Range + prev / next in the stats bar. Paging state lives on the tab so
+// the buttons know what the next request is.
+function renderPager(data, params, rowCount) {
+  const info = pagingInfo(data, params, rowCount);
+  const tab = getActiveTab();
+  if (tab) tab._paging = info;
+  const from = info.offset + 1;
+  const to = info.offset + rowCount;
+  const of = info.total !== null ? ` of ${info.total.toLocaleString()}` : '';
+  document.getElementById('statRange').textContent = `rows ${from}–${to}${of}`;
+  document.getElementById('btnPagePrev').disabled = info.prevSkip === null;
+  document.getElementById('btnPageNext').disabled = !info.hasMore;
+  document.getElementById('statPager').classList.remove('hidden');
+}
+
+export function goToPage(direction) {
+  const tab = getActiveTab();
+  const p = tab && tab._paging;
+  if (!p) return;
+  const skipInput = document.getElementById('qSkip');
+  if (direction === 'next' && p.nextSkiptoken !== null) {
+    skipInput.value = '';
+    executeQuery(false, { skiptoken: p.nextSkiptoken });
+  } else if (direction === 'next' && p.nextSkip !== null) {
+    skipInput.value = String(p.nextSkip);
+    executeQuery(false);
+  } else if (direction === 'prev' && p.prevSkip !== null) {
+    skipInput.value = p.prevSkip ? String(p.prevSkip) : '';
+    executeQuery(false);
+  }
+}
+
+export function copyResultsDelimited(delimiter, label) {
+  const rows = state.lastResultRows;
+  if (!rows || rows.length === 0) {
+    setStatus('No rows to copy');
+    return;
+  }
+  copyToClipboard(toDelimited(rows, delimiter), `${rows.length} row(s) as ${label}`);
 }
 
 export function showNestedData(storeKey, colName) {

@@ -92,6 +92,8 @@ import {
   copyRowAsJson,
   copyODataUrl,
   copyCliCommand,
+  goToPage,
+  copyResultsDelimited,
   showFilterTooltip,
   hideFilterTooltip,
   applyFilterFromTooltip,
@@ -295,6 +297,10 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btnJson').addEventListener('click', () => executeQuery(true));
   document.getElementById('btnCopyUrl').addEventListener('click', copyODataUrl);
   document.getElementById('btnCopyCli').addEventListener('click', copyCliCommand);
+  document.getElementById('btnPagePrev').addEventListener('click', () => goToPage('prev'));
+  document.getElementById('btnPageNext').addEventListener('click', () => goToPage('next'));
+  document.getElementById('btnCopyTsv').addEventListener('click', () => copyResultsDelimited('\t', 'TSV'));
+  document.getElementById('btnCopyCsv').addEventListener('click', () => copyResultsDelimited(',', 'CSV'));
   document.getElementById('btnCollapseDescribe').addEventListener('click', toggleDescribeCollapsed);
   document.getElementById('btnAppVersion').addEventListener('click', onVersionClick);
   document.getElementById('btnFeedback').addEventListener('click', () => openProjectPage('feedback'));

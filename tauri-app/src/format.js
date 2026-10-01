@@ -229,6 +229,64 @@ export function buildCliCommand(profile, servicePath, params) {
   return parts.join(' ');
 }
 
+// Total row count from an inline-count response, or null.
+// V4 `@odata.count`; V2 `d.__count` (a string).
+export function extractTotalCount(data) {
+  if (!data || typeof data !== 'object') return null;
+  const raw = data['@odata.count'] ?? (data.d && data.d.__count);
+  const n = Number(raw);
+  return raw === undefined || raw === null || Number.isNaN(n) ? null : n;
+}
+
+// `$skiptoken` of a server-driven next link (V4 `@odata.nextLink`, V2
+// `d.__next`), or null when the server didn't page.
+export function nextSkiptoken(data) {
+  if (!data || typeof data !== 'object') return null;
+  const link = data['@odata.nextLink'] ?? (data.d && data.d.__next);
+  if (typeof link !== 'string') return null;
+  const m = /[?&]\$skiptoken=([^&]*)/.exec(link);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+// Paging state for the stats bar, from the response and the params that
+// produced it. `offset` is known from $skip, or from a numeric
+// $skiptoken (SAP's RAP tokens are row offsets).
+export function pagingInfo(data, params, rowCount) {
+  const total = extractTotalCount(data);
+  const token = nextSkiptoken(data);
+  const pageSize = params.top || rowCount;
+  const tokenOffset = params.skiptoken && /^\d+$/.test(params.skiptoken) ? Number(params.skiptoken) : null;
+  const offset = params.skip || tokenOffset || 0;
+  const hasMore = token !== null
+    || (total !== null ? offset + rowCount < total : !!params.top && rowCount === params.top);
+  return {
+    offset,
+    rowCount,
+    total,
+    nextSkiptoken: token,
+    nextSkip: token === null && hasMore ? offset + pageSize : null,
+    prevSkip: offset > 0 && (params.skip || tokenOffset !== null) ? Math.max(0, offset - pageSize) : null,
+    hasMore,
+  };
+}
+
+// Rows as delimited text (TSV for pasting into Excel, CSV). Columns are
+// the first row's keys minus OData bookkeeping (`@…`, `__metadata`);
+// nested values become compact JSON, null becomes empty. Fields holding
+// the delimiter, a quote or a line break are quoted, quotes doubled.
+export function toDelimited(rows, delimiter) {
+  if (!Array.isArray(rows) || rows.length === 0) return '';
+  const cols = Object.keys(rows[0]).filter(k => !k.startsWith('@') && k !== '__metadata');
+  const field = v => {
+    if (v === null || v === undefined) return '';
+    const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+    return s.includes(delimiter) || /["\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [cols.map(field).join(delimiter)];
+  for (const row of rows) lines.push(cols.map(c => field(row[c])).join(delimiter));
+  return lines.join('\r\n');
+}
+
 // `contains(prop, lit)` in V4; V2 has no `contains` and spells the same
 // test `substringof(lit, prop)`.
 export function containsClause(property, literal, version) {

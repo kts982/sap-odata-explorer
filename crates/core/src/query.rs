@@ -51,6 +51,7 @@ pub struct ODataQuery {
     orderby: Vec<String>,
     top: Option<u32>,
     skip: Option<u32>,
+    skiptoken: Option<String>,
     count: bool,
     search: Option<String>,
     format: Option<String>,
@@ -106,6 +107,14 @@ impl ODataQuery {
     /// Set $skip offset.
     pub fn skip(mut self, n: u32) -> Self {
         self.skip = Some(n);
+        self
+    }
+
+    /// Set `$skiptoken` — the continuation token from a server-driven
+    /// next link (`@odata.nextLink` / `__next`), to fetch the next page the
+    /// way the server asked for it.
+    pub fn skiptoken(mut self, token: &str) -> Self {
+        self.skiptoken = Some(token.to_string());
         self
     }
 
@@ -171,6 +180,9 @@ impl ODataQuery {
         if let Some(skip) = self.skip {
             params.push(format!("$skip={skip}"));
         }
+        if let Some(ref token) = self.skiptoken {
+            params.push(format!("$skiptoken={}", enc(token)));
+        }
         if self.count {
             match self.version {
                 Some(ODataVersion::V4) => params.push("$count=true".to_string()),
@@ -182,7 +194,9 @@ impl ODataQuery {
             // services accept a bare `search=term` custom param.
             match self.version {
                 Some(ODataVersion::V4) => {
-                    params.push(format!("$search={}", enc(&format!("\"{term}\""))));
+                    // Quote the phrase once, even if the user already did.
+                    let phrase = term.trim().trim_matches('"');
+                    params.push(format!("$search={}", enc(&format!("\"{phrase}\""))));
                 }
                 _ => {
                     params.push(format!("search={}", enc(term)));
@@ -218,6 +232,24 @@ impl std::fmt::Display for ODataQuery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skiptoken_is_emitted_and_encoded() {
+        let q = ODataQuery::new("CountryVH").skiptoken("100");
+        assert!(q.build().contains("$skiptoken=100"), "{}", q.build());
+        let q = ODataQuery::new("X").skiptoken("a b'c");
+        assert!(q.build().contains("$skiptoken=a%20b'c"), "{}", q.build());
+    }
+
+    #[test]
+    fn v4_search_term_already_in_quotes_is_quoted_once() {
+        let q = ODataQuery::new("X")
+            .version(ODataVersion::V4)
+            .search("\"red car\"");
+        let built = q.build();
+        assert!(built.contains("$search=%22red%20car%22"), "{built}");
+        assert!(!built.contains("%22%22"), "{built}");
+    }
 
     #[test]
     fn test_simple_query() {
