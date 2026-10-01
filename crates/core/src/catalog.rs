@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Serialize;
 use tracing::debug;
 
@@ -89,7 +90,7 @@ async fn fetch_v2_catalog(client: &SapClient) -> Result<Vec<CatalogEntry>, OData
     debug!(
         "V2 catalog raw response ({} bytes): {}",
         json_text.len(),
-        &json_text[..json_text.len().min(500)]
+        prefix_chars(&json_text, 500)
     );
     let data: serde_json::Value = serde_json::from_str(&json_text)
         .map_err(|e| ODataError::MetadataParse(format!("V2 catalog parse error: {e}")))?;
@@ -182,9 +183,9 @@ pub async fn resolve_v4_service_url(
 ) -> Result<String, ODataError> {
     client.ensure_session(V4_CATALOG_PATH).await?;
 
-    // URL-encode the group ID for the key (single quotes around it)
     let url_path = format!(
-        "{V4_CATALOG_PATH}/ServiceGroups('{group_id}')/DefaultSystem/Services?$format=json"
+        "{V4_CATALOG_PATH}/ServiceGroups('{}')/DefaultSystem/Services?$format=json",
+        encode_key_string(group_id)
     );
     let json_text = client.get_raw(V4_CATALOG_PATH, &url_path).await?;
     let data: serde_json::Value = serde_json::from_str(&json_text)
@@ -238,6 +239,11 @@ pub async fn resolve_service_by_name(client: &SapClient, name: &str) -> Result<S
         Ok(v4_entries) => {
             for entry in &v4_entries {
                 if entry.technical_name.to_lowercase() == name_lower {
+                    // The expanded catalog usually carries the URL already.
+                    if !entry.service_url.is_empty() {
+                        debug!("Resolved '{name}' via V4 catalog: {}", entry.service_url);
+                        return Ok(entry.service_url.clone());
+                    }
                     debug!("Found '{name}' in V4 catalog, resolving URL...");
                     match resolve_v4_service_url(client, &entry.technical_name).await {
                         Ok(url) => {
@@ -247,6 +253,7 @@ pub async fn resolve_service_by_name(client: &SapClient, name: &str) -> Result<S
                         }
                         Err(e) => {
                             debug!("V4 URL resolution failed for '{name}': {e}");
+                            errors.push(format!("V4 group '{}': {e}", entry.technical_name));
                         }
                     }
                 }
@@ -266,6 +273,31 @@ pub async fn resolve_service_by_name(client: &SapClient, name: &str) -> Result<S
     Err(ODataError::ServiceNotFound(format!(
         "service '{name}' not found in V2 or V4 catalogs{detail}"
     )))
+}
+
+/// Characters escaped inside a quoted OData key literal in a path
+/// segment: everything except RFC 3986 unreserved characters. Notably
+/// `/` becomes `%2F`, which SAP Gateway expects for namespaced IDs
+/// (`ServiceGroups('%2FIWBEP%2FTEA')`; SAP's own `$metadata` references
+/// use the same form).
+const KEY_LITERAL: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~');
+
+/// Encode a string for use between the quotes of an OData key literal:
+/// double embedded `'` (OData escaping), then percent-encode.
+fn encode_key_string(value: &str) -> String {
+    utf8_percent_encode(&value.replace('\'', "''"), KEY_LITERAL).to_string()
+}
+
+/// The first `max` characters of `text`, never splitting a UTF-8 char.
+fn prefix_chars(text: &str, max: usize) -> &str {
+    match text.char_indices().nth(max) {
+        Some((idx, _)) => &text[..idx],
+        None => text,
+    }
 }
 
 /// Extract the path component from a URL, stripping scheme, host, and query params.
@@ -311,5 +343,28 @@ impl CatalogEntry {
     /// Version label for display.
     pub fn version_label(&self) -> &str {
         if self.is_v4 { "V4" } else { "V2" }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_literal_encodes_namespace_slashes_and_doubles_quotes() {
+        assert_eq!(encode_key_string("/IWBEP/TEA"), "%2FIWBEP%2FTEA");
+        assert_eq!(encode_key_string("Z_SAMPLE_ORDERS_2"), "Z_SAMPLE_ORDERS_2");
+        assert_eq!(encode_key_string("O'Brien"), "O%27%27Brien");
+        assert_eq!(encode_key_string("A B"), "A%20B");
+    }
+
+    #[test]
+    fn prefix_chars_never_splits_a_multibyte_char() {
+        // 499 ASCII bytes then a 2-byte char straddling byte 500: a byte
+        // slice at 500 would panic.
+        let text = format!("{}ß tail", "a".repeat(499));
+        assert_eq!(prefix_chars(&text, 500), format!("{}ß", "a".repeat(499)));
+        assert_eq!(prefix_chars("short", 500), "short");
+        assert_eq!(prefix_chars("αβγ", 2), "αβ");
     }
 }
