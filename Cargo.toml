@@ -3,7 +3,7 @@ members = ["crates/core", "crates/cli", "tauri-app/src-tauri"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 # Core + CLI floor: let-chains (stable in 1.88) and locked dependencies
 # (cookie_store, time). CI's `msrv` job builds both on exactly this
@@ -15,7 +15,7 @@ repository = "https://github.com/kts982/sap-odata-explorer"
 [workspace.dependencies]
 # `version` alongside `path`: local builds resolve via path, `cargo publish`
 # rewrites the dependency to the crates.io version.
-sap-odata-core = { path = "crates/core", version = "0.1.0" }
+sap-odata-core = { path = "crates/core", version = "0.2.0" }
 anyhow = "1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }

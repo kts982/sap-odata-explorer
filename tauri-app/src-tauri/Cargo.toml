@@ -1,6 +1,6 @@
 [package]
 name = "sap-odata-explorer-app"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 # Tauri 2.12 requires 1.90.
 rust-version = "1.90"

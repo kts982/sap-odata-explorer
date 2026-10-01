@@ -2,7 +2,9 @@
 
 All notable changes to this project are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.2.0] — 2026-10-01
+
+Correctness and security fixes from a full code review, plus desktop ergonomics: autocomplete in the query fields, paging and counts, row detail with navigation drill-down, persistent history, environment labels, a bundled sample service, and offline-bucket browsing from the CLI. `connections.toml` and the offline library layout are unchanged; session caches saved by 0.1.0 still load. Binaries remain unsigned.
 
 ### Security
 
