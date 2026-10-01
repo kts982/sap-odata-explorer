@@ -30,7 +30,10 @@ All examples use fictional hostnames like `sap-dev.example.com` paired with real
 
 ## Global flags
 
-These work with any command:
+`--profile`/`-p`, `--json` and `--verbose`/`-v` work in any position. The
+connection flags (`--service`/`-s`, `--url`, `--client`, `--language`,
+`--user`, `--password`) go **before** the subcommand —
+`sap-odata -s X entities`, not `sap-odata entities -s X`.
 
 | Flag | Short | Environment | Purpose |
 |---|---|---|---|
@@ -73,7 +76,7 @@ Requests time out instead of hanging: 30 s to connect, and 300 s of silence whil
 
 For commands that need `--service`, the CLI resolves the value in this order:
 
-1. **Absolute path** — anything starting with `/` is used as-is (e.g., `-s /sap/opu/odata/sap/API_BUSINESS_PARTNER`).
+1. **Service path** — a value starting with `/sap/` is used as-is (e.g., `-s /sap/opu/odata/sap/API_BUSINESS_PARTNER`). Namespaced technical names such as `/IWBEP/TEA` also start with `/` but are resolved by the next two steps.
 2. **Alias** — if the value matches an alias on the active profile (see [`alias add`](#alias)), the alias target is used.
 3. **Catalog lookup** — otherwise the CLI queries the SAP Gateway catalog (`/IWFND/CATALOGSERVICE;v=2`) and resolves by technical name, e.g. `-s API_BUSINESS_PARTNER`.
 
@@ -118,7 +121,7 @@ Shows each profile with its base URL, client, language, auth mode, and the passw
 - `config (plaintext)` — password lives in `connections.toml`. Discouraged.
 - `OS keyring` — password stored in the OS credential store.
 - `NOT SET` — Basic-auth profile but no password is stored anywhere.
-- `keyring locked` / `keyring corrupt` / `keyring error` — the credential store rejected the read. The fix is to unlock / repair the OS credential store, not to re-add the profile. Use `--verbose` for the underlying diagnostic.
+- `keyring locked` / `keyring corrupt` / `keyring error` — the credential store rejected the read. The fix is to unlock / repair the OS credential store, not to re-add the profile.
 
 #### `profile add`
 
@@ -477,7 +480,7 @@ sap-odata offline list                       # all buckets
 sap-odata offline list --profile "DEV (offline)"   # services + ids in one bucket
 ```
 
-With `--profile`, each row shows the `service_id` (used by `-s` and
+With `--profile`, each row shows the `service_id` (used by
 `offline delete --service-id`), label, OData version, size, and attribution.
 
 #### `offline delete`
@@ -575,6 +578,7 @@ The CLI surfaces SAP-specific hints alongside raw HTTP status codes. These are t
 | `browser sign-in incomplete; SAP or the IdP returned HTML instead of OData` | Browser SSO session expired / cookies stale | Run `sap-odata signout <profile>` then sign in again from the desktop app |
 | `server returned 500 ... — Hint: SAP returned a server-side error. Check /IWFND/ERROR_LOG, ST22, and backend application logs.` | Dump or application error in the backend | Use transaction `/IWFND/ERROR_LOG` for the gateway error, `ST22` for ABAP short dumps |
 | `Authentication was accepted by the HTTP stack but SAP rejected the request.` | SSO transport worked, but the resolved user lacks service authorisation | Check SU53 on the backend for missing authorisation objects |
-| `No services found. Warnings: ...` | Catalog returned 0 services, often because of filters that are too strict or a silent catalog error | Rerun with `--verbose` and inspect the trace; try without `--v4`/`--v2`; check the warnings the catalog itself reported |
+| `could not fetch the service catalog: V2 catalog: ...; V4 catalog: ...` | Every catalog request failed (auth, expired session, network, SICF node inactive) | The per-catalog reasons follow the colon; rerun with `--verbose` for the full HTTP trace |
+| `No services found.` | The catalog answered but nothing matched | Loosen `-f`; try without `--v4`/`--v2` |
 
 For anything else, `--verbose` and reading the HTTP trace is almost always enough to spot the cause — it includes the redirect chain, server-reported SAP error messages, and the first ~4KB of any response body.

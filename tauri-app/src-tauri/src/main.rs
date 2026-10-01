@@ -1571,7 +1571,7 @@ async fn sign_out_profile(
 
     let persisted_note = match &persisted_err {
         Some(e) => format!(
-            " Warning: persisted session could NOT be cleared from keyring ({e}) — it may still be replayed on next app start."
+            " Warning: persisted session could NOT be cleared from keyring ({e}) — the CLI may keep reusing it until it expires."
         ),
         None => String::new(),
     };

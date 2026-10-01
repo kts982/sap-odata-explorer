@@ -25,6 +25,7 @@ cargo test --workspace
 git diff --check
 node scripts/lint-innerhtml.mjs
 node scripts/test-safe-html.mjs
+node scripts/test-odata-literals.mjs
 ```
 
 Run from `tauri-app/`:
@@ -33,7 +34,7 @@ Run from `tauri-app/`:
 npm run css
 ```
 
-`cargo clippy --workspace --all-targets -- -D warnings` runs in CI as a hard gate; release builds inherit the same constraint. `scripts/test-safe-html.mjs` is local-only for now — it pins the parser-vs-renderer escaping contract; CI wiring is a follow-up.
+`cargo clippy --workspace --all-targets -- -D warnings`, the MSRV check (core + CLI on Rust 1.88), `scripts/test-safe-html.mjs` (the parser-vs-renderer escaping contract) and `scripts/test-odata-literals.mjs` (V2/V4 filter-literal formatting) all run in CI as hard gates.
 
 ## Desktop security
 

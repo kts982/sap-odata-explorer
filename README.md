@@ -179,7 +179,7 @@ If you prefer scripted setup, `sap-odata profile add ...` is still available for
 | `entities` | List entity sets in a service |
 | `describe <set>` | Show properties, keys, nav properties, labels |
 | `functions` | List function imports / actions |
-| `build <set> [query]` | Dry-run: print the OData URL, no HTTP call |
+| `build <set> [query]` | Dry-run: print the OData URL without querying it |
 | `run <set> [query]` | Execute query, show results as table |
 | `metadata` | Dump raw `$metadata` XML |
 | `verify` | Smoke-test every entity set with a small `$top` probe; exit code reflects failures (CI-friendly) |
@@ -194,8 +194,8 @@ See [CLI-REFERENCE.md](docs/CLI-REFERENCE.md) for all options (or run `sap-odata
 
 ### Use with AI agents
 
-The CLI is deliberately agent-friendly: `--json` on every command, clean
-stdout (banners and HTTP traces go to stderr), meaningful exit codes, and a
+The CLI is deliberately agent-friendly: `--json` on every command that returns
+data, clean stdout (banners, logs and HTTP traces go to stderr), meaningful exit codes, and a
 strictly read-only SAP surface. [`skills/sap-odata-cli/SKILL.md`](skills/sap-odata-cli/SKILL.md)
 is a ready-made skill that teaches a coding agent the safe workflows —
 discovery, describe, queries, lint, offline EDMX — plus the failure
@@ -298,7 +298,7 @@ The `sap-odata-core` crate holds all protocol logic. CLI and Tauri are thin wrap
 
 ## Directions
 
-Not a commitment — priorities may shift. Open issues track current focus.
+Not a commitment — priorities may shift.
 
 Legend: `[x]` done · `[-]` partial / in progress · `[ ]` planned
 

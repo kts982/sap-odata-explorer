@@ -13,10 +13,11 @@ The only things it mutates are its own local files (profiles in
 ## Ground rules
 
 - **Add `--json` to any command whose output you parse.** Default output is a
-  human table. JSON goes to stdout; progress banners and `--verbose` HTTP
-  traces go to stderr — parse stdout only.
-- **Never run `sap-odata setup`** — it is an interactive wizard and will hang a
-  non-interactive shell. Profiles are set up by the user (wizard or desktop
+  human table. JSON goes to stdout; progress banners, logs and `--verbose`
+  HTTP traces go to stderr — parse stdout only. On failure stdout is empty,
+  the reason is on stderr, and the exit code is non-zero.
+- **Never run `sap-odata setup`** — it is an interactive wizard and fails
+  immediately in a non-interactive shell. Profiles are set up by the user (wizard or desktop
   app). If no profile exists, ask the user to create one; for scripted/CI use,
   `profile add` with flags or `SAP_BASE_URL`/`SAP_CLIENT`/`SAP_USER`/`SAP_PASSWORD`
   env vars work non-interactively.
@@ -32,7 +33,7 @@ The only things it mutates are its own local files (profiles in
 ## Orientation — what system, what services
 
 ```bash
-sap-odata profile list                      # configured systems + auth state
+sap-odata profile list --json               # configured systems + auth state
 sap-odata -p DEV services -f <text> --json  # find services (substring match)
 sap-odata -p DEV -s <SERVICE> entities      # entity sets in a service
 ```
@@ -40,6 +41,11 @@ sap-odata -p DEV -s <SERVICE> entities      # entity sets in a service
 `-s` accepts a technical name (`API_BUSINESS_PARTNER`, resolved via the
 Gateway catalog), a full path (`/sap/opu/odata/sap/...` — required when the
 catalog is unpublished, common for V4), or a per-profile alias.
+
+`profile list --json` gives each profile's `auth` (`basic` / `sso` /
+`browser_sso`) and `password_source`. `not_set` or `keyring_locked` /
+`keyring_corrupt` / `keyring_error` means the user has to fix credentials —
+report it rather than retrying.
 
 ## Inspect an entity
 

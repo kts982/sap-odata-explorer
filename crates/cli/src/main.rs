@@ -692,7 +692,7 @@ async fn main() -> Result<()> {
                     *skip,
                     key.clone(),
                     *count,
-                    None,
+                    Some(version_from_service_path(&svc)),
                 );
                 let full_url = format!("{}/{}", svc.trim_end_matches('/'), query.build());
                 if cli.json {
@@ -1735,6 +1735,18 @@ fn combine_filter_with_in(filter: Option<String>, in_values: &[String]) -> Resul
 }
 
 #[allow(clippy::too_many_arguments)]
+/// OData version implied by an SAP service path (`/sap/opu/odata4/…` is
+/// V4). `build` sends no request, so it can't read `$metadata`; the path
+/// convention decides version-specific syntax such as `$count=true` (V4)
+/// vs `$inlinecount=allpages` (V2).
+fn version_from_service_path(path: &str) -> ODataVersion {
+    if path.contains("/odata4/") {
+        ODataVersion::V4
+    } else {
+        ODataVersion::V2
+    }
+}
+
 fn build_query(
     entity_set: &str,
     select: Option<String>,

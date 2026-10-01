@@ -319,3 +319,70 @@ fn config_dir_env_override_isolates_the_offline_library() {
     assert_eq!(buckets[0]["name"], "Imported");
     assert_eq!(buckets[0]["service_count"], 1);
 }
+
+// ── build ──
+
+/// `build` with a full service path sends no request at all, so a
+/// closed local URL is enough.
+fn build_url(sb: &Sandbox, service: &str, extra: &[&str]) -> String {
+    let url = closed_local_url();
+    let mut args = vec![
+        "--url",
+        &url,
+        "--user",
+        "u",
+        "--password",
+        "p",
+        "-s",
+        service,
+        "build",
+        "Items",
+    ];
+    args.extend_from_slice(extra);
+    let out = sb.run(&args);
+    assert!(out.status.success(), "{}", stderr(&out));
+    stdout(&out).trim().to_string()
+}
+
+#[test]
+fn build_count_uses_the_version_of_the_service_path() {
+    let sb = Sandbox::new("build_count");
+    let v4 = build_url(
+        &sb,
+        "/sap/opu/odata4/sap/zsrv/srvd/sap/zsrv/0001",
+        &["--count"],
+    );
+    assert!(v4.contains("$count=true"), "{v4}");
+    assert!(!v4.contains("inlinecount"), "{v4}");
+    let v2 = build_url(&sb, "/sap/opu/odata/sap/ZSRV", &["--count"]);
+    assert!(v2.contains("$inlinecount=allpages"), "{v2}");
+}
+
+#[test]
+fn build_json_is_a_json_string() {
+    let sb = Sandbox::new("build_json");
+    let url = closed_local_url();
+    let out = sb.run(&[
+        "--url",
+        &url,
+        "--user",
+        "u",
+        "--password",
+        "p",
+        "--json",
+        "-s",
+        "/sap/opu/odata/sap/ZSRV",
+        "build",
+        "Items",
+        "--top",
+        "5",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("JSON");
+    assert!(
+        v.as_str()
+            .unwrap()
+            .starts_with("/sap/opu/odata/sap/ZSRV/Items?"),
+        "{v}"
+    );
+}
