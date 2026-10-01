@@ -50,6 +50,7 @@ All notable changes to this project are documented here. Format loosely follows 
 - **Autocomplete in the query bar** from the entity's metadata: property names in `$select` / `$orderby` (then asc / desc), navigation properties in `$expand`, and in `$filter` properties and functions, then operators after a property, then `and` / `or` after a value.
 - **Paging and totals.** An opt-in **count** checkbox asks for the total; the stats bar shows `rows 21–40 of 1,843` with **prev / next**. Next follows the server's `$skiptoken` when it pages on its own (V4 services return 100 rows plus a next link when no `$top` is given), else steps `$skip` by `$top`.
 - **Row details and drill-down.** The ↗ button on a result row shows it as a list (field, value, label, type) and offers the entity's navigation properties — one click loads `EntitySet(key)/Navigation` for that row.
+- **Query history survives restarts** and follows the service: the last 50 queries per profile and service (parameters only, never results), re-runs of the same query refresh their entry, and ★ pins a query so it stays.
 - **copy TSV / copy CSV** in the stats bar copy the current rows — TSV pastes straight into Excel. Nested values become JSON; fields with delimiters, quotes or line breaks are quoted.
 - **CLI** button next to **URL**: copies the current query as a `sap-odata … run …` command (quoted for Bash and PowerShell) — for scripts or an AI agent.
 - **collapse** in the entity-details header folds the property tables away to give the results room (remembered per tab).

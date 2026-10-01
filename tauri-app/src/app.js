@@ -85,7 +85,7 @@ import {
 import { executeQuery } from './executor.js';
 import { initAppInfo, onVersionClick, openProjectPage } from './appInfo.js';
 import { attachQueryAutocomplete } from './autocomplete.js';
-import { renderHistoryPanel, replayHistory } from './history.js';
+import { renderHistoryPanel, replayHistory, togglePinHistory, clearHistory } from './history.js';
 import {
   showNestedData,
   copyColumnValues,
@@ -425,8 +425,10 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (action === 'replay-history') {
       replayHistory(parseInt(el.dataset.idx));
     } else if (action === 'clear-history') {
-      const tab = getActiveTab();
-      if (tab) { tab.queryHistory = []; renderHistoryPanel(tab); }
+      clearHistory(getActiveTab());
+    } else if (action === 'pin-history') {
+      e.stopPropagation();
+      togglePinHistory(parseInt(el.dataset.idx, 10));
     } else if (action === 'select-trace') {
       const tab = getActiveTab();
       if (!tab) return;

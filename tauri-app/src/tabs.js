@@ -43,7 +43,6 @@ export function createTab(opts = {}) {
     catalogWarnings: null,
     lastSearchQuery: null,
     // query history (last 20, in-memory)
-    queryHistory: [],
     // last query params (for "history" re-use)
     lastParams: null,
     httpTraceEntries: [],

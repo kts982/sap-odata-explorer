@@ -261,6 +261,7 @@ Sessions still expire server-side. When that happens, the CLI tells you to sign 
 - **Browser SSO session cookies** are serialized, compressed, and stored in the OS keyring under the current user account. The risk profile is similar to a browser persisting auth cookies locally.
 - **Sign-out behavior** is explicit: `sap-odata signout <profile>` clears the persisted Browser SSO session; the desktop app's **Sign Out** also clears local webview cookies for SAP and common IdP hosts.
 - **CSP** is enforced in the Tauri app; assets are bundled locally and not loaded from external CDNs.
+- **Query history** (desktop) keeps the last 50 queries per profile and service, plus pinned ones, in the app's local storage — query parameters only, never results. Filter values can still contain business identifiers; **clear** in the History panel removes everything that isn't pinned.
 - **No telemetry.** The tools talk only to the SAP systems you configure. The one exception is the desktop app's **version** button in the status bar: clicking it asks GitHub's releases API whether a newer version exists — nothing runs on its own, and nothing about you or your systems is sent.
 
 ## Responsible use
