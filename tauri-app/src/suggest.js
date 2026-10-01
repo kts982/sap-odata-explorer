@@ -95,4 +95,3 @@ export function suggestionsFor(mode, text, caret, info, version) {
   }
   return none;
 }
-
