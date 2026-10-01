@@ -4,8 +4,8 @@
 // - `delete_offline_service(config, config_dir, profile, service_id)`
 //   removes one row from the index and one file from disk.
 // - `delete_offline_profile(config, config_dir, profile_name)` removes
-//   the whole bucket (every service row + every file + the bucket
-//   subdirectory + the bucket entry).
+//   the whole bucket (every service row + every indexed file + the
+//   bucket subdirectory if it is then empty + the bucket entry).
 //
 // Both operations:
 // - Acquire the cross-process `SaveLock` (same lockfile as save /
@@ -16,14 +16,15 @@
 //   case is via `canonicalize_under` on the resolved file path).
 // - Atomically rewrite the TOML index after mutation.
 //
-// **Strict-descendancy on the bucket directory is load-bearing.** A
-// recursive `remove_dir_all` against the offline root itself would
-// obliterate the library; the boundary check refuses to authorize that.
+// The bucket directory is never removed recursively: bucket directory
+// names are lossy slugs and can be shared between buckets (see
+// `delete_offline_profile`). Strict-descendancy is still enforced so
+// even the non-recursive remove can never target the offline root.
 
 use std::path::Path;
 
 use thiserror::Error;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use super::paths::{PathError, canonicalize_under, safe_join_under, slugify};
 use super::save::{CONFIG_FILENAME, OFFLINE_DIR_NAME, SaveError, SaveLock};
@@ -180,11 +181,16 @@ pub fn delete_offline_service(
 
 /// Delete a whole offline profile. Removes every `offline_services`
 /// row for that profile, every corresponding EDMX file, the bucket
-/// subdirectory under `{config}/offline/`, and the `offline_profiles`
-/// entry. Strict-descendancy is enforced on the bucket directory
-/// before any recursive remove — a misconfigured bucket name that
-/// resolves to the offline root itself returns an error rather than
-/// authorizing a wipe of the entire library.
+/// subdirectory under `{config}/offline/` *if it is then empty*, and
+/// the `offline_profiles` entry.
+///
+/// Only files indexed to this profile are removed; the directory is
+/// never removed recursively. The directory name is the lossy
+/// `slugify(profile_name)`, so distinct buckets can share one directory
+/// (`DEV (offline)` / `Dev (offline)`, or any two non-Latin names that
+/// both slug to `offline`). A recursive remove would wipe the other
+/// bucket's files. Untracked files (orphans) also stay in place for the
+/// boot-time sweep to report.
 pub fn delete_offline_profile(
     config: &mut ConfigFile,
     config_dir: &Path,
@@ -250,21 +256,27 @@ pub fn delete_offline_profile(
         }
     }
 
-    // Try to remove the bucket subdirectory itself. The dir name is
-    // `slugify(profile_name)`; if it doesn't exist (empty bucket
-    // never wrote a file), that's fine. Strict-descendancy is the
-    // key safety property here — `canonicalize_under` refuses to
-    // return a path equal to the offline root.
+    // Remove the bucket subdirectory itself, but only if it is now
+    // empty (see the doc comment: the directory may be shared with
+    // another bucket). If it doesn't exist (empty bucket never wrote a
+    // file), that's fine. `canonicalize_under` refuses to return a path
+    // equal to the offline root.
     let mut directory_removed = false;
     let bucket_slug = slugify(profile_name);
     if let Ok(bucket_path) = safe_join_under(&offline_root, &bucket_slug)
         && bucket_path.exists()
     {
         match canonicalize_under(&bucket_path, &offline_root) {
-            Ok(canonical_bucket) => match std::fs::remove_dir_all(&canonical_bucket) {
+            Ok(canonical_bucket) => match std::fs::remove_dir(&canonical_bucket) {
                 Ok(()) => directory_removed = true,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     // Race with another process. Idempotent.
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::DirectoryNotEmpty => {
+                    debug!(
+                        profile = profile_name,
+                        "bucket directory still holds files not indexed to this profile; left in place"
+                    );
                 }
                 Err(e) => {
                     return Err(DeleteError::Io {
@@ -277,7 +289,7 @@ pub fn delete_offline_profile(
                 warn!(
                     profile = profile_name,
                     error = %e,
-                    "bucket directory resolved outside offline root or to root itself; refusing recursive remove"
+                    "bucket directory resolved outside offline root or to root itself; refusing to remove it"
                 );
             }
         }
@@ -492,6 +504,95 @@ mod tests {
         assert_eq!(outcome.services_removed, 1);
         assert_eq!(outcome.files_removed, 0);
         assert!(!outcome.directory_removed);
+        cleanup(&dir);
+    }
+
+    fn add_bucket(cfg: &mut ConfigFile, dir: &Path, profile: &str, service_id: &str) -> PathBuf {
+        let edmx_rel = format!("{}/{service_id}.edmx", slugify(profile));
+        write_bytes_atomically(&dir.join(OFFLINE_DIR_NAME), &edmx_rel, b"<edmx/>").unwrap();
+        cfg.offline_profiles.insert(
+            profile.to_string(),
+            OfflineProfile {
+                source_profile: String::new(),
+                created_at: "x".to_string(),
+            },
+        );
+        cfg.offline_services.push(OfflineService {
+            id: service_id.to_string(),
+            profile: profile.to_string(),
+            label: "L".to_string(),
+            label_at_creation: "L".to_string(),
+            source_service_path: None,
+            edmx_file: edmx_rel.clone(),
+            fetched_at: None,
+            imported_at: Some("x".to_string()),
+            source_url: None,
+            original_filename: None,
+            sha256: "0".repeat(64),
+            size_bytes: 7,
+            odata_version: "V4".to_string(),
+            note: String::new(),
+        });
+        dir.join(OFFLINE_DIR_NAME).join(edmx_rel)
+    }
+
+    #[test]
+    fn delete_profile_spares_buckets_sharing_the_directory() {
+        // Distinct bucket names that slug to the same directory. Before
+        // the fix, deleting one ran `remove_dir_all` on the shared
+        // directory and wiped the other bucket's files.
+        for (a, b) in [
+            ("DEV (offline)", "Dev (offline)"),
+            ("ΑΝΑΠΤΥΞΗ (offline)", "ΠΑΡΑΓΩΓΗ (offline)"),
+        ] {
+            assert_eq!(
+                slugify(a),
+                slugify(b),
+                "precondition: {a} / {b} share a slug"
+            );
+            let dir = unique_dir("del_prof_shared_slug");
+            let mut cfg = ConfigFile::default();
+            let file_a = add_bucket(&mut cfg, &dir, a, "svc-aaaaaaaa");
+            let file_b = add_bucket(&mut cfg, &dir, b, "svc-bbbbbbbb");
+
+            let outcome = delete_offline_profile(&mut cfg, &dir, a).unwrap();
+            assert_eq!(outcome.files_removed, 1);
+            assert!(!outcome.directory_removed, "shared dir must stay");
+            assert!(!file_a.exists());
+            assert!(file_b.exists(), "other bucket's file must survive");
+            assert!(cfg.offline_profiles.contains_key(b));
+            assert_eq!(cfg.offline_services.len(), 1);
+
+            // Deleting the second bucket empties the directory, which is
+            // then removed.
+            let outcome = delete_offline_profile(&mut cfg, &dir, b).unwrap();
+            assert!(outcome.directory_removed);
+            assert!(!file_b.exists());
+            assert!(!file_b.parent().unwrap().exists());
+            cleanup(&dir);
+        }
+    }
+
+    #[test]
+    fn delete_profile_leaves_untracked_files_in_place() {
+        let dir = unique_dir("del_prof_orphan");
+        let mut cfg = seed(
+            &dir,
+            "Imported",
+            "svc-12345678",
+            "imported/svc-12345678.edmx",
+        );
+        let orphan = dir
+            .join("offline")
+            .join("imported")
+            .join("hand-copied.edmx");
+        fs::write(&orphan, b"<edmx/>").unwrap();
+
+        let outcome = delete_offline_profile(&mut cfg, &dir, "Imported").unwrap();
+        assert_eq!(outcome.files_removed, 1);
+        assert!(!outcome.directory_removed);
+        assert!(orphan.exists(), "untracked file is not ours to delete");
+        assert!(cfg.offline_profiles.is_empty());
         cleanup(&dir);
     }
 }

@@ -385,12 +385,12 @@ enum OfflineAction {
 
     /// Delete an offline service or a whole offline-profile bucket.
     /// With `--service-id`, removes a single service (file + index
-    /// row); without it, removes the entire bucket (every service,
-    /// every cached file, the bucket directory, and the index entry).
-    /// Both operations go through the same `safe_join_under` +
-    /// `canonicalize_under` boundary checks as the GUI's Remove
-    /// button — the offline root is never authorized for recursive
-    /// removal.
+    /// row); without it, removes the entire bucket (every service and
+    /// its cached file, the bucket directory once empty, and the index
+    /// entry). Only files indexed to the bucket are removed — never a
+    /// recursive directory delete. Both operations go through the same
+    /// `safe_join_under` + `canonicalize_under` boundary checks as the
+    /// GUI's Remove button.
     Delete {
         /// Offline-profile bucket name (required).
         #[arg(long)]
@@ -2765,14 +2765,14 @@ fn cmd_offline_delete(
                 println!("{}", serde_json::to_string_pretty(&payload)?);
             } else {
                 println!(
-                    "Offline profile '{}' removed ({} service(s), {} file(s), bucket dir {})",
+                    "Offline profile '{}' removed ({} service(s), {} file(s){})",
                     outcome.profile,
                     outcome.services_removed,
                     outcome.files_removed,
                     if outcome.directory_removed {
-                        "removed"
+                        ", bucket dir removed"
                     } else {
-                        "absent"
+                        ""
                     }
                 );
             }

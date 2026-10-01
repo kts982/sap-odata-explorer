@@ -482,8 +482,9 @@ With `--profile`, each row shows the `service_id` (used by `-s` and
 
 Remove one cached service (`--service-id`) or an entire bucket (omit it).
 Prompts for confirmation unless `-y` is passed. Bucket deletion removes every
-cached file, the bucket directory, and the index entry — same path-boundary
-checks as the GUI's Remove button.
+cached file indexed to the bucket and the index entry, then the bucket
+directory if it is empty — files it doesn't own are never touched. Same
+path-boundary checks as the GUI's Remove button.
 
 ```bash
 sap-odata offline delete --profile "DEV (offline)" --service-id ui_physstockprod_1-a1b2c3d4

@@ -1355,14 +1355,14 @@ fn remove_profile(state: tauri::State<'_, AppState>, name: String) -> Result<Str
         let outcome = offline::delete_offline_profile(&mut cfg, &config_dir.path, &name)
             .map_err(|e| format!("Delete offline profile error: {e}"))?;
         return Ok(format!(
-            "Offline profile '{}' removed ({} service(s), {} file(s), bucket dir {})",
+            "Offline profile '{}' removed ({} service(s), {} file(s){})",
             outcome.profile,
             outcome.services_removed,
             outcome.files_removed,
             if outcome.directory_removed {
-                "removed"
+                ", bucket dir removed"
             } else {
-                "absent"
+                ""
             },
         ));
     }
