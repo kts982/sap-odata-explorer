@@ -3,7 +3,10 @@ use reqwest::{
     cookie::Jar,
     header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderValue},
 };
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::sync::Mutex;
 use tracing::{debug, instrument};
 
@@ -16,6 +19,33 @@ use crate::error::ODataError;
 use crate::metadata::{self, ServiceMetadata};
 use crate::query::ODataQuery;
 
+/// Timeout for the connect phase (TCP + TLS handshake to the SAP host).
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Default idle timeout between reads of a response, including the wait
+/// for the first byte. Bounds a hung work process or a proxy that accepts
+/// the connection and never answers, without capping long downloads that
+/// keep making progress (it resets after every successful read). Set
+/// above SAP ICM's default 60 s processing timeout.
+pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Environment variable overriding [`DEFAULT_READ_TIMEOUT`], in seconds.
+/// `0` disables the read timeout.
+pub const READ_TIMEOUT_ENV: &str = "SAP_ODATA_READ_TIMEOUT_SECS";
+
+/// Read timeout from [`READ_TIMEOUT_ENV`], falling back to the default.
+/// `None` means no read timeout.
+pub fn read_timeout_from_env() -> Option<Duration> {
+    match std::env::var(READ_TIMEOUT_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+    {
+        Some(0) => None,
+        Some(secs) => Some(Duration::from_secs(secs)),
+        None => Some(DEFAULT_READ_TIMEOUT),
+    }
+}
+
 /// SAP OData HTTP client handling authentication, CSRF tokens, and SAP-specific headers.
 pub struct SapClient {
     connection: SapConnection,
@@ -27,8 +57,18 @@ pub struct SapClient {
 }
 
 impl SapClient {
-    /// Create a new SAP client from connection parameters.
+    /// Create a new SAP client from connection parameters. The read
+    /// timeout comes from [`read_timeout_from_env`].
     pub fn new(connection: SapConnection) -> Result<Self, ODataError> {
+        Self::with_read_timeout(connection, read_timeout_from_env())
+    }
+
+    /// Like [`SapClient::new`] with an explicit read timeout (`None` = no
+    /// read timeout). The connect timeout is always [`CONNECT_TIMEOUT`].
+    pub fn with_read_timeout(
+        connection: SapConnection,
+        read_timeout: Option<Duration>,
+    ) -> Result<Self, ODataError> {
         let mut default_headers = HeaderMap::new();
         default_headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
         default_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -44,12 +84,16 @@ impl SapClient {
         };
 
         let cookie_jar = Arc::new(Jar::default());
-        let http = Client::builder()
+        let mut builder = Client::builder()
             .default_headers(default_headers)
             .cookie_provider(cookie_jar.clone())
             .danger_accept_invalid_certs(connection.insecure_tls)
             .redirect(redirect_policy)
-            .build()?;
+            .connect_timeout(CONNECT_TIMEOUT);
+        if let Some(timeout) = read_timeout {
+            builder = builder.read_timeout(timeout);
+        }
+        let http = builder.build()?;
 
         Ok(Self {
             connection,

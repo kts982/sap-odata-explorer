@@ -323,3 +323,64 @@ async fn parses_v2_function_import_with_parameters() {
     assert_eq!(fi.parameters[0].name, "TopN");
     assert_eq!(fi.parameters[1].name, "MinAmount");
 }
+
+// ── Timeouts and transport errors ─────────────────────────────────────────
+
+#[tokio::test]
+async fn hung_server_hits_the_read_timeout_with_a_clear_message() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(SERVICE_PATH))
+        .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(5)))
+        .mount(&server)
+        .await;
+
+    let client = sap_odata_core::client::SapClient::with_read_timeout(
+        common::basic_connection(&server),
+        Some(std::time::Duration::from_millis(200)),
+    )
+    .unwrap();
+    let started = std::time::Instant::now();
+    let err = client
+        .fetch_metadata(SERVICE_PATH)
+        .await
+        .expect_err("a server that never answers must time out");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(4),
+        "read timeout did not fire: {:?}",
+        started.elapsed()
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("no response from the server in time"),
+        "got: {msg}"
+    );
+    assert!(msg.contains("SAP_ODATA_READ_TIMEOUT_SECS"), "got: {msg}");
+}
+
+#[tokio::test]
+async fn transport_errors_include_the_root_cause() {
+    // Bind and drop a listener so nothing accepts on that port.
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let conn = sap_odata_core::auth::SapConnection {
+        base_url: format!("http://127.0.0.1:{port}"),
+        client: "100".to_string(),
+        language: "EN".to_string(),
+        auth: sap_odata_core::auth::AuthConfig::Basic {
+            username: "u".to_string(),
+            password: "p".to_string(),
+        },
+        insecure_tls: false,
+        sso_delegate: false,
+    };
+    let client = sap_odata_core::client::SapClient::new(conn).unwrap();
+    let err = client.fetch_metadata(SERVICE_PATH).await.unwrap_err();
+    let msg = err.to_string();
+    // reqwest alone stops at "error sending request for url (…)"; the
+    // OS-level reason must follow it.
+    let tail = msg.split("): ").nth(1).unwrap_or("");
+    assert!(!tail.trim().is_empty(), "missing root cause: {msg}");
+}
