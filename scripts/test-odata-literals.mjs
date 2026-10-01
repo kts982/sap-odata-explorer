@@ -18,7 +18,7 @@ import { dirname, resolve } from 'node:path';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FORMAT_MODULE = resolve(HERE, '..', 'tauri-app', 'src', 'format.js');
 
-const { formatODataLiteral, containsClause, serviceODataVersion } = await import(
+const { formatODataLiteral, containsClause, serviceODataVersion, shellArg, buildCliCommand } = await import(
   `file://${FORMAT_MODULE.replace(/\\/g, '/')}`
 );
 
@@ -79,5 +79,24 @@ check('version from metadata wins', serviceODataVersion({ serviceVersion: 'V2', 
 check('version from V2 path', serviceODataVersion({ servicePath: '/sap/opu/odata/sap/ZSRV' }), 'V2');
 check('version from V4 path', serviceODataVersion({ servicePath: '/sap/opu/odata4/sap/zsrv/srvd/sap/zsrv/0001' }), 'V4');
 
-console.log(failures ? `\n${failures} failure(s)` : `\nall ${cases.length + 5} assertions passed`);
+// "Copy as CLI": quoting that pastes into Bash and PowerShell alike.
+check('plain arg stays bare', shellArg('A_SalesOrder'), 'A_SalesOrder');
+check('filter with quotes → double quotes', shellArg("Plant eq '1000'"), `"Plant eq '1000'"`);
+check('$ forces single quotes', shellArg('a$b'), `'a$b'`);
+check('single quote inside single quotes', shellArg("a$'b"), `'a$'\\''b'`);
+check(
+  'full command',
+  buildCliCommand('DEV', '/sap/opu/odata4/sap/zsrv/srvd/sap/zsrv/0001', {
+    entity_set: 'Orders',
+    select: 'ID,Status',
+    filter: "Status eq 'OPEN'",
+    expand: null,
+    orderby: '',
+    top: 5,
+    skip: null,
+  }),
+  `sap-odata -p DEV -s /sap/opu/odata4/sap/zsrv/srvd/sap/zsrv/0001 run Orders --select ID,Status --filter "Status eq 'OPEN'" --top 5`,
+);
+
+console.log(failures ? `\n${failures} failure(s)` : `\nall ${cases.length + 10} assertions passed`);
 process.exit(failures ? 1 : 0);

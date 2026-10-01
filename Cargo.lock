@@ -3333,6 +3333,7 @@ name = "sap-odata-explorer-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "reqwest 0.12.28",
  "sap-odata-core",
  "serde",
  "serde_json",

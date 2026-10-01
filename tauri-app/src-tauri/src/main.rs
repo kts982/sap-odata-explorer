@@ -571,6 +571,115 @@ async fn browser_sign_in_for_connection(
     }
 }
 
+// ── App info, feedback, update check ──
+
+const REPO_URL: &str = "https://github.com/kts982/sap-odata-explorer";
+const LATEST_RELEASE_API: &str =
+    "https://api.github.com/repos/kts982/sap-odata-explorer/releases/latest";
+
+#[derive(Serialize)]
+struct AppInfo {
+    version: &'static str,
+}
+
+#[tauri::command]
+fn app_info() -> AppInfo {
+    AppInfo {
+        version: env!("CARGO_PKG_VERSION"),
+    }
+}
+
+/// Open one of the project's fixed pages in the system browser. The
+/// webview names a page, never a URL, so this can't open arbitrary links.
+#[tauri::command]
+fn open_project_page(page: String) -> Result<(), String> {
+    let url = match page.as_str() {
+        "feedback" => format!("{REPO_URL}/issues/new/choose"),
+        "releases" => format!("{REPO_URL}/releases/latest"),
+        _ => return Err(format!("unknown page '{page}'")),
+    };
+    open_in_system_browser(&url).map_err(|e| format!("could not open the browser: {e}"))
+}
+
+/// Hand a fixed URL to the OS URL handler — no shell in between, so
+/// nothing in the URL is interpreted.
+fn open_in_system_browser(url: &str) -> std::io::Result<()> {
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut c = std::process::Command::new("rundll32");
+        c.args(["url.dll,FileProtocolHandler", url]);
+        c
+    };
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("open");
+        c.arg(url);
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    cmd.spawn().map(|_| ())
+}
+
+#[derive(Serialize)]
+struct UpdateInfo {
+    current: &'static str,
+    latest: String,
+    newer: bool,
+}
+
+/// `major.minor.patch` of a version or tag (`v0.2.0`, `0.1.1-rc.1`), for
+/// ordering. Pre-release suffixes are ignored.
+fn version_triple(v: &str) -> Option<(u64, u64, u64)> {
+    let core = v.trim().trim_start_matches('v');
+    let core = core.split(['-', '+']).next()?;
+    let mut parts = core.split('.').map(|p| p.parse::<u64>().ok());
+    Some((
+        parts.next()??,
+        parts.next()??,
+        parts.next().flatten().unwrap_or(0),
+    ))
+}
+
+/// User-initiated: ask GitHub for the latest release. Nothing is sent but
+/// the request itself; it never runs on its own.
+#[tauri::command]
+async fn check_for_update() -> Result<UpdateInfo, String> {
+    let http = reqwest::Client::builder()
+        .user_agent(concat!("sap-odata-explorer/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("update check failed: {e}"))?;
+    let release: serde_json::Value = http
+        .get(LATEST_RELEASE_API)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| format!("update check failed: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("update check failed: {e}"))?;
+    let tag = release
+        .get("tag_name")
+        .and_then(|t| t.as_str())
+        .ok_or("update check failed: no tag_name in the GitHub response")?;
+    let current = env!("CARGO_PKG_VERSION");
+    let newer = matches!(
+        (version_triple(tag), version_triple(current)),
+        (Some(latest), Some(cur)) if latest > cur
+    );
+    Ok(UpdateInfo {
+        current,
+        latest: tag.trim_start_matches('v').to_string(),
+        newer,
+    })
+}
+
 // ── Tauri commands ──
 
 #[tauri::command]
@@ -1626,6 +1735,15 @@ async fn sign_out_profile(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn version_triple_orders_release_tags() {
+        assert_eq!(version_triple("v0.2.0"), Some((0, 2, 0)));
+        assert_eq!(version_triple("0.1.1-rc.1"), Some((0, 1, 1)));
+        assert_eq!(version_triple("1.4"), Some((1, 4, 0)));
+        assert!(version_triple("v0.2.0") > version_triple("0.1.9"));
+        assert_eq!(version_triple("latest"), None);
+    }
+
     use super::*;
     use tauri::webview::cookie;
 
@@ -1829,6 +1947,9 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            app_info,
+            open_project_page,
+            check_for_update,
             get_profiles,
             get_services,
             resolve_service,

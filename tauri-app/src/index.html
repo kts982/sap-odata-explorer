@@ -95,7 +95,10 @@
             <div class="w-1.5 h-1.5 rounded-full bg-ox-amber"></div>
             <h2 id="entityTitle" class="text-xs font-mono font-medium text-ox-text"></h2>
           </div>
-          <button id="btnCloseDescribe" class="text-ox-dim hover:text-ox-text text-xs px-2 py-0.5 rounded-sm hover:bg-ox-hover transition-colors">close</button>
+          <div class="flex items-center gap-1">
+            <button id="btnCollapseDescribe" class="text-ox-dim hover:text-ox-text text-xs px-2 py-0.5 rounded-sm hover:bg-ox-hover transition-colors" title="Collapse the entity details to give the results more room">collapse</button>
+            <button id="btnCloseDescribe" class="text-ox-dim hover:text-ox-text text-xs px-2 py-0.5 rounded-sm hover:bg-ox-hover transition-colors">close</button>
+          </div>
         </div>
         <div id="describeContent" class="p-4"></div>
       </div>
@@ -137,6 +140,10 @@
           <button id="btnCopyUrl" class="btn-ghost text-xs px-2 py-1 rounded-sm" title="Copy OData URL">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="inline align-middle"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
             <span class="ml-[3px]">URL</span>
+          </button>
+          <button id="btnCopyCli" class="btn-ghost text-xs px-2 py-1 rounded-sm" title="Copy as a sap-odata CLI command — for scripts and AI agents">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="inline align-middle"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            <span class="ml-[3px]">CLI</span>
           </button>
           <button id="btnHistoryToggle" class="btn-ghost text-xs px-2 py-1 rounded-sm">History</button>
         </div>
@@ -205,6 +212,8 @@
         </button>
         <span id="traceSummary" class="text-ox-dim">No trace</span>
         <span id="statusTime" class="text-ox-amber"></span>
+        <button id="btnAppVersion" class="text-ox-dim hover:text-ox-text transition-colors" title="Check for updates"></button>
+        <button id="btnFeedback" class="text-ox-dim hover:text-ox-text transition-colors" title="Report a bug or suggest an improvement (opens GitHub)">Feedback</button>
       </footer>
     </main>
   </div>

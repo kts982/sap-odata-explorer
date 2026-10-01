@@ -24,7 +24,7 @@ assignees: ''
 
 - **OS:** (e.g. Windows 11, Ubuntu 22.04, macOS 14)
 - **App:** CLI or Desktop
-- **Version / commit:**
+- **Version / commit:** (desktop: bottom-right of the status bar; CLI: `sap-odata --version`)
 - **SAP system version:** (if relevant, e.g. S/4HANA 2022)
 - **OData version:** V2 / V4 / both
 - **Auth mode:** Basic / SSO / Browser SSO

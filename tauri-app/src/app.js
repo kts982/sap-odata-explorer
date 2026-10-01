@@ -71,6 +71,7 @@ import {
 import {
   renderDescribe,
   hideDescribe,
+  toggleDescribeCollapsed,
   addToSelect,
   addToExpand,
 } from './describe.js';
@@ -82,12 +83,14 @@ import {
   toggleAnnotationNamespace,
 } from './annotations.js';
 import { executeQuery } from './executor.js';
+import { initAppInfo, onVersionClick, openProjectPage } from './appInfo.js';
 import { renderHistoryPanel, replayHistory } from './history.js';
 import {
   showNestedData,
   copyColumnValues,
   copyRowAsJson,
   copyODataUrl,
+  copyCliCommand,
   showFilterTooltip,
   hideFilterTooltip,
   applyFilterFromTooltip,
@@ -290,6 +293,11 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btnRun').addEventListener('click', () => executeQuery(false));
   document.getElementById('btnJson').addEventListener('click', () => executeQuery(true));
   document.getElementById('btnCopyUrl').addEventListener('click', copyODataUrl);
+  document.getElementById('btnCopyCli').addEventListener('click', copyCliCommand);
+  document.getElementById('btnCollapseDescribe').addEventListener('click', toggleDescribeCollapsed);
+  document.getElementById('btnAppVersion').addEventListener('click', onVersionClick);
+  document.getElementById('btnFeedback').addEventListener('click', () => openProjectPage('feedback'));
+  initAppInfo();
   document.getElementById('btnTraceToggle').addEventListener('click', toggleTraceInspector);
   document.getElementById('btnTraceClose').addEventListener('click', hideTraceInspector);
   document.getElementById('btnSapView').addEventListener('click', toggleSapView);

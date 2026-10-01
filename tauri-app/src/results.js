@@ -17,7 +17,14 @@
 
 import { state } from './state.js';
 import { safeHtml, raw } from './html.js';
-import { formatDisplayValue, criticalityDot, formatODataLiteral, serviceODataVersion } from './format.js';
+import {
+  formatDisplayValue,
+  criticalityDot,
+  formatODataLiteral,
+  serviceODataVersion,
+  buildCliCommand,
+} from './format.js';
+import { isOfflineProfile } from './auth.js';
 import { setStatus } from './status.js';
 import { getActiveTab, currentDescribeInfo } from './tabs.js';
 import {
@@ -336,6 +343,28 @@ export function copyODataUrl() {
   const url = buildODataUrl(params);
   if (url) copyToClipboard(url, 'OData URL');
   else setStatus('No service/entity selected');
+}
+
+// Same query as a CLI command — e.g. to hand it to an AI agent or a script.
+export function copyCliCommand() {
+  if (!state.currentProfile || !state.currentServicePath || !state.currentEntitySet) {
+    setStatus('No service/entity selected');
+    return;
+  }
+  if (isOfflineProfile(state.currentProfile)) {
+    setStatus('Offline profiles have no data to query — the CLI can\'t run this either');
+    return;
+  }
+  const params = {
+    entity_set: state.currentEntitySet,
+    select:  document.getElementById('qSelect').value  || null,
+    filter:  document.getElementById('qFilter').value  || null,
+    expand:  document.getElementById('qExpand').value  || null,
+    orderby: document.getElementById('qOrderby').value || null,
+    top:     parseInt(document.getElementById('qTop').value)  || null,
+    skip:    parseInt(document.getElementById('qSkip').value) || null,
+  };
+  copyToClipboard(buildCliCommand(state.currentProfile, state.currentServicePath, params), 'CLI command');
 }
 
 // ══════════════════════════════════════════════════════════════

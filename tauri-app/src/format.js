@@ -202,6 +202,33 @@ export function formatODataLiteral(value, edmType, version = 'V4') {
   }
 }
 
+// Quote one argument so a command pastes into Bash and PowerShell alike:
+// bare when it's plain, double quotes in the common case (OData filters
+// are full of single quotes), single quotes when the value holds a
+// character either shell expands inside double quotes.
+export function shellArg(value) {
+  const s = String(value);
+  if (/^[A-Za-z0-9_./:,=@+-]+$/.test(s)) return s;
+  if (!/["$`\\]/.test(s)) return `"${s}"`;
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+// The `sap-odata … run …` command equivalent to a desktop query. `-s` is a
+// connection flag and must precede the subcommand.
+export function buildCliCommand(profile, servicePath, params) {
+  const parts = ['sap-odata', '-p', shellArg(profile), '-s', shellArg(servicePath), 'run', shellArg(params.entity_set)];
+  const opt = (flag, v) => {
+    if (v !== null && v !== undefined && v !== '') parts.push(flag, shellArg(v));
+  };
+  opt('--select', params.select);
+  opt('--filter', params.filter);
+  opt('--expand', params.expand);
+  opt('--orderby', params.orderby);
+  opt('--top', params.top);
+  opt('--skip', params.skip);
+  return parts.join(' ');
+}
+
 // `contains(prop, lit)` in V4; V2 has no `contains` and spells the same
 // test `substringof(lit, prop)`.
 export function containsClause(property, literal, version) {

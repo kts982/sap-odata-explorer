@@ -28,6 +28,7 @@ export function renderDescribe(info) {
   // Cache so the SAP-view toggle can re-render without another fetch.
   const tab = getActiveTab();
   if (tab) tab._lastDescribeInfo = info;
+  applyDescribeCollapsed(tab);
 
   // Selection-fields chip bar above the query inputs (SAP View only).
   renderSelectionFieldsBar(info);
@@ -152,6 +153,21 @@ export function renderDescribe(info) {
 
 export function hideDescribe() {
   document.getElementById('describePanel').classList.add('hidden');
+}
+
+// Collapse to the title line so a long property table doesn't squeeze the
+// results grid. Remembered per tab; renderDescribe re-applies it.
+export function applyDescribeCollapsed(tab) {
+  const collapsed = !!(tab && tab._describeCollapsed);
+  document.getElementById('describeContent').classList.toggle('hidden', collapsed);
+  document.getElementById('btnCollapseDescribe').textContent = collapsed ? 'expand' : 'collapse';
+}
+
+export function toggleDescribeCollapsed() {
+  const tab = getActiveTab();
+  if (!tab) return;
+  tab._describeCollapsed = !tab._describeCollapsed;
+  applyDescribeCollapsed(tab);
 }
 
 // Click-to-add helpers used by the document-level delegate when a user

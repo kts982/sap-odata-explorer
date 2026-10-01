@@ -16,6 +16,8 @@ tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# User-initiated update check against the GitHub releases API.
+reqwest.workspace = true
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 time = { version = "0.3", features = ["formatting", "macros"] }
