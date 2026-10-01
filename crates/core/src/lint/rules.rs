@@ -408,6 +408,25 @@ pub(super) fn check_consistency(et: &EntityType, out: &mut Vec<LintFinding>) {
 pub(super) fn check_integrity(et: &EntityType, out: &mut Vec<LintFinding>) {
     let prop_names: std::collections::HashSet<&str> =
         et.properties.iter().map(|p| p.name.as_str()).collect();
+    let nav_names: std::collections::HashSet<&str> =
+        et.nav_properties.iter().map(|n| n.name.as_str()).collect();
+    // A path resolves when it names a property of this entity, or starts
+    // with one of its navigation (or complex-typed) properties
+    // (`author/name`, `Address/City`). The rest of a multi-segment path
+    // isn't checked — the linter sees one entity type at a time — so
+    // only a bad first segment is reported. Annotation paths (`@…`) are
+    // not property references.
+    let resolves = |path: &str| -> bool {
+        if prop_names.contains(path) || path.contains('@') {
+            return true;
+        }
+        match path.split_once('/') {
+            Some((first, rest)) => {
+                !rest.is_empty() && (nav_names.contains(first) || prop_names.contains(first))
+            }
+            None => false,
+        }
+    };
     {
         let dangling: Vec<String> = et
             .properties
@@ -415,7 +434,7 @@ pub(super) fn check_integrity(et: &EntityType, out: &mut Vec<LintFinding>) {
             .filter_map(|p| {
                 p.text_path
                     .as_ref()
-                    .filter(|target| !prop_names.contains(target.as_str()))
+                    .filter(|target| !resolves(target.as_str()))
                     .map(|target| format!("{} → {}", p.name, target))
             })
             .collect();
@@ -440,7 +459,7 @@ pub(super) fn check_integrity(et: &EntityType, out: &mut Vec<LintFinding>) {
             .filter_map(|p| {
                 p.unit_path
                     .as_ref()
-                    .filter(|target| !prop_names.contains(target.as_str()))
+                    .filter(|target| !resolves(target.as_str()))
                     .map(|target| format!("{} → {}", p.name, target))
             })
             .collect();
@@ -465,7 +484,7 @@ pub(super) fn check_integrity(et: &EntityType, out: &mut Vec<LintFinding>) {
             .filter_map(|p| {
                 p.iso_currency_path
                     .as_ref()
-                    .filter(|target| !prop_names.contains(target.as_str()))
+                    .filter(|target| !resolves(target.as_str()))
                     .map(|target| format!("{} → {}", p.name, target))
             })
             .collect();
@@ -488,9 +507,7 @@ pub(super) fn check_integrity(et: &EntityType, out: &mut Vec<LintFinding>) {
             .properties
             .iter()
             .filter_map(|p| match &p.criticality {
-                Some(crate::metadata::Criticality::Path(path))
-                    if !prop_names.contains(path.as_str()) =>
-                {
+                Some(crate::metadata::Criticality::Path(path)) if !resolves(path.as_str()) => {
                     Some(format!("{} → {}", p.name, path))
                 }
                 _ => None,
@@ -512,7 +529,7 @@ pub(super) fn check_integrity(et: &EntityType, out: &mut Vec<LintFinding>) {
     }
     if let Some(hi) = &et.header_info
         && let Some(title) = &hi.title_path
-        && !prop_names.contains(title.as_str())
+        && !resolves(title.as_str())
     {
         out.push(actionable(
             LintSeverity::Warn,
@@ -530,7 +547,7 @@ pub(super) fn check_integrity(et: &EntityType, out: &mut Vec<LintFinding>) {
         let bad: Vec<&str> = et
             .semantic_keys
             .iter()
-            .filter(|n| !prop_names.contains(n.as_str()))
+            .filter(|n| !resolves(n.as_str()))
             .map(String::as_str)
             .collect();
         if !bad.is_empty() {
@@ -551,7 +568,7 @@ pub(super) fn check_integrity(et: &EntityType, out: &mut Vec<LintFinding>) {
         let bad: Vec<&str> = et
             .selection_fields
             .iter()
-            .filter(|n| !prop_names.contains(n.as_str()))
+            .filter(|n| !resolves(n.as_str()))
             .map(String::as_str)
             .collect();
         if !bad.is_empty() {
@@ -572,7 +589,7 @@ pub(super) fn check_integrity(et: &EntityType, out: &mut Vec<LintFinding>) {
         let bad: Vec<String> = et
             .line_item
             .iter()
-            .filter(|f| !prop_names.contains(f.value_path.as_str()))
+            .filter(|f| !resolves(f.value_path.as_str()))
             .map(|f| f.value_path.clone())
             .collect();
         if !bad.is_empty() {
@@ -593,7 +610,7 @@ pub(super) fn check_integrity(et: &EntityType, out: &mut Vec<LintFinding>) {
         let bad: Vec<&str> = et
             .sort_order
             .iter()
-            .filter(|s| !prop_names.contains(s.property.as_str()))
+            .filter(|s| !resolves(s.property.as_str()))
             .map(|s| s.property.as_str())
             .collect();
         if !bad.is_empty() {

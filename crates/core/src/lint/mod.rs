@@ -250,6 +250,8 @@ mod tests {
 
     #[test]
     fn consistency_rule_text_arrangement_without_common_text() {
+        // Per-property TextArrangement inside a Common.Text that names no
+        // text column: there is nothing to arrange.
         let xml = r#"<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
   <edmx:DataServices>
@@ -260,8 +262,10 @@ mod tests {
         <Property Name="Product" Type="Edm.String"/>
       </EntityType>
       <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
-      <Annotations Target="SAP__self.OrderType">
-        <Annotation Term="SAP__UI.TextArrangement" EnumMember="UI.TextArrangementType/TextFirst"/>
+      <Annotations Target="SAP__self.OrderType/Product">
+        <Annotation Term="SAP__common.Text">
+          <Annotation Term="SAP__UI.TextArrangement" EnumMember="UI.TextArrangementType/TextFirst"/>
+        </Annotation>
       </Annotations>
     </Schema>
   </edmx:DataServices>
@@ -277,6 +281,54 @@ mod tests {
             "should flag lonely TextArrangement on Product"
         );
         assert!(lonely.unwrap().message.contains("Product"));
+    }
+
+    #[test]
+    fn entity_level_text_arrangement_only_arranges_text_bearing_properties() {
+        // The type-level default is declared *before* the Common.Text it
+        // arranges (order must not matter). Before the fix it was applied
+        // to every property, so text_arrangement_lonely flagged the
+        // description column and every plain column.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="Product" Type="Edm.String"/>
+        <Property Name="ProductDescription" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType">
+        <Annotation Term="SAP__UI.TextArrangement" EnumMember="UI.TextArrangementType/TextFirst"/>
+      </Annotations>
+      <Annotations Target="SAP__self.OrderType/Product">
+        <Annotation Term="SAP__common.Text" Path="ProductDescription"/>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let et = meta.find_entity_type("OrderType").unwrap();
+        let arrangement = |name: &str| {
+            et.properties
+                .iter()
+                .find(|p| p.name == name)
+                .unwrap()
+                .text_arrangement
+        };
+        assert_eq!(
+            arrangement("Product"),
+            Some(crate::metadata::TextArrangement::TextFirst)
+        );
+        assert_eq!(arrangement("ProductDescription"), None);
+        assert_eq!(arrangement("ID"), None);
+        let findings = evaluate_entity_type(et);
+        assert!(
+            !findings.iter().any(|f| f.code == "text_arrangement_lonely"),
+            "{findings:#?}"
+        );
     }
 
     #[test]
@@ -557,11 +609,13 @@ mod tests {
             <PropertyPath>InternalNote</PropertyPath>
           </Collection>
         </Annotation>
-        <!-- Type-level TextArrangement applies to all properties without
-             their own override (per-property TextArrangement only parses
-             when nested inside Common.Text). None of these properties has
-             a Common.Text, so text_arrangement_lonely fires. -->
-        <Annotation Term="SAP__UI.TextArrangement" EnumMember="UI.TextArrangementType/TextFirst"/>
+      </Annotations>
+      <!-- Per-property TextArrangement nested in a Common.Text that names
+           no text column (no Path), so text_arrangement_lonely fires. -->
+      <Annotations Target="SAP__self.OrderType/Product">
+        <Annotation Term="SAP__common.Text">
+          <Annotation Term="SAP__UI.TextArrangement" EnumMember="UI.TextArrangementType/TextFirst"/>
+        </Annotation>
       </Annotations>
       <Annotations Target="SAP__self.Container/Orders">
         <Annotation Term="SAP__capabilities.FilterRestrictions">
@@ -806,6 +860,85 @@ mod tests {
             ],
             "integrity rules must stream in the canonical order rendered by CLI/desktop",
         );
+    }
+
+    #[test]
+    fn integrity_rules_accept_navigation_paths() {
+        // CAP-style annotations reach through a navigation property
+        // (`author/name`). Those are valid; only an unknown first segment
+        // (`ghost/name`) is a dangling reference.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="BookType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="authorID" Type="Edm.String"/>
+        <NavigationProperty Name="author" Type="n.AuthorType"/>
+      </EntityType>
+      <EntityType Name="AuthorType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="name" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Books" EntityType="n.BookType"/></EntityContainer>
+      <Annotations Target="SAP__self.BookType/authorID">
+        <Annotation Term="SAP__common.Text" Path="author/name"/>
+      </Annotations>
+      <Annotations Target="SAP__self.BookType">
+        <Annotation Term="SAP__UI.HeaderInfo">
+          <Record>
+            <PropertyValue Property="TypeName" String="Book"/>
+            <PropertyValue Property="Title">
+              <Record Type="UI.DataField"><PropertyValue Property="Value" Path="author/name"/></Record>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+        <Annotation Term="SAP__UI.SelectionFields">
+          <Collection><PropertyPath>author/name</PropertyPath></Collection>
+        </Annotation>
+        <Annotation Term="SAP__UI.LineItem">
+          <Collection>
+            <Record Type="UI.DataField"><PropertyValue Property="Value" Path="ID"/></Record>
+            <Record Type="UI.DataField"><PropertyValue Property="Value" Path="author/name"/></Record>
+            <Record Type="UI.DataField"><PropertyValue Property="Value" Path="ghost/name"/></Record>
+          </Collection>
+        </Annotation>
+        <Annotation Term="SAP__UI.PresentationVariant">
+          <Record>
+            <PropertyValue Property="SortOrder">
+              <Collection>
+                <Record Type="Common.SortOrderType">
+                  <PropertyValue Property="Property" PropertyPath="author/name"/>
+                </Record>
+              </Collection>
+            </PropertyValue>
+          </Record>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let et = meta.find_entity_type("BookType").unwrap();
+        // Precondition: the parser kept the navigation paths.
+        assert_eq!(
+            et.properties
+                .iter()
+                .find(|p| p.name == "authorID")
+                .and_then(|p| p.text_path.as_deref()),
+            Some("author/name")
+        );
+        let findings = evaluate_entity_type(et);
+        let integrity: Vec<&LintFinding> = findings
+            .iter()
+            .filter(|f| f.category == LintCategory::Integrity)
+            .collect();
+        let codes: Vec<&str> = integrity.iter().map(|f| f.code).collect();
+        assert_eq!(codes, vec!["line_item_target_missing"], "{integrity:#?}");
+        assert!(integrity[0].message.contains("ghost/name"));
+        assert!(!integrity[0].message.contains("author/name"));
     }
 
     #[test]

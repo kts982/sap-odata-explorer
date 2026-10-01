@@ -42,6 +42,11 @@ pub(super) fn apply_v4_typed_annotations(
     schema: &roxmltree::Node,
     alias: &str,
 ) {
+    // Entity-type-level `UI.TextArrangement` defaults, applied after the
+    // loop so `Common.Text` annotations declared later in the file are
+    // already in place.
+    let mut type_text_arrangements: Vec<(String, TextArrangement)> = Vec::new();
+
     for annots_node in children_by_tag(schema, "Annotations") {
         let raw_target = annots_node.attribute("Target").unwrap_or("");
         let target = strip_alias_prefix(raw_target, alias);
@@ -82,21 +87,14 @@ pub(super) fn apply_v4_typed_annotations(
                     }
                 }
             } else if lower.ends_with(".textarrangement") {
-                // Entity-type-level default: apply to every property that
-                // already has a `text_path` and no per-property override.
-                // (We parse annotations in file order, and `Common.Text`
-                // is typically declared *before* a standalone
-                // `UI.TextArrangement` on the type — but we guard against
-                // either order.)
+                // Entity-type-level default for text-bearing properties
+                // without a per-property override. Recorded here, applied
+                // after the loop (see `type_text_arrangements`).
                 if !target.contains('/')
-                    && let Some(et) = entity_types.iter_mut().find(|e| e.name == target)
+                    && entity_types.iter().any(|e| e.name == target)
                     && let Some(ta) = parse_text_arrangement(&annot)
                 {
-                    for prop in et.properties.iter_mut() {
-                        if prop.text_arrangement.is_none() {
-                            prop.text_arrangement = Some(ta);
-                        }
-                    }
+                    type_text_arrangements.push((target.to_string(), ta));
                 }
             } else if lower.ends_with(".semantickey") && !target.contains('/') {
                 // Common.SemanticKey → Collection<PropertyPath> at the
@@ -552,6 +550,18 @@ pub(super) fn apply_v4_typed_annotations(
             }
         }
     }
+
+    // Only properties with a `Common.Text` have anything to arrange; the
+    // description columns themselves and plain columns stay untouched.
+    for (et_name, ta) in type_text_arrangements {
+        if let Some(et) = entity_types.iter_mut().find(|e| e.name == et_name) {
+            for prop in et.properties.iter_mut() {
+                if prop.text_path.is_some() && prop.text_arrangement.is_none() {
+                    prop.text_arrangement = Some(ta);
+                }
+            }
+        }
+    }
 }
 
 /// Apply a single `Capabilities.*Restrictions` record to an entity type's
@@ -983,10 +993,13 @@ fn parse_sort_order_record(record: &roxmltree::Node) -> Option<SortOrder> {
 }
 
 /// Walk a `UI.LineItem` annotation's `<Collection>` of `<Record>`s and
-/// return one `LineItemField` per `UI.DataField` record that has a
-/// `Value Path="..."`. Records whose `Type` is `UI.DataFieldFor*`
-/// (Action, Annotation, IntentBasedNavigation, ...) are skipped — they
-/// don't map to `$select`-able columns.
+/// return one `LineItemField` per value-bearing record with a
+/// `Value Path="..."`: `UI.DataField` and the `UI.DataFieldWith*` family
+/// (Url, IntentBasedNavigation, NavigationPath, Action) — each renders
+/// its `Value` as a real column, plus a link or action. Records whose
+/// `Type` is `UI.DataFieldFor*` (Action, Annotation,
+/// IntentBasedNavigation, ...) are skipped — they are toolbar buttons or
+/// embedded charts, not `$select`-able columns.
 fn parse_line_item_collection(annot: &roxmltree::Node) -> Vec<LineItemField> {
     let mut out = Vec::new();
     let collection = match children_by_tag(annot, "Collection").into_iter().next() {
@@ -999,7 +1012,7 @@ fn parse_line_item_collection(annot: &roxmltree::Node) -> Vec<LineItemField> {
         let type_attr = record.attribute("Type").unwrap_or("UI.DataField");
         let normalized = type_attr.trim_start_matches("SAP__");
         let leaf = normalized.rsplit('.').next().unwrap_or(normalized);
-        if leaf != "DataField" {
+        if leaf != "DataField" && !leaf.starts_with("DataFieldWith") {
             continue;
         }
         let mut value_path: Option<String> = None;

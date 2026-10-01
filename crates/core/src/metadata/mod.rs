@@ -2114,6 +2114,70 @@ mod tests {
     }
 
     #[test]
+    fn test_v4_line_item_keeps_data_field_with_variants() {
+        // DataFieldWith* records render their Value as a real column (plus
+        // a link / navigation / inline action); DataFieldFor* are toolbar
+        // buttons or embedded content and stay skipped.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="Website" Type="Edm.String"/>
+        <Property Name="Customer" Type="Edm.String"/>
+        <Property Name="Supplier" Type="Edm.String"/>
+        <Property Name="Status" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+      <Annotations Target="SAP__self.OrderType">
+        <Annotation Term="SAP__UI.LineItem">
+          <Collection>
+            <Record Type="UI.DataField"><PropertyValue Property="Value" Path="ID"/></Record>
+            <Record Type="UI.DataFieldWithUrl">
+              <PropertyValue Property="Value" Path="Website"/>
+              <PropertyValue Property="Url" Path="Website"/>
+            </Record>
+            <Record Type="com.sap.vocabularies.UI.v1.DataFieldWithIntentBasedNavigation">
+              <PropertyValue Property="Value" Path="Customer"/>
+              <PropertyValue Property="SemanticObject" String="Customer"/>
+              <PropertyValue Property="Action" String="display"/>
+            </Record>
+            <Record Type="SAP__UI.DataFieldWithNavigationPath">
+              <PropertyValue Property="Value" Path="Supplier"/>
+              <PropertyValue Property="Target" NavigationPropertyPath="_Supplier"/>
+            </Record>
+            <Record Type="UI.DataFieldWithAction">
+              <PropertyValue Property="Value" Path="Status"/>
+              <PropertyValue Property="Action" String="n.Approve"/>
+            </Record>
+            <Record Type="UI.DataFieldForAction">
+              <PropertyValue Property="Action" String="n.Cancel"/>
+            </Record>
+            <Record Type="UI.DataFieldForIntentBasedNavigation">
+              <PropertyValue Property="SemanticObject" String="Order"/>
+              <PropertyValue Property="Action" String="manage"/>
+            </Record>
+            <Record Type="UI.DataFieldForAnnotation">
+              <PropertyValue Property="Target" AnnotationPath="@UI.Chart"/>
+            </Record>
+          </Collection>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let ot = meta.find_entity_type("OrderType").unwrap();
+        let paths: Vec<&str> = ot.line_item.iter().map(|f| f.value_path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec!["ID", "Website", "Customer", "Supplier", "Status"]
+        );
+    }
+
+    #[test]
     fn test_v4_line_item_on_entity_set_target() {
         // Some hand-written services put UI.LineItem on the EntitySet.
         // Default (no Type attribute) Record should be treated as UI.DataField.
