@@ -45,6 +45,7 @@ fn enc_key(s: &str) -> String {
 pub struct ODataQuery {
     entity_set: String,
     key: Option<String>,
+    navigation: Option<String>,
     select: Vec<String>,
     filter: Option<String>,
     expand: Vec<String>,
@@ -104,6 +105,13 @@ impl ODataQuery {
         self
     }
 
+    /// Follow a navigation property from the keyed entity:
+    /// `EntitySet(key)/Navigation`. Needs `key` to address one entity.
+    pub fn navigate(mut self, navigation: &str) -> Self {
+        self.navigation = Some(navigation.to_string());
+        self
+    }
+
     /// Set $skip offset.
     pub fn skip(mut self, n: u32) -> Self {
         self.skip = Some(n);
@@ -158,6 +166,10 @@ impl ODataQuery {
             path.push('(');
             path.push_str(&enc_key(key));
             path.push(')');
+            if let Some(ref nav) = self.navigation {
+                path.push('/');
+                path.push_str(&enc_key(nav));
+            }
         }
 
         let mut params: Vec<String> = Vec::new();
@@ -232,6 +244,20 @@ impl std::fmt::Display for ODataQuery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn navigate_appends_the_navigation_segment_after_the_key() {
+        let q = ODataQuery::new("Orders")
+            .key("OrderID='A 1',Item=10")
+            .navigate("_Items")
+            .top(5);
+        assert_eq!(q.build(), "Orders(OrderID='A%201',Item=10)/_Items?$top=5");
+        // Without a key there is no single entity to navigate from.
+        assert_eq!(
+            ODataQuery::new("Orders").navigate("_Items").build(),
+            "Orders"
+        );
+    }
 
     #[test]
     fn skiptoken_is_emitted_and_encoded() {

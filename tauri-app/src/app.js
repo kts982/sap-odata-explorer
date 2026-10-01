@@ -94,6 +94,8 @@ import {
   copyCliCommand,
   goToPage,
   copyResultsDelimited,
+  showRowDetail,
+  loadRowNavigation,
   showFilterTooltip,
   hideFilterTooltip,
   applyFilterFromTooltip,
@@ -409,6 +411,12 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (action === 'copy-row') {
       e.stopPropagation();
       copyRowAsJson(el.dataset.key);
+    } else if (action === 'row-detail') {
+      e.stopPropagation();
+      showRowDetail(el.dataset.key);
+    } else if (action === 'row-nav') {
+      e.stopPropagation();
+      loadRowNavigation(el.dataset.key, el.dataset.nav);
     } else if (action === 'cell-click') {
       const col = el.dataset.cellCol;
       const val = el.dataset.cellVal;

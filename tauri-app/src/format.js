@@ -229,6 +229,20 @@ export function buildCliCommand(profile, servicePath, params) {
   return parts.join(' ');
 }
 
+// `Key1=lit1,Key2=lit2` addressing one result row, from the entity's key
+// properties and their EDM types. Null when a key value is missing (e.g.
+// the key column wasn't in $select).
+export function keyPredicate(keys, row, typeByName, version) {
+  if (!Array.isArray(keys) || keys.length === 0 || !row) return null;
+  const parts = [];
+  for (const k of keys) {
+    const v = row[k];
+    if (v === null || v === undefined || typeof v === 'object') return null;
+    parts.push(`${k}=${formatODataLiteral(v, typeByName[k] || 'Edm.String', version)}`);
+  }
+  return parts.join(',');
+}
+
 // Total row count from an inline-count response, or null.
 // V4 `@odata.count`; V2 `d.__count` (a string).
 export function extractTotalCount(data) {

@@ -25,6 +25,7 @@ import {
   buildCliCommand,
   pagingInfo,
   toDelimited,
+  keyPredicate,
 } from './format.js';
 import { isOfflineProfile } from './auth.js';
 import { setStatus } from './status.js';
@@ -36,6 +37,7 @@ import {
   buildODataUrl,
 } from './executor.js';
 import { copyToClipboard } from './clipboard.js';
+import { timedInvoke } from './api.js';
 
 const COPY_ICON_HTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
 
@@ -45,6 +47,9 @@ export function extractRows(data) {
     return [data.d];
   }
   if (data.value) return data.value;
+  // V4 single entity (key read, to-one navigation): the properties sit at
+  // the top level next to @odata.context.
+  if (data['@odata.context'] !== undefined) return [data];
   return null;
 }
 
@@ -211,6 +216,7 @@ export function renderResults(data, elapsedMs, params) {
         <button class="copy-btn row-copy-btn" data-action="copy-row" data-key="${storeKey}" title="Copy row as JSON">
           ${raw(COPY_ICON_HTML)}
         </button>
+        <button class="copy-btn row-copy-btn" data-action="row-detail" data-key="${storeKey}" title="Show this row as a list, with its navigation properties">&#8599;</button>
       </td>`;
 
     return safeHtml`
@@ -281,12 +287,96 @@ export function copyResultsDelimited(delimiter, label) {
   copyToClipboard(toDelimited(rows, delimiter), `${rows.length} row(s) as ${label}`);
 }
 
+// One row as a vertical list (wide entities are unreadable sideways),
+// with label and type from the describe info, and the entity's
+// navigation properties as drill-down links.
+export function showRowDetail(storeKey) {
+  const row = state.expandedDataStore[storeKey];
+  if (!row) return;
+  const info = currentDescribeInfo(getActiveTab());
+  const propByName = new Map((info && info.properties ? info.properties : []).map(p => [p.name, p]));
+  const fields = Object.keys(row)
+    .filter(k => !k.startsWith('@') && k !== '__metadata')
+    .map(k => {
+      const v = row[k];
+      const prop = propByName.get(k);
+      const meta = prop ? [prop.label, (prop.edm_type || '').replace(/^Edm\./, '')].filter(Boolean).join(' · ') : '';
+      let value;
+      if (v !== null && typeof v === 'object') {
+        const key = `${storeKey}_${k}`;
+        state.expandedDataStore[key] = Array.isArray(v) ? v : (v.results || v);
+        value = safeHtml`<span class="expand-badge text-[10px] px-1.5 py-0.5 rounded-sm font-mono inline-block cursor-pointer" data-action="nested" data-key="${key}" data-col="${k}">${Array.isArray(v) ? `${v.length} item(s)` : 'object'}</span>`;
+      } else {
+        value = safeHtml`<span class="text-ox-text break-all">${v === null || v === undefined ? '—' : String(v)}</span>`;
+      }
+      return safeHtml`
+        <tr class="border-b border-ox-border/30 align-top">
+          <td class="px-2 py-0.5 text-ox-amber whitespace-nowrap">${k}</td>
+          <td class="px-2 py-0.5">${raw(value)}</td>
+          <td class="px-2 py-0.5 text-ox-dim whitespace-nowrap">${meta}</td>
+        </tr>`;
+    })
+    .join('');
+  const navs = info && Array.isArray(info.nav_properties) ? info.nav_properties : [];
+  const navLinks = navs
+    .map(n => safeHtml`<button class="btn-ghost text-[11px] px-1.5 py-0.5 rounded-sm" data-action="row-nav" data-key="${storeKey}" data-nav="${n.name}" title="Load ${n.name} for this row">${n.name}</button>`)
+    .join(' ');
+  const html = safeHtml`
+    <div class="overflow-auto max-h-80">
+      <table class="w-full text-xs font-mono border-collapse"><tbody>${raw(fields)}</tbody></table>
+    </div>
+    ${raw(navs.length ? safeHtml`<div class="px-3 py-2 border-t border-ox-border flex flex-wrap items-center gap-1 text-[11px]"><span class="text-ox-dim mr-1">Navigate:</span>${raw(navLinks)}</div>` : '')}`;
+  showNestedPanel(`${state.currentEntitySet} — row`, html);
+}
+
+// Load `EntitySet(key)/Navigation` for a result row and show the related
+// rows in the same panel.
+export async function loadRowNavigation(storeKey, navigation) {
+  const row = state.expandedDataStore[storeKey];
+  const tab = getActiveTab();
+  const info = currentDescribeInfo(tab);
+  if (!row || !info) return;
+  const typeByName = Object.fromEntries((info.properties || []).map(p => [p.name, p.edm_type]));
+  const key = keyPredicate(info.keys, row, typeByName, serviceODataVersion(tab));
+  if (!key) {
+    setStatus('This row has no complete key (are the key columns in $select?) — cannot navigate');
+    return;
+  }
+  setStatus(`Loading ${navigation}...`);
+  try {
+    const data = await timedInvoke('run_query', {
+      profileName: state.currentProfile,
+      servicePath: state.currentServicePath,
+      params: {
+        entity_set: state.currentEntitySet,
+        key,
+        navigation,
+        select: null,
+        filter: null,
+        expand: null,
+        orderby: null,
+        top: null,
+        skip: null,
+        count: false,
+        skiptoken: null,
+      },
+    });
+    const related = extractRows(data) || [];
+    const navKey = `${storeKey}__nav_${navigation}`;
+    state.expandedDataStore[navKey] = related;
+    setStatus(`${navigation}: ${related.length} row(s)`);
+    if (related.length) showNestedData(navKey, `${state.currentEntitySet}(${key})/${navigation}`);
+  } catch (e) {
+    setStatus(`${navigation}: ${e}`);
+  }
+}
+
 export function showNestedData(storeKey, colName) {
   const data = state.expandedDataStore[storeKey];
   if (!data) return;
 
   const rows = Array.isArray(data) ? data : [data];
-  if (rows.length === 0) { alert('No nested data'); return; }
+  if (rows.length === 0) { setStatus(`${colName}: no rows`); return; }
 
   const first = rows[0];
   if (typeof first !== 'object' || first === null) {

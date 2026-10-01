@@ -164,6 +164,9 @@ struct QueryParams {
     search: Option<String>,
     /// Continuation token from a server-driven next link (`$skiptoken`).
     skiptoken: Option<String>,
+    /// Navigation property to follow from the keyed entity
+    /// (`Set(key)/Navigation`); only used together with `key`.
+    navigation: Option<String>,
 }
 
 #[derive(Clone)]
@@ -1156,6 +1159,11 @@ async fn run_query(
     }
     if let Some(ref k) = params.key {
         q = q.key(k);
+    }
+    if let Some(ref nav) = params.navigation
+        && !nav.is_empty()
+    {
+        q = q.navigate(nav);
     }
     if params.count.unwrap_or(false) {
         q = q.count();

@@ -135,5 +135,22 @@ check(
 );
 check('CSV quotes commas', toDelimited([{ A: 'x,y', B: 3 }], ','), 'A,B\r\n"x,y",3');
 
-console.log(failures ? `\n${failures} failure(s)` : `\nall ${cases.length + 22} assertions passed`);
+// Row drill-down key predicate.
+const { keyPredicate } = await import(`file://${FORMAT_MODULE.replace(/\\/g, '/')}`);
+const guidRow = {
+  ParentHandlingUnitUUID: '00000000-0000-0000-0000-000000000000',
+  StockItemUUID: '6a1f0c2e-1b2d-4c3e-8f40-0123456789ab',
+  Product: "O'Brien",
+};
+const types = { ParentHandlingUnitUUID: 'Edm.Guid', StockItemUUID: 'Edm.Guid', Product: 'Edm.String' };
+check(
+  'V4 composite GUID key',
+  keyPredicate(['ParentHandlingUnitUUID', 'StockItemUUID'], guidRow, types, 'V4'),
+  'ParentHandlingUnitUUID=00000000-0000-0000-0000-000000000000,StockItemUUID=6a1f0c2e-1b2d-4c3e-8f40-0123456789ab',
+);
+check('V2 GUID key prefixed', keyPredicate(['StockItemUUID'], guidRow, types, 'V2'), "StockItemUUID=guid'6a1f0c2e-1b2d-4c3e-8f40-0123456789ab'");
+check('string key quoted and escaped', keyPredicate(['Product'], guidRow, types, 'V4'), "Product='O''Brien'");
+check('missing key value → null', keyPredicate(['Missing'], guidRow, types, 'V4'), null);
+
+console.log(failures ? `\n${failures} failure(s)` : `\nall ${cases.length + 26} assertions passed`);
 process.exit(failures ? 1 : 0);
