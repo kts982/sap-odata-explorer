@@ -26,6 +26,7 @@ git diff --check
 node scripts/lint-innerhtml.mjs
 node scripts/test-safe-html.mjs
 node scripts/test-odata-literals.mjs
+node scripts/test-query-suggest.mjs
 ```
 
 Run from `tauri-app/`:
@@ -34,7 +35,7 @@ Run from `tauri-app/`:
 npm run css
 ```
 
-`cargo clippy --workspace --all-targets -- -D warnings`, the MSRV check (core + CLI on Rust 1.88), `scripts/test-safe-html.mjs` (the parser-vs-renderer escaping contract) and `scripts/test-odata-literals.mjs` (V2/V4 filter-literal formatting) all run in CI as hard gates.
+`cargo clippy --workspace --all-targets -- -D warnings`, the MSRV check (core + CLI on Rust 1.88), `scripts/test-safe-html.mjs` (the parser-vs-renderer escaping contract), `scripts/test-odata-literals.mjs` (V2/V4 filter-literal formatting) and `scripts/test-query-suggest.mjs` (query-bar autocomplete) all run in CI as hard gates.
 
 ## Desktop security
 

@@ -133,3 +133,5 @@ jobs:
         # literals differently; every $filter the desktop app writes for
         # the user goes through formatODataLiteral.
         run: node scripts/test-odata-literals.mjs
+      - name: Query-bar autocomplete token logic
+        run: node scripts/test-query-suggest.mjs
