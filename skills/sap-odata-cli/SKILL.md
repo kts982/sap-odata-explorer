@@ -101,20 +101,23 @@ advising on CDS annotation fixes.
 
 ## Offline EDMX library (no network needed)
 
-The library caches `$metadata` documents locally. The CLI **manages** it;
-browsing cached services with `describe`/`lint` is desktop-app-only today.
+The library caches `$metadata` documents locally. Pass an offline bucket as
+`-p` and the metadata commands read the cached EDMX — no SAP system needed:
 
 ```bash
 sap-odata offline list                              # buckets
-sap-odata offline list --profile "DEV (offline)"    # services + ids in a bucket
+sap-odata -p "DEV (offline)" --json services        # services (id, label) in a bucket
+sap-odata -p "DEV (offline)" -s <id-or-label> --json entities
+sap-odata -p "DEV (offline)" -s <id-or-label> describe <EntitySet> --json
+sap-odata -p "DEV (offline)" -s <id-or-label> --json lint
+sap-odata -p "DEV (offline)" -s <id-or-label> metadata   # the raw EDMX
 sap-odata offline import file.edmx --label MYSVC    # ingest a hand-carried EDMX
 sap-odata -p DEV -s <SVC> offline save              # capture from a live system
 ```
 
-To answer metadata questions offline, read the cached file directly — it is
-plain EDMX XML at `{config}/offline/<bucket-slug>/<service_id>.edmx`, where
-`{config}` is the directory `sap-odata profile where` prints. Parse entity
-types, properties, and annotations straight from the XML.
+`-s` takes the service id or its label (case-insensitive). `annotations` and
+`functions` work too; `run`, `verify` and `build` don't (there is no system to
+query).
 
 `offline import` accepts API-Hub `.edmx`, `/IWFND/GW_CLIENT` "Save
 Response" XML, `curl <base>/$metadata` dumps. `offline delete` prompts for

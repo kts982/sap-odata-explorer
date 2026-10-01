@@ -526,3 +526,57 @@ fn profile_env_is_set_kept_cleared_and_validated() {
     assert!(add(&["--env", "none"]).status.success());
     assert_eq!(env_of(), serde_json::Value::Null);
 }
+
+// ── browsing an offline bucket (no network) ──
+
+#[test]
+fn metadata_commands_work_against_an_offline_bucket() {
+    let sb = Sandbox::new("offline_browse");
+    let edmx = sb.write_file("contract.edmx", MINIMAL_V4_EDMX);
+    let out = sb.run(&["--json", "offline", "import", edmx.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let imported: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let id = imported["service_id"].as_str().unwrap().to_string();
+
+    // services lists the bucket's cached services.
+    let out = sb.run(&["-p", "Imported", "--json", "services"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let services: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let label = services[0]["label"].as_str().unwrap().to_string();
+
+    // entities by id, describe by label.
+    let out = sb.run(&["-p", "Imported", "-s", &id, "--json", "entities"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let sets: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(sets[0]["name"], "Item");
+
+    let out = sb.run(&[
+        "-p",
+        "Imported",
+        "-s",
+        &label.to_lowercase(),
+        "--json",
+        "describe",
+        "Item",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let described: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(described["keys"][0], "ID", "{described}");
+
+    // metadata prints the cached XML; lint evaluates it.
+    let out = sb.run(&["-p", "Imported", "-s", &id, "metadata"]);
+    assert!(stdout(&out).contains("zcontract_test"), "{}", stdout(&out));
+    let out = sb.run(&["-p", "Imported", "-s", &id, "--json", "lint"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(serde_json::from_str::<serde_json::Value>(&stdout(&out)).is_ok());
+
+    // Anything that would query SAP is refused, clearly.
+    let out = sb.run(&["-p", "Imported", "-s", &id, "run", "Item"]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("offline profile"), "{}", stderr(&out));
+
+    // Unknown service: points at `offline list`.
+    let out = sb.run(&["-p", "Imported", "-s", "nope", "entities"]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("offline list"), "{}", stderr(&out));
+}

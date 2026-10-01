@@ -64,6 +64,10 @@ All notable changes to this project are documented here. Format loosely follows 
 - **collapse** in the entity-details header folds the property tables away to give the results room (remembered per tab).
 - The status bar shows the **version**; clicking it checks GitHub for a newer release (user-initiated only — no telemetry). **Feedback** opens the GitHub issue chooser.
 
+### New — CLI
+
+- **Browse offline buckets from the CLI.** `-p "<bucket>"` makes `entities`, `describe`, `functions`, `annotations`, `lint` and `metadata` read the cached EDMX — no SAP system needed (`-s` takes the service id or label); `services` lists the bucket. Network commands are refused with a clear message. Agents no longer have to parse the cached XML themselves.
+
 ### New — Configuration
 
 - `SAP_ODATA_CONFIG_DIR` pins the config directory (connections + offline library), ahead of the portable and OS-default locations.

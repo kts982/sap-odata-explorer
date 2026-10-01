@@ -480,8 +480,25 @@ sap-odata offline list                       # all buckets
 sap-odata offline list --profile "DEV (offline)"   # services + ids in one bucket
 ```
 
-With `--profile`, each row shows the `service_id` (used by
-`offline delete --service-id`), label, OData version, size, and attribution.
+With `--profile`, each row shows the `service_id` (used by `-s` when
+browsing the bucket, and by `offline delete --service-id`), label, OData version, size, and attribution.
+
+#### Browsing an offline bucket
+
+Pass the bucket name as `-p` and the metadata commands read the cached EDMX
+instead of a live system — handy on a machine with no access to the SAP host.
+`-s` takes the service id or its label (case-insensitive):
+
+```bash
+sap-odata -p "DEV (offline)" services                 # cached services in the bucket
+sap-odata -p "DEV (offline)" -s UI_PHYSSTOCKPROD_1 entities
+sap-odata -p "DEV (offline)" -s UI_PHYSSTOCKPROD_1 describe WarehousePhysicalStockProducts
+sap-odata -p "DEV (offline)" -s ui_physstockprod_1-a1b2c3d4 lint --fail-on warn
+sap-odata -p "DEV (offline)" -s UI_PHYSSTOCKPROD_1 metadata > snapshot.edmx
+```
+
+`entities`, `describe`, `functions`, `annotations`, `lint` and `metadata` work
+offline; `run`, `verify` and `build` are refused with a clear message.
 
 #### `offline delete`
 

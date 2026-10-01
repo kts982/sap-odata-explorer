@@ -620,6 +620,15 @@ async fn main() -> Result<()> {
         return cmd_offline_delete(profile.clone(), service_id.clone(), *yes, cli.json);
     }
 
+    // `-p` naming an offline bucket: metadata commands read the cached
+    // EDMX — no connection, no network.
+    if let Some(ref name) = cli.profile {
+        let (cfg, config_dir) = config::load_config().context("loading config")?;
+        if cfg.offline_profiles.contains_key(name) && !cfg.connections.contains_key(name) {
+            return run_offline_bucket_command(&cli, &cfg, &config_dir.path, name).await;
+        }
+    }
+
     // Resolve connection: profile → env vars → CLI flags
     let connection = resolve_connection(&cli)?;
     let uses_browser_sso = matches!(&connection.auth, AuthConfig::Browser);
@@ -664,15 +673,15 @@ async fn main() -> Result<()> {
             } => cmd_services(&sap_client, filter.as_deref(), *v2, *v4, *top, cli.json).await,
             Commands::Entities => {
                 let svc = require_service()?;
-                cmd_entities(&sap_client, &svc, cli.json).await
+                cmd_entities(&MetaSource::Live { client: &sap_client, service: &svc }, cli.json).await
             }
             Commands::Describe { entity_set } => {
                 let svc = require_service()?;
-                cmd_describe(&sap_client, &svc, entity_set, cli.json).await
+                cmd_describe(&MetaSource::Live { client: &sap_client, service: &svc }, entity_set, cli.json).await
             }
             Commands::Functions => {
                 let svc = require_service()?;
-                cmd_functions(&sap_client, &svc, cli.json).await
+                cmd_functions(&MetaSource::Live { client: &sap_client, service: &svc }, cli.json).await
             }
             Commands::Build {
                 entity_set,
@@ -742,7 +751,7 @@ async fn main() -> Result<()> {
             }
             Commands::Metadata => {
                 let svc = require_service()?;
-                cmd_metadata(&sap_client, &svc).await
+                cmd_metadata(&MetaSource::Live { client: &sap_client, service: &svc }).await
             }
             Commands::Verify { quick, top } => {
                 let svc = require_service()?;
@@ -751,8 +760,7 @@ async fn main() -> Result<()> {
             Commands::Annotations { namespace, filter } => {
                 let svc = require_service()?;
                 cmd_annotations(
-                    &sap_client,
-                    &svc,
+                    &MetaSource::Live { client: &sap_client, service: &svc },
                     cli.json,
                     namespace.clone(),
                     filter.clone(),
@@ -767,8 +775,7 @@ async fn main() -> Result<()> {
             } => {
                 let svc = require_service()?;
                 cmd_lint(
-                    &sap_client,
-                    &svc,
+                    &MetaSource::Live { client: &sap_client, service: &svc },
                     cli.json,
                     entity.clone(),
                     min_severity.clone(),
@@ -1956,11 +1963,147 @@ async fn cmd_services(
     Ok(())
 }
 
-async fn cmd_entities(client: &SapClient, service: &str, json: bool) -> Result<()> {
-    let meta = client
-        .fetch_metadata(service)
-        .await
-        .context("failed to fetch metadata")?;
+/// Where a metadata-only command reads `$metadata` from: the live
+/// service, or an offline bucket's cached EDMX (`-p "<bucket>"`).
+enum MetaSource<'a> {
+    Live {
+        client: &'a SapClient,
+        service: &'a str,
+    },
+    Offline {
+        xml: String,
+        /// Original service path, for saves from a live system.
+        service_path: Option<String>,
+    },
+}
+
+impl MetaSource<'_> {
+    fn service_path(&self) -> Option<&str> {
+        match self {
+            MetaSource::Live { service, .. } => Some(service),
+            MetaSource::Offline { service_path, .. } => service_path.as_deref(),
+        }
+    }
+
+    async fn xml(&self) -> Result<String> {
+        match self {
+            MetaSource::Live { client, service } => client
+                .fetch_metadata_xml(service)
+                .await
+                .context("failed to fetch metadata"),
+            MetaSource::Offline { xml, .. } => Ok(xml.clone()),
+        }
+    }
+
+    async fn parsed(&self) -> Result<sap_odata_core::metadata::ServiceMetadata> {
+        match self {
+            MetaSource::Live { client, service } => client
+                .fetch_metadata(service)
+                .await
+                .context("failed to fetch metadata"),
+            MetaSource::Offline { xml, .. } => {
+                sap_odata_core::metadata::parse_metadata(xml).context("cached EDMX did not parse")
+            }
+        }
+    }
+}
+
+/// `-p` names an offline bucket. The metadata commands work against the
+/// cached EDMX; anything that would talk to SAP is refused up front.
+async fn run_offline_bucket_command(
+    cli: &Cli,
+    cfg: &config::ConfigFile,
+    config_dir: &std::path::Path,
+    bucket: &str,
+) -> Result<()> {
+    if let Commands::Services { .. } = &cli.command {
+        return render_offline_services(cfg, bucket, cli.json);
+    }
+    let metadata_only = matches!(
+        &cli.command,
+        Commands::Entities
+            | Commands::Describe { .. }
+            | Commands::Functions
+            | Commands::Metadata
+            | Commands::Annotations { .. }
+            | Commands::Lint { .. }
+    );
+    if !metadata_only {
+        anyhow::bail!(
+            "'{bucket}' is an offline profile (cached $metadata) — there is no SAP system to query. \
+             These commands work offline: services, entities, describe, functions, annotations, lint, metadata."
+        );
+    }
+    let ident = cli.service.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "--service / -s is required: a service id or label from `sap-odata offline list --profile \"{bucket}\"`"
+        )
+    })?;
+    let service_id = resolve_offline_service(cfg, bucket, ident)?;
+    let xml = offline::read_offline_metadata(cfg, config_dir, bucket, &service_id)
+        .context("reading the cached EDMX")?;
+    let service_path = cfg
+        .offline_services
+        .iter()
+        .find(|s| s.profile == bucket && s.id == service_id)
+        .and_then(|s| s.source_service_path.clone());
+    let src = MetaSource::Offline { xml, service_path };
+    match &cli.command {
+        Commands::Entities => cmd_entities(&src, cli.json).await,
+        Commands::Describe { entity_set } => cmd_describe(&src, entity_set, cli.json).await,
+        Commands::Functions => cmd_functions(&src, cli.json).await,
+        Commands::Metadata => cmd_metadata(&src).await,
+        Commands::Annotations { namespace, filter } => {
+            cmd_annotations(&src, cli.json, namespace.clone(), filter.clone()).await
+        }
+        Commands::Lint {
+            entity,
+            min_severity,
+            lint_profile,
+            fail_on,
+        } => {
+            cmd_lint(
+                &src,
+                cli.json,
+                entity.clone(),
+                min_severity.clone(),
+                *lint_profile,
+                *fail_on,
+            )
+            .await
+        }
+        _ => unreachable!("filtered above"),
+    }
+}
+
+/// Offline service by id, original service path, or (unique,
+/// case-insensitive) label — the label is what `offline list` shows first.
+fn resolve_offline_service(cfg: &config::ConfigFile, bucket: &str, ident: &str) -> Result<String> {
+    use sap_odata_core::offline::{MetadataSource, MetadataSourceError};
+    match MetadataSource::resolve(bucket, ident, cfg) {
+        Ok(MetadataSource::Offline { service_id, .. }) => return Ok(service_id),
+        Ok(MetadataSource::Connected { .. }) => {
+            anyhow::bail!("'{bucket}' is a connected profile, not an offline bucket")
+        }
+        Err(MetadataSourceError::OfflineServiceNotFound { .. }) => {}
+        Err(e) => return Err(e.into()),
+    }
+    let by_label: Vec<_> = cfg
+        .offline_services
+        .iter()
+        .filter(|s| s.profile == bucket && s.label.eq_ignore_ascii_case(ident))
+        .collect();
+    match by_label.as_slice() {
+        [one] => Ok(one.id.clone()),
+        [] => anyhow::bail!(
+            "no service '{ident}' in offline bucket '{bucket}'. Run `sap-odata offline list --profile \"{bucket}\"` to see ids and labels."
+        ),
+        _ => anyhow::bail!("'{ident}' matches several services in '{bucket}' — use the service id"),
+    }
+}
+
+async fn cmd_entities(src: &MetaSource<'_>, json: bool) -> Result<()> {
+    let meta = src.parsed().await?;
 
     if json {
         let sets: Vec<_> = meta
@@ -2008,16 +2151,8 @@ async fn cmd_entities(client: &SapClient, service: &str, json: bool) -> Result<(
     Ok(())
 }
 
-async fn cmd_describe(
-    client: &SapClient,
-    service: &str,
-    entity_set: &str,
-    json: bool,
-) -> Result<()> {
-    let meta = client
-        .fetch_metadata(service)
-        .await
-        .context("failed to fetch metadata")?;
+async fn cmd_describe(src: &MetaSource<'_>, entity_set: &str, json: bool) -> Result<()> {
+    let meta = src.parsed().await?;
 
     let et = meta
         .entity_type_for_set(entity_set)
@@ -2096,24 +2231,23 @@ async fn cmd_describe(
         "  sap-odata ... run {entity_set} --select {} --top 10\n",
         select_fields.join(",")
     );
-    println!(
-        "  URL: {}/{}\n",
-        service,
-        ODataQuery::new(entity_set)
-            .select(&select_fields)
-            .top(10)
-            .format("json")
-            .build()
-    );
+    if let Some(service) = src.service_path() {
+        println!(
+            "  URL: {}/{}\n",
+            service,
+            ODataQuery::new(entity_set)
+                .select(&select_fields)
+                .top(10)
+                .format("json")
+                .build()
+        );
+    }
 
     Ok(())
 }
 
-async fn cmd_functions(client: &SapClient, service: &str, json: bool) -> Result<()> {
-    let meta = client
-        .fetch_metadata(service)
-        .await
-        .context("failed to fetch metadata")?;
+async fn cmd_functions(src: &MetaSource<'_>, json: bool) -> Result<()> {
+    let meta = src.parsed().await?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&meta.function_imports)?);
@@ -2365,26 +2499,19 @@ fn truncate_for_table(s: &str, max_len: usize) -> String {
     }
 }
 
-async fn cmd_metadata(client: &SapClient, service: &str) -> Result<()> {
-    let xml = client
-        .fetch_metadata_xml(service)
-        .await
-        .context("failed to fetch metadata")?;
+async fn cmd_metadata(src: &MetaSource<'_>) -> Result<()> {
+    let xml = src.xml().await?;
     println!("{xml}");
     Ok(())
 }
 
 async fn cmd_annotations(
-    client: &SapClient,
-    service: &str,
+    src: &MetaSource<'_>,
     as_json: bool,
     namespace: Option<String>,
     filter: Option<String>,
 ) -> Result<()> {
-    let meta = client
-        .fetch_metadata(service)
-        .await
-        .context("failed to fetch metadata")?;
+    let meta = src.parsed().await?;
 
     // Optional filters applied in order: namespace (exact-ish match) +
     // free-text substring across term/target/value/qualifier.
@@ -2449,18 +2576,14 @@ async fn cmd_annotations(
 }
 
 async fn cmd_lint(
-    client: &SapClient,
-    service: &str,
+    src: &MetaSource<'_>,
     as_json: bool,
     entity: Option<String>,
     min_severity: Option<String>,
     profile_override: Option<LintProfileArg>,
     fail_on: Option<FailOnArg>,
 ) -> Result<()> {
-    let meta = client
-        .fetch_metadata(service)
-        .await
-        .context("failed to fetch metadata")?;
+    let meta = src.parsed().await?;
 
     let min_sev = match min_severity.as_deref() {
         Some("pass") | None => None,
