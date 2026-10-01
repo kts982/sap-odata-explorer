@@ -162,6 +162,20 @@ pub fn connection_fingerprint(base_url: &str, client: &str, language: &str) -> S
     )
 }
 
+/// Whether two connection fingerprints address the same session target:
+/// same base URL and client. `sap-language` is part of the fingerprint
+/// but only a request parameter — a session signed in under EN is just as
+/// valid for `--language DE` (comparing it made a one-off language
+/// override discard the persisted session). Empty (legacy) fingerprints
+/// never match.
+pub fn same_session_target(a: &str, b: &str) -> bool {
+    fn target(fp: &str) -> Option<(&str, &str)> {
+        let mut parts = fp.split('|');
+        Some((parts.next().filter(|s| !s.is_empty())?, parts.next()?))
+    }
+    matches!((target(a), target(b)), (Some(x), Some(y)) if x == y)
+}
+
 impl PersistedSession {
     fn now() -> u64 {
         std::time::SystemTime::now()
@@ -234,10 +248,9 @@ pub fn load_for_connection(
         None => return Ok(None),
     };
 
-    // Legacy sessions (pre-fingerprint) have empty fingerprint — treat as stale.
-    if session.connection_fingerprint.is_empty()
-        || session.connection_fingerprint != expected_fingerprint
-    {
+    // Legacy sessions (pre-fingerprint) have an empty fingerprint and
+    // never match — treated as stale.
+    if !same_session_target(&session.connection_fingerprint, expected_fingerprint) {
         tracing::debug!(
             "Discarding stale session for '{}' (fingerprint mismatch)",
             profile_name
@@ -367,6 +380,47 @@ mod tests {
             load(profile).unwrap().is_none(),
             "stale session must be cleared on mismatch"
         );
+    }
+
+    #[test]
+    fn load_for_connection_ignores_language() {
+        // `-p DEV --language DE` must reuse (and keep) DEV's session.
+        let profile = "load_language";
+        let stored_fp = connection_fingerprint("https://sap.corp", "100", "EN");
+        save(
+            profile,
+            "https://sap.corp/",
+            &stored_fp,
+            &["X=1".to_string()],
+        )
+        .unwrap();
+
+        let expected_fp = connection_fingerprint("https://sap.corp", "100", "DE");
+        assert!(
+            load_for_connection(profile, &expected_fp)
+                .unwrap()
+                .is_some()
+        );
+        assert!(load(profile).unwrap().is_some(), "must not be cleared");
+    }
+
+    #[test]
+    fn same_session_target_compares_url_and_client_only() {
+        let en = connection_fingerprint("https://sap.corp", "100", "EN");
+        assert!(same_session_target(
+            &en,
+            &connection_fingerprint("https://SAP.corp/", "100", "DE")
+        ));
+        assert!(!same_session_target(
+            &en,
+            &connection_fingerprint("https://other.corp", "100", "EN")
+        ));
+        assert!(!same_session_target(
+            &en,
+            &connection_fingerprint("https://sap.corp", "200", "EN")
+        ));
+        assert!(!same_session_target("", &en));
+        assert!(!same_session_target(&en, ""));
     }
 
     #[test]

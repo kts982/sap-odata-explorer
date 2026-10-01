@@ -276,7 +276,9 @@ pub fn clear_session_if_connection_changed(
         Some(old) => {
             let old_fp =
                 crate::session::connection_fingerprint(&old.base_url, &old.client, &old.language);
-            old_fp != new_fp
+            // A language change alone keeps the session (see
+            // `same_session_target`).
+            !crate::session::same_session_target(&old_fp, &new_fp)
         }
     };
     if should_clear {

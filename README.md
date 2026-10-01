@@ -252,7 +252,7 @@ sap-odata signout PRD
 
 The desktop app also has a **Sign Out** button for Browser SSO profiles. That clears the persisted session and local webview cookies for SAP and common IdP hosts.
 
-Sessions still expire server-side. When that happens, the CLI tells you to sign in again from the desktop app. If a profile's `base_url`, `client`, or `language` changes, any persisted Browser SSO session is treated as stale and discarded automatically.
+Sessions still expire server-side. When that happens, the CLI tells you to sign in again from the desktop app. If a profile's `base_url` or `client` changes, any persisted Browser SSO session is treated as stale and discarded automatically (`language` doesn't affect sessions).
 
 ## Security notes
 
