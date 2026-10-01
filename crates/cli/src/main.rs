@@ -1048,7 +1048,7 @@ fn cmd_alias_list(profile_name: &str) -> Result<()> {
     }
 
     let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
+    table.load_style(UTF8_FULL);
     table.set_header(vec![
         Cell::new("Alias").fg(Color::DarkCyan),
         Cell::new("Service Path").fg(Color::DarkCyan),
@@ -1364,7 +1364,7 @@ fn cmd_profile_list() -> Result<()> {
     }
 
     let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
+    table.load_style(UTF8_FULL);
     table.set_header(vec![
         Cell::new("Profile").fg(Color::DarkCyan),
         Cell::new("URL").fg(Color::DarkCyan),
@@ -1761,7 +1761,7 @@ async fn cmd_services(
     }
 
     let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
+    table.load_style(UTF8_FULL);
     table.set_header(vec![
         Cell::new("#").fg(Color::DarkCyan),
         Cell::new("Ver").fg(Color::DarkCyan),
@@ -1810,7 +1810,7 @@ async fn cmd_entities(client: &SapClient, service: &str, json: bool) -> Result<(
         println!("{}", serde_json::to_string_pretty(&sets)?);
     } else {
         let mut table = Table::new();
-        table.load_preset(UTF8_FULL);
+        table.load_style(UTF8_FULL);
         table.set_header(vec![
             Cell::new("#").fg(Color::DarkCyan),
             Cell::new("Entity Set").fg(Color::DarkCyan),
@@ -1866,7 +1866,7 @@ async fn cmd_describe(
     println!("  Keys: {}\n", et.keys.join(", "));
 
     let mut prop_table = Table::new();
-    prop_table.load_preset(UTF8_FULL);
+    prop_table.load_style(UTF8_FULL);
     prop_table.set_header(vec![
         Cell::new("Property").fg(Color::DarkCyan),
         Cell::new("Type").fg(Color::DarkCyan),
@@ -1904,7 +1904,7 @@ async fn cmd_describe(
     if !nav_targets.is_empty() {
         println!("\n  Navigation Properties:\n");
         let mut nav_table = Table::new();
-        nav_table.load_preset(UTF8_FULL);
+        nav_table.load_style(UTF8_FULL);
         nav_table.set_header(vec![
             Cell::new("Nav Property").fg(Color::DarkCyan),
             Cell::new("Target Type").fg(Color::DarkCyan),
@@ -1958,7 +1958,7 @@ async fn cmd_functions(client: &SapClient, service: &str, json: bool) -> Result<
         println!("{}", serde_json::to_string_pretty(&meta.function_imports)?);
     } else {
         let mut table = Table::new();
-        table.load_preset(UTF8_FULL);
+        table.load_style(UTF8_FULL);
         table.set_header(vec![
             Cell::new("Function").fg(Color::DarkCyan),
             Cell::new("Method").fg(Color::DarkCyan),
@@ -2116,7 +2116,7 @@ async fn cmd_verify(
         println!("{}", serde_json::to_string_pretty(&payload)?);
     } else {
         let mut table = Table::new();
-        table.load_preset(UTF8_FULL);
+        table.load_style(UTF8_FULL);
         table.set_header(vec![
             Cell::new("Entity Set").fg(Color::DarkCyan),
             Cell::new("Status").fg(Color::DarkCyan),
@@ -2258,7 +2258,7 @@ async fn cmd_annotations(
     }
 
     let mut table = Table::new();
-    table.load_preset(UTF8_FULL).set_header(vec![
+    table.load_style(UTF8_FULL).set_header(vec![
         Cell::new("Namespace").fg(Color::Cyan),
         Cell::new("Term").fg(Color::Cyan),
         Cell::new("Target").fg(Color::Cyan),
@@ -2407,7 +2407,7 @@ async fn cmd_lint(
     for r in &reports {
         println!("\n── {} ──", r.entity);
         let mut table = Table::new();
-        table.load_preset(UTF8_FULL).set_header(vec![
+        table.load_style(UTF8_FULL).set_header(vec![
             Cell::new("").fg(Color::Cyan),
             Cell::new("Category").fg(Color::Cyan),
             Cell::new("Check").fg(Color::Cyan),
@@ -2596,7 +2596,7 @@ fn render_offline_profiles(cfg: &config::ConfigFile, json: bool) -> Result<()> {
     }
     let mut table = Table::new();
     table
-        .load_preset(UTF8_FULL)
+        .load_style(UTF8_FULL)
         .set_header(vec!["Profile", "Source", "Services", "Created"]);
     for (name, p) in &cfg.offline_profiles {
         let count = cfg
@@ -2640,7 +2640,7 @@ fn render_offline_services(cfg: &config::ConfigFile, profile: &str, json: bool) 
         return Ok(());
     }
     let mut table = Table::new();
-    table.load_preset(UTF8_FULL).set_header(vec![
+    table.load_style(UTF8_FULL).set_header(vec![
         "Service ID",
         "Label",
         "Version",
@@ -2844,7 +2844,7 @@ fn print_results_table(rows: &[serde_json::Value]) {
         .collect();
 
     let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
+    table.load_style(UTF8_FULL);
     table.set_header(
         columns
             .iter()
