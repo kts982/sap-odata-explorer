@@ -62,6 +62,7 @@ All notable changes to this project are documented here. Format loosely follows 
 - **copy TSV / copy CSV** in the stats bar copy the current rows — TSV pastes straight into Excel. Nested values become JSON; fields with delimiters, quotes or line breaks are quoted.
 - **Try the sample service.** The start screen offers a bundled, synthetic V4 service (warehouse orders, tasks, a value help) imported into a `Sample` offline bucket — SAP View, the annotation inspector, Fiori readiness, the filter bar and autocomplete all work without an SAP connection.
 - **copy for AI** in the entity-details header copies the entity as compact markdown — keys, properties with types, labels and notes (key, required in filter, value help, text / unit companions, …), navigations, LineItem / selection fields / sort, capability limits and lint findings — for an AI chat or a ticket.
+- **Favorite any loaded service**, including one opened by pasting its path — the ☆ in the service path bar. Customers without the V4 catalog published no longer re-paste the path every session.
 - **CLI** button next to **URL**: copies the current query as a `sap-odata … run …` command (quoted for Bash and PowerShell) — for scripts or an AI agent.
 - **collapse** in the entity-details header folds the property tables away to give the results room (remembered per tab).
 - The status bar shows the **version**; clicking it checks GitHub for a newer release (user-initiated only — no telemetry). **Feedback** opens the GitHub issue chooser.

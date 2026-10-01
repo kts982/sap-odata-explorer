@@ -20,6 +20,7 @@ import { invoke } from './vendor/tauri-core.js';
 import { state } from './state.js';
 import { setTime, showSpinner, hideSpinner } from './status.js';
 import { getTab } from './tabs.js';
+import { updateFavPathStar } from './favorites.js';
 import {
   ensureTraceSelection,
   renderTraceSummary,
@@ -121,6 +122,10 @@ export function updateServicePathBar(tab) {
       verEl.style.display = 'none';
     }
     bar.classList.add('visible');
+    // Offline buckets list all their services anyway — no star there.
+    const offline = state.profileMap && state.profileMap.get(tab.profile)?.kind === 'offline';
+    document.getElementById('btnFavPath').classList.toggle('hidden', !!offline);
+    updateFavPathStar(tab);
   } else {
     bar.classList.remove('visible');
   }

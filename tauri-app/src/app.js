@@ -23,7 +23,7 @@ import {
   signInCurrentProfile,
 } from './auth.js';
 import { wireOfflineButtons, deleteOfflineServiceRow, trySampleService } from './offline.js';
-import { getFavorites, toggleFavorite } from './favorites.js';
+import { getFavorites, toggleFavorite, toggleFavoriteCurrentService } from './favorites.js';
 import {
   loadProfiles,
   loadService,
@@ -302,6 +302,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btnJson').addEventListener('click', () => executeQuery(true));
   document.getElementById('btnCopyUrl').addEventListener('click', copyODataUrl);
   document.getElementById('btnCopyCli').addEventListener('click', copyCliCommand);
+  document.getElementById('btnFavPath').addEventListener('click', toggleFavoriteCurrentService);
   document.getElementById('btnPagePrev').addEventListener('click', () => goToPage('prev'));
   document.getElementById('btnPageNext').addEventListener('click', () => goToPage('next'));
   document.getElementById('btnCopyTsv').addEventListener('click', () => copyResultsDelimited('\t', 'TSV'));

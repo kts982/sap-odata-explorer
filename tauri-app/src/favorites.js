@@ -52,6 +52,57 @@ export function isFavorite(profileName, svcName) {
   return favIndex(getFavorites(profileName), svcName) !== -1;
 }
 
+// Readable name for a pasted service path: the service segment before a
+// numeric version (V4 `/…/srvd/sap/<service>/0001`), else the last one.
+export function serviceNameFromPath(path) {
+  const parts = String(path || '').split('/').filter(Boolean);
+  if (parts.length === 0) return '';
+  const last = parts[parts.length - 1];
+  const name = /^\d+$/.test(last) && parts.length > 1 ? parts[parts.length - 2] : last;
+  return name.split(';')[0].toUpperCase();
+}
+
+function favPathIndex(favs, path) {
+  return favs.findIndex(f => f.service_url && f.service_url === path);
+}
+
+export function isFavoritePath(profileName, path) {
+  return !!profileName && !!path && favPathIndex(getFavorites(profileName), path) !== -1;
+}
+
+// Star the service loaded in the active tab — including one opened by
+// pasting its path (customers without the V4 catalog published have no
+// catalog entry to star).
+export function toggleFavoriteCurrentService() {
+  const tab = getActiveTab();
+  if (!tab || !tab.profile || !tab.servicePath) return;
+  const favs = getFavorites(tab.profile);
+  const idx = favPathIndex(favs, tab.servicePath);
+  if (idx === -1) {
+    const name = serviceNameFromPath(tab.servicePath);
+    favs.push({
+      technical_name: name,
+      title: name,
+      description: tab.servicePath,
+      service_url: tab.servicePath,
+      version: tab.serviceVersion || '',
+    });
+  } else {
+    favs.splice(idx, 1);
+  }
+  saveFavorites(tab.profile, favs);
+  updateFavPathStar(tab);
+}
+
+export function updateFavPathStar(tab) {
+  const btn = document.getElementById('btnFavPath');
+  if (!btn) return;
+  const starred = !!tab && isFavoritePath(tab.profile, tab.servicePath);
+  btn.textContent = starred ? '★' : '☆';
+  btn.classList.toggle('text-ox-amber', starred);
+  btn.title = starred ? 'Remove from favorites' : 'Favorite this service — it then shows under Favorites for this profile';
+}
+
 export function toggleFavorite(svc, starEl) {
   const tab = getActiveTab();
   const profile = tab ? tab.profile : state.currentProfile;
