@@ -41,6 +41,8 @@ All notable changes to this project are documented here. Format loosely follows 
 ### Fixes — Metadata parsing
 
 - Annotation targets written with a **full or multi-part namespace** (CAP-style `my.app.CatalogService.Books`, or the full namespace although the schema declares an alias) were silently dropped — HeaderInfo, LineItem, Text and friends lost, lint reporting false misses. Targets are now resolved by stripping the qualifier up to the last dot of the first path segment.
+- Annotations in a schema that comes **before** the schema defining the types are no longer dropped (annotations are applied after every schema's model is parsed), and the primary namespace is the model schema's.
+- **Entity type inheritance** (`BaseType`): derived types now show the inherited key, properties and navigation properties (with their annotations), instead of an empty key and only their own columns.
 - **V2 `<Annotations>` blocks are read.** SAP V2 services carry vocabulary annotations (Capabilities restrictions, Measures, …) in `<Annotations>` blocks next to the inline `sap:*` attributes; they were ignored entirely. They now go through the same typed pass as V4 and show in the annotation inspector.
 
 ### Fixes — Desktop app

@@ -35,8 +35,16 @@ pub fn parse_metadata(xml: &str) -> Result<ServiceMetadata, crate::error::ODataE
         ));
     }
 
-    // Use the first schema's namespace as the primary
-    let schema_namespace = schema_nodes[0]
+    // The primary namespace is the first schema that defines types or a
+    // container — not an annotation-only schema that may come first.
+    let defines_model = |n: &roxmltree::Node| {
+        n.children()
+            .any(|c| c.has_tag_name("EntityType") || c.has_tag_name("EntityContainer"))
+    };
+    let schema_namespace = schema_nodes
+        .iter()
+        .find(|n| defines_model(n))
+        .unwrap_or(&schema_nodes[0])
         .attribute("Namespace")
         .unwrap_or("")
         .to_string();
@@ -47,25 +55,26 @@ pub fn parse_metadata(xml: &str) -> Result<ServiceMetadata, crate::error::ODataE
     let mut function_imports = Vec::new();
     let mut annotation_labels = HashMap::new();
     let mut annotations = Vec::new();
+    let mut base_types = Vec::new();
 
-    // Merge data from all schemas
+    // Pass 1: the model from every schema.
     for schema_node in &schema_nodes {
         entity_types.extend(parse_entity_types(schema_node, version));
         associations.extend(parse_associations(schema_node));
+        base_types.extend(parse_base_types(schema_node));
 
         let (sets, funcs) = parse_entity_container(schema_node, version);
         entity_sets.extend(sets);
         function_imports.extend(funcs);
+    }
 
+    // Pass 2: annotations from every schema, against the complete model —
+    // an annotation-only schema may precede the one defining the types.
+    for schema_node in &schema_nodes {
         match version {
             ODataVersion::V4 => {
                 annotation_labels.extend(parse_v4_annotation_labels(schema_node));
                 annotations.extend(parse_v4_annotations(schema_node));
-                annotations::apply_v4_typed_annotations(
-                    &mut entity_types,
-                    &entity_sets,
-                    schema_node,
-                );
             }
             ODataVersion::V2 => {
                 annotations.extend(parse_v2_sap_annotations(schema_node));
@@ -74,19 +83,18 @@ pub fn parse_metadata(xml: &str) -> Result<ServiceMetadata, crate::error::ODataE
                 // Measures, …) next to the inline `sap:*` attributes. Same
                 // typed pass as V4; labels stay with `sap:label`.
                 annotations.extend(parse_v4_annotations(schema_node));
-                annotations::apply_v4_typed_annotations(
-                    &mut entity_types,
-                    &entity_sets,
-                    schema_node,
-                );
             }
         }
+        annotations::apply_v4_typed_annotations(&mut entity_types, &entity_sets, schema_node);
     }
 
     // Apply V4 annotation labels to properties
     if version == ODataVersion::V4 {
         apply_annotation_labels(&mut entity_types, &annotation_labels, &schema_namespace);
     }
+
+    // Last, so annotated (and labelled) base properties carry it along.
+    apply_base_types(&mut entity_types, &base_types);
 
     Ok(ServiceMetadata {
         version,
@@ -97,6 +105,82 @@ pub fn parse_metadata(xml: &str) -> Result<ServiceMetadata, crate::error::ODataE
         function_imports,
         annotations,
     })
+}
+
+/// `(derived type, base type)` pairs from `EntityType BaseType="…"`,
+/// qualifiers stripped.
+fn parse_base_types(schema: &roxmltree::Node) -> Vec<(String, String)> {
+    children_by_tag(schema, "EntityType")
+        .into_iter()
+        .filter_map(|et| {
+            let name = et.attribute("Name")?;
+            let base = et.attribute("BaseType")?;
+            Some((name.to_string(), strip_alias_prefix(base).to_string()))
+        })
+        .collect()
+}
+
+/// Entity type inheritance: a derived type gets its ancestors' properties
+/// and navigation properties (farthest ancestor first, then its own) and,
+/// having none of its own, the root's key. Multi-level chains are
+/// followed; a cycle (invalid metadata) just stops the walk.
+fn apply_base_types(entity_types: &mut [EntityType], base_types: &[(String, String)]) {
+    if base_types.is_empty() {
+        return;
+    }
+    let base_of: HashMap<&str, &str> = base_types
+        .iter()
+        .map(|(t, b)| (t.as_str(), b.as_str()))
+        .collect();
+    let own: HashMap<String, EntityType> = entity_types
+        .iter()
+        .map(|e| (e.name.clone(), e.clone()))
+        .collect();
+    for et in entity_types.iter_mut() {
+        let mut chain: Vec<&EntityType> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut current = et.name.as_str();
+        while let Some(&base) = base_of.get(current) {
+            if !seen.insert(base) {
+                break;
+            }
+            match own.get(base) {
+                Some(b) => chain.push(b),
+                None => break,
+            }
+            current = base;
+        }
+        if chain.is_empty() {
+            continue;
+        }
+        let mut properties = Vec::new();
+        let mut nav_properties = Vec::new();
+        for ancestor in chain.iter().rev() {
+            properties.extend(ancestor.properties.iter().cloned());
+            nav_properties.extend(ancestor.nav_properties.iter().cloned());
+        }
+        let inherited: std::collections::HashSet<String> =
+            properties.iter().map(|p| p.name.clone()).collect();
+        properties.extend(
+            et.properties
+                .drain(..)
+                .filter(|p| !inherited.contains(&p.name)),
+        );
+        et.properties = properties;
+        let inherited_navs: std::collections::HashSet<String> =
+            nav_properties.iter().map(|n| n.name.clone()).collect();
+        nav_properties.extend(
+            et.nav_properties
+                .drain(..)
+                .filter(|n| !inherited_navs.contains(&n.name)),
+        );
+        et.nav_properties = nav_properties;
+        if et.keys.is_empty()
+            && let Some(keyed) = chain.iter().find(|b| !b.keys.is_empty())
+        {
+            et.keys = keyed.keys.clone();
+        }
+    }
 }
 
 /// Detect OData version from the EDMX root element.
@@ -706,6 +790,88 @@ mod tests {
         );
         // sap:* attributes still parse as before.
         assert_eq!(note.label.as_deref(), Some("Note"));
+    }
+
+    #[test]
+    fn annotation_schema_before_the_model_schema_still_applies() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="ann">
+      <Annotations Target="n.OrderType">
+        <Annotation Term="UI.HeaderInfo"><Record><PropertyValue Property="TypeName" String="Order"/></Record></Annotation>
+      </Annotations>
+    </Schema>
+    <Schema Namespace="n">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+      </EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Orders" EntityType="n.OrderType"/></EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        assert_eq!(
+            meta.schema_namespace, "n",
+            "primary namespace is the model schema"
+        );
+        assert!(
+            meta.find_entity_type("OrderType")
+                .unwrap()
+                .header_info
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn derived_entity_types_inherit_key_properties_and_navigations() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="Base" Abstract="true">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+        <Property Name="Name" Type="Edm.String"/>
+        <NavigationProperty Name="_Owner" Type="n.Person"/>
+      </EntityType>
+      <EntityType Name="Middle" BaseType="SAP__self.Base">
+        <Property Name="Category" Type="Edm.String"/>
+      </EntityType>
+      <EntityType Name="Derived" BaseType="n.Middle">
+        <Property Name="Extra" Type="Edm.Int32"/>
+      </EntityType>
+      <EntityType Name="Person"><Key><PropertyRef Name="PID"/></Key><Property Name="PID" Type="Edm.String" Nullable="false"/></EntityType>
+      <EntityType Name="LoopA" BaseType="n.LoopB"><Property Name="A" Type="Edm.String"/></EntityType>
+      <EntityType Name="LoopB" BaseType="n.LoopA"><Property Name="B" Type="Edm.String"/></EntityType>
+      <EntityContainer Name="Container"><EntitySet Name="Things" EntityType="n.Derived"/></EntityContainer>
+      <Annotations Target="SAP__self.Base/Name">
+        <Annotation Term="SAP__common.Label" String="Display name"/>
+      </Annotations>
+      <Annotations Target="SAP__self.Derived">
+        <Annotation Term="SAP__UI.LineItem">
+          <Collection><Record Type="UI.DataField"><PropertyValue Property="Value" Path="Name"/></Record></Collection>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let d = meta.find_entity_type("Derived").unwrap();
+        let names: Vec<&str> = d.properties.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["ID", "Name", "Category", "Extra"]);
+        assert_eq!(d.keys, vec!["ID".to_string()]);
+        assert_eq!(d.nav_properties.len(), 1);
+        assert_eq!(
+            d.properties[1].label.as_deref(),
+            Some("Display name"),
+            "annotations on base properties carry over"
+        );
+        assert_eq!(d.line_item.len(), 1);
+        // A cycle doesn't hang or duplicate.
+        let a = meta.find_entity_type("LoopA").unwrap();
+        assert_eq!(a.properties.iter().filter(|p| p.name == "A").count(), 1);
     }
 
     #[test]
