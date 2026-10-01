@@ -11,9 +11,7 @@ use sap_odata_core::{
         self, AnnotationSummary, Criticality, FieldControl, HeaderInfo, LineItemField,
         RawAnnotation, SelectionVariant, SortOrder, TextArrangement, ValueList,
     },
-    offline::{
-        self, ImportOptions, SaveOptions, SaveOutcome, auto_offline_profile_name, current_iso8601,
-    },
+    offline::{self, SaveOptions, SaveOutcome, auto_offline_profile_name, current_iso8601},
     query::ODataQuery,
 };
 use serde::{Deserialize, Serialize};
@@ -1089,7 +1087,7 @@ fn add_profile(
     // so all three connected-add paths (this one, the CLI
     // `cmd_profile_add`, and the CLI `cmd_setup_wizard`) go through one
     // source of truth. The reverse direction is enforced inline by
-    // `save_service_offline_from_bytes` / `import_edmx_file`. Upsert
+    // `save_service_offline_from_bytes` / `import_edmx_bytes`. Upsert
     // (re-saving an existing connected profile with new settings) is
     // permitted; only cross-map collisions are rejected.
     sap_odata_core::offline::check_connected_profile_name_available(&name, &cfg)?;
@@ -1231,30 +1229,6 @@ async fn save_service_offline(
         data: outcome,
         trace: client.diagnostics_snapshot(),
     })
-}
-
-/// Path B: import an EDMX file from disk into the offline library. No
-/// connected profile required. The file path comes from the user (UI
-/// file picker); the import-validation pipeline rejects wrong-shape
-/// inputs before any state changes. Returns the `SaveOutcome` so the
-/// UI can render the new-vs-overwrite-vs-skipped header.
-#[tauri::command]
-fn import_edmx_file(
-    file_path: String,
-    target_offline_profile: Option<String>,
-    label_override: Option<String>,
-    note: Option<String>,
-) -> Result<SaveOutcome, String> {
-    let (mut cfg, config_dir) = config::load_config().map_err(|e| format!("Config error: {e}"))?;
-    let opts = ImportOptions {
-        file_path: std::path::PathBuf::from(&file_path),
-        target_offline_profile,
-        label_override,
-        note,
-        now_iso: current_iso8601(),
-    };
-    offline::import_edmx_file(&mut cfg, &config_dir.path, opts)
-        .map_err(|e| format!("Import error: {e}"))
 }
 
 /// Bytes-based path-B import for the webview's `<input type="file">`
@@ -1836,7 +1810,6 @@ fn main() {
             resolve_value_list_reference,
             add_profile,
             save_service_offline,
-            import_edmx_file,
             import_edmx_bytes,
             list_offline_services,
             delete_offline_service,
