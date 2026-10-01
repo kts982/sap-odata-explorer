@@ -20,7 +20,7 @@ tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["cookies", "json"] }
 roxmltree = "0.20"
 clap = { version = "4", features = ["derive", "env"] }
-comfy-table = "7"
+comfy-table = "8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
