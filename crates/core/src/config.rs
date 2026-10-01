@@ -48,7 +48,8 @@ fn classify_keyring_error(err: keyring::Error) -> KeyringReadError {
     }
 }
 
-const CONFIG_FILENAME: &str = "connections.toml";
+/// File name of the profile + offline-index config inside the config directory.
+pub const CONFIG_FILENAME: &str = "connections.toml";
 const KEYRING_SERVICE: &str = "sap-odata-explorer";
 
 /// A named connection profile stored in connections.toml.

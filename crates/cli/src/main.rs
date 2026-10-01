@@ -546,20 +546,23 @@ async fn main() -> Result<()> {
     } else {
         "sap_odata=warn"
     };
+    // Logs go to stderr: stdout carries only command output, so
+    // `--json` stays parseable with `-v` (and when a warning fires).
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive(log_level.parse().unwrap()),
         )
         .with_target(false)
+        .with_writer(std::io::stderr)
         .init();
 
     // Handle commands that don't need a SAP connection
     if let Commands::Profile { action } = &cli.command {
-        return handle_profile_command(action).await;
+        return handle_profile_command(action, cli.json).await;
     }
     if let Commands::Alias { action } = &cli.command {
-        return handle_alias_command(action, cli.profile.as_deref());
+        return handle_alias_command(action, cli.profile.as_deref(), cli.json);
     }
     if matches!(&cli.command, Commands::Setup) {
         return cmd_setup_wizard().await;
@@ -1022,23 +1025,37 @@ async fn resolve_service_path(cli: &Cli, sap_client: &SapClient) -> Result<Optio
 
 // ── Alias commands ──
 
-fn handle_alias_command(action: &AliasAction, profile_name: Option<&str>) -> Result<()> {
+fn handle_alias_command(
+    action: &AliasAction,
+    profile_name: Option<&str>,
+    json: bool,
+) -> Result<()> {
     let profile_name = profile_name
         .ok_or_else(|| anyhow::anyhow!("--profile / -p is required for alias commands"))?;
 
     match action {
-        AliasAction::List => cmd_alias_list(profile_name),
+        AliasAction::List => cmd_alias_list(profile_name, json),
         AliasAction::Add { name, path } => cmd_alias_add(profile_name, name, path),
         AliasAction::Remove { name } => cmd_alias_remove(profile_name, name),
     }
 }
 
-fn cmd_alias_list(profile_name: &str) -> Result<()> {
+fn cmd_alias_list(profile_name: &str, json: bool) -> Result<()> {
     let (cfg, _) = config::load_config().context("failed to load config")?;
     let profile = cfg
         .connections
         .get(profile_name)
         .ok_or_else(|| anyhow::anyhow!("profile '{}' not found", profile_name))?;
+
+    if json {
+        let entries: Vec<_> = profile
+            .aliases
+            .iter()
+            .map(|(name, path)| serde_json::json!({ "name": name, "path": path }))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&entries)?);
+        return Ok(());
+    }
 
     if profile.aliases.is_empty() {
         println!(
@@ -1324,9 +1341,9 @@ fn cmd_signout(name: &str) -> Result<()> {
     Ok(())
 }
 
-async fn handle_profile_command(action: &ProfileAction) -> Result<()> {
+async fn handle_profile_command(action: &ProfileAction, json: bool) -> Result<()> {
     match action {
-        ProfileAction::List => cmd_profile_list(),
+        ProfileAction::List => cmd_profile_list(json),
         ProfileAction::Add {
             name,
             url,
@@ -1352,12 +1369,69 @@ async fn handle_profile_command(action: &ProfileAction) -> Result<()> {
         ),
         ProfileAction::Remove { name } => cmd_profile_remove(name),
         ProfileAction::Test { name } => cmd_profile_test(name).await,
-        ProfileAction::Where => cmd_profile_where(),
+        ProfileAction::Where => cmd_profile_where(json),
     }
 }
 
-fn cmd_profile_list() -> Result<()> {
+/// Where a profile's credential comes from, as (JSON code, table label).
+/// Never reads more than "is there a password" — the value is dropped.
+fn profile_password_source(
+    name: &str,
+    profile: &config::ConnectionProfile,
+) -> (&'static str, &'static str) {
+    // Order matches Tauri's get_profiles: browser_sso and sso both have
+    // empty usernames and no Basic password, so they must short-circuit
+    // before the keyring lookup — otherwise Entry::new(target, "") can
+    // surface a misleading "keyring error" on a profile that legitimately
+    // has no password at all.
+    if profile.browser_sso {
+        ("browser_sso", "Browser SSO")
+    } else if profile.sso {
+        ("sso", "SSO (Windows)")
+    } else if profile.password.is_some() {
+        ("plaintext", "config (plaintext)")
+    } else {
+        match config::try_get_password_from_keyring(name, &profile.username) {
+            Ok(Some(_)) => ("keyring", "OS keyring"),
+            Ok(None) => ("not_set", "NOT SET"),
+            Err(config::KeyringReadError::Locked(_)) => ("keyring_locked", "keyring locked"),
+            Err(config::KeyringReadError::Corrupt(_)) => ("keyring_corrupt", "keyring corrupt"),
+            Err(config::KeyringReadError::Backend(_)) => ("keyring_error", "keyring error"),
+        }
+    }
+}
+
+fn cmd_profile_list(json: bool) -> Result<()> {
     let (cfg, config_dir) = config::load_config().context("failed to load config")?;
+
+    if json {
+        let entries: Vec<_> = cfg
+            .connections
+            .iter()
+            .map(|(name, profile)| {
+                let auth = if profile.browser_sso {
+                    "browser_sso"
+                } else if profile.sso {
+                    "sso"
+                } else {
+                    "basic"
+                };
+                serde_json::json!({
+                    "name": name,
+                    "base_url": profile.base_url,
+                    "client": profile.client,
+                    "language": profile.language,
+                    "auth": auth,
+                    "username": profile.username,
+                    "password_source": profile_password_source(name, profile).0,
+                    "insecure_tls": profile.insecure_tls,
+                    "aliases": profile.aliases,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&entries)?);
+        return Ok(());
+    }
 
     if cfg.connections.is_empty() {
         println!("No profiles saved yet. Use 'sap-odata profile add' to create one.");
@@ -1370,36 +1444,19 @@ fn cmd_profile_list() -> Result<()> {
         Cell::new("Profile").fg(Color::DarkCyan),
         Cell::new("URL").fg(Color::DarkCyan),
         Cell::new("Client").fg(Color::DarkCyan),
+        Cell::new("Language").fg(Color::DarkCyan),
         Cell::new("User").fg(Color::DarkCyan),
         Cell::new("Password").fg(Color::DarkCyan),
     ]);
 
     for (name, profile) in &cfg.connections {
-        // Order matches Tauri's get_profiles: browser_sso and sso both have
-        // empty usernames and no Basic password, so they must short-circuit
-        // before the keyring lookup — otherwise Entry::new(target, "") can
-        // surface a misleading "keyring error" on a profile that legitimately
-        // has no password at all.
-        let auth_info = if profile.browser_sso {
-            "Browser SSO".to_string()
-        } else if profile.sso {
-            "SSO (Windows)".to_string()
-        } else if profile.password.is_some() {
-            "config (plaintext)".to_string()
-        } else {
-            match config::try_get_password_from_keyring(name, &profile.username) {
-                Ok(Some(_)) => "OS keyring".to_string(),
-                Ok(None) => "NOT SET".to_string(),
-                Err(config::KeyringReadError::Locked(_)) => "keyring locked".to_string(),
-                Err(config::KeyringReadError::Corrupt(_)) => "keyring corrupt".to_string(),
-                Err(config::KeyringReadError::Backend(_)) => "keyring error".to_string(),
-            }
-        };
+        let auth_info = profile_password_source(name, profile).1;
 
         table.add_row(vec![
             Cell::new(name),
             Cell::new(&profile.base_url),
             Cell::new(&profile.client),
+            Cell::new(&profile.language),
             Cell::new(if profile.browser_sso {
                 "(Browser)"
             } else if profile.sso {
@@ -1605,7 +1662,21 @@ async fn cmd_profile_test(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_profile_where() -> Result<()> {
+fn cmd_profile_where(json: bool) -> Result<()> {
+    if json {
+        let dir = match config::find_config_dir() {
+            Some(dir) => dir,
+            None => config::get_or_create_config_dir()?,
+        };
+        let payload = serde_json::json!({
+            "path": dir.path,
+            "portable": dir.is_portable,
+            "config_file_exists": dir.path.join(config::CONFIG_FILENAME).is_file(),
+        });
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(());
+    }
+
     match config::find_config_dir() {
         Some(dir) => {
             let mode = if dir.is_portable { "portable" } else { "user" };
@@ -1724,6 +1795,17 @@ async fn cmd_services(
     let result = sap_odata_core::catalog::fetch_service_catalog(client)
         .await
         .context("failed to fetch service catalog")?;
+
+    // Nothing listed and at least one catalog failed (401, expired
+    // session, DNS, 403 …): that is an error, not "no services". Same
+    // rule as the desktop app. A partial result (e.g. V4 catalog not
+    // published) still lists what was found, with warnings on stderr.
+    if result.entries.is_empty() && !result.warnings.is_empty() {
+        anyhow::bail!(
+            "could not fetch the service catalog: {}",
+            result.warnings.join("; ")
+        );
+    }
 
     for w in &result.warnings {
         eprintln!("  Warning: {w}");
@@ -1950,14 +2032,17 @@ async fn cmd_functions(client: &SapClient, service: &str, json: bool) -> Result<
         .await
         .context("failed to fetch metadata")?;
 
+    if json {
+        println!("{}", serde_json::to_string_pretty(&meta.function_imports)?);
+        return Ok(());
+    }
+
     if meta.function_imports.is_empty() {
         println!("No function imports in this service.");
         return Ok(());
     }
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&meta.function_imports)?);
-    } else {
+    {
         let mut table = Table::new();
         table.load_style(UTF8_FULL);
         table.set_header(vec![
@@ -2621,11 +2706,30 @@ fn render_offline_profiles(cfg: &config::ConfigFile, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Error for an `offline list/delete --profile NAME` that names no
+/// offline bucket. The common trap is a habitual global `-p DEV`: clap
+/// shares the `profile` id between the global flag and the offline
+/// subcommands' `--profile`, so the connected profile name arrives as
+/// the bucket name. Say so instead of a bare "not found".
+fn offline_bucket_not_found(cfg: &config::ConfigFile, name: &str) -> anyhow::Error {
+    let buckets: Vec<&str> = cfg.offline_profiles.keys().map(String::as_str).collect();
+    let available = if buckets.is_empty() {
+        "none yet".to_string()
+    } else {
+        buckets.join(", ")
+    };
+    if cfg.connections.contains_key(name) {
+        anyhow::anyhow!(
+            "'{name}' is a connected profile, not an offline bucket. The offline commands take the bucket name from --profile, and a global -p fills the same value — omit -p (or pass the bucket name). Offline buckets: {available}"
+        )
+    } else {
+        anyhow::anyhow!("Offline profile '{name}' not found. Offline buckets: {available}")
+    }
+}
+
 fn render_offline_services(cfg: &config::ConfigFile, profile: &str, json: bool) -> Result<()> {
     if !cfg.offline_profiles.contains_key(profile) {
-        anyhow::bail!(
-            "Offline profile '{profile}' not found. Run `sap-odata offline list` to see available profiles."
-        );
+        return Err(offline_bucket_not_found(cfg, profile));
     }
     let services: Vec<_> = cfg
         .offline_services
@@ -2685,9 +2789,7 @@ fn cmd_offline_delete(
     // this, the user gets the prompt, types `y`, and only then
     // discovers the profile didn't exist.
     if !cfg.offline_profiles.contains_key(&profile) {
-        anyhow::bail!(
-            "Offline profile '{profile}' not found. Run `sap-odata offline list` to see available profiles."
-        );
+        return Err(offline_bucket_not_found(&cfg, &profile));
     }
     if let Some(ref id) = service_id {
         let exists = cfg

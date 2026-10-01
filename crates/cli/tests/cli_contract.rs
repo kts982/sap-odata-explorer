@@ -94,6 +94,173 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
+/// A local URL nothing listens on, so every request fails fast with
+/// "connection refused" — exercises error paths without a SAP system.
+fn closed_local_url() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    format!("http://127.0.0.1:{port}")
+}
+
+// ── stdout / stderr separation ──
+
+#[test]
+fn verbose_logs_never_reach_stdout() {
+    let sb = Sandbox::new("verbose_stdout");
+    let out = sb.run(&["-v", "--json", "offline", "list"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let parsed: Result<serde_json::Value, _> = serde_json::from_str(&stdout(&out));
+    assert!(
+        parsed.is_ok(),
+        "stdout must be pure JSON with -v, got:\n{}",
+        stdout(&out)
+    );
+    assert!(
+        stderr(&out).contains("DEBUG"),
+        "debug logs belong on stderr"
+    );
+}
+
+#[test]
+fn services_fails_when_every_catalog_fails() {
+    // Both catalogs unreachable must not look like "no services exist".
+    let sb = Sandbox::new("services_fail");
+    let url = closed_local_url();
+    let out = sb.run(&[
+        "--url",
+        &url,
+        "--user",
+        "u",
+        "--password",
+        "p",
+        "--json",
+        "services",
+    ]);
+    assert!(!out.status.success(), "must exit non-zero");
+    assert!(
+        stdout(&out).trim().is_empty(),
+        "no data on stdout, got:\n{}",
+        stdout(&out)
+    );
+    assert!(
+        stderr(&out).contains("could not fetch the service catalog"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+// ── --json on local (no-network) commands ──
+
+/// Browser SSO profile: no keyring lookup happens for it, so listing it
+/// never touches the developer's OS credential store.
+const BROWSER_SSO_CONFIG: &str = r#"
+[connections.DEV]
+base_url = "https://dev.example.com:44301"
+client = "100"
+language = "DE"
+browser_sso = true
+
+[connections.DEV.aliases]
+wo = "/sap/opu/odata/sap/ZWAREHOUSE_ORDER_SRV"
+"#;
+
+#[test]
+fn profile_list_json_on_empty_config_is_an_empty_array() {
+    let sb = Sandbox::new("profile_list_empty");
+    let out = sb.run(&["--json", "profile", "list"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("JSON");
+    assert_eq!(v, serde_json::json!([]));
+}
+
+#[test]
+fn profile_list_json_shape() {
+    let sb = Sandbox::new("profile_list_json");
+    sb.write_file("connections.toml", BROWSER_SSO_CONFIG);
+    let out = sb.run(&["--json", "profile", "list"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("JSON");
+    let p = &v[0];
+    assert_eq!(p["name"], "DEV");
+    assert_eq!(p["base_url"], "https://dev.example.com:44301");
+    assert_eq!(p["client"], "100");
+    assert_eq!(p["language"], "DE");
+    assert_eq!(p["auth"], "browser_sso");
+    assert_eq!(p["password_source"], "browser_sso");
+    assert_eq!(
+        p["aliases"]["wo"],
+        "/sap/opu/odata/sap/ZWAREHOUSE_ORDER_SRV"
+    );
+    assert!(p.get("password").is_none(), "never emit a password field");
+}
+
+#[test]
+fn profile_where_json_reports_the_active_dir() {
+    let sb = Sandbox::new("profile_where_json");
+    sb.write_file("connections.toml", BROWSER_SSO_CONFIG);
+    let out = sb.run(&["--json", "profile", "where"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("JSON");
+    assert_eq!(v["portable"], false);
+    assert_eq!(v["config_file_exists"], true);
+    let reported = std::path::PathBuf::from(v["path"].as_str().unwrap());
+    assert_eq!(reported, sb.path());
+}
+
+#[test]
+fn alias_list_json_shape() {
+    let sb = Sandbox::new("alias_list_json");
+    sb.write_file("connections.toml", BROWSER_SSO_CONFIG);
+    let out = sb.run(&["-p", "DEV", "--json", "alias", "list"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("JSON");
+    assert_eq!(
+        v,
+        serde_json::json!([{ "name": "wo", "path": "/sap/opu/odata/sap/ZWAREHOUSE_ORDER_SRV" }])
+    );
+}
+
+#[test]
+fn missing_profile_fails_with_stderr_only() {
+    let sb = Sandbox::new("missing_profile");
+    let out = sb.run(&[
+        "-p",
+        "NOPE",
+        "--json",
+        "-s",
+        "/sap/opu/odata/sap/X",
+        "entities",
+    ]);
+    assert!(!out.status.success());
+    assert!(stdout(&out).trim().is_empty(), "stdout: {}", stdout(&out));
+    assert!(stderr(&out).contains("NOPE"), "{}", stderr(&out));
+}
+
+#[test]
+fn global_profile_flag_on_offline_list_explains_the_clash() {
+    let sb = Sandbox::new("offline_p_clash");
+    sb.write_file("connections.toml", BROWSER_SSO_CONFIG);
+    let edmx = sb.write_file("contract.edmx", MINIMAL_V4_EDMX);
+    assert!(
+        sb.run(&["offline", "import", edmx.to_str().unwrap()])
+            .status
+            .success()
+    );
+
+    let out = sb.run(&["-p", "DEV", "offline", "list"]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(
+        err.contains("is a connected profile, not an offline bucket"),
+        "{err}"
+    );
+    assert!(
+        err.contains("Imported"),
+        "should list available buckets: {err}"
+    );
+}
+
 // ── help output ──
 
 #[test]
