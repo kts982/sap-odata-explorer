@@ -4,6 +4,62 @@ All notable changes to this project are documented here. Format loosely follows 
 
 ## [Unreleased]
 
+### Security
+
+- **`sap-odata --help` no longer prints credential values.** With `SAP_PASSWORD` / `SAP_USER` exported (the documented CI setup), help output showed `[env: SAP_PASSWORD=<value>]` — straight into CI logs or agent transcripts. Help still names the variables.
+- **Deleting an offline bucket can no longer delete another bucket's files.** Bucket directories are lossy slugs, so `DEV (offline)` / `Dev (offline)` — or any two non-Latin names — shared one directory, and bucket delete removed it recursively. Delete now removes only files indexed to the bucket, then the directory if empty.
+- The unused, path-based `import_edmx_file` desktop IPC command (it could read any file path) is removed; imports go through `import_edmx_bytes`.
+
+### Fixes — CLI output contract (scripts and AI agents)
+
+- Logs go to **stderr**: `-v … --json` (and any warning) no longer puts log lines in front of the JSON.
+- `services` **exits non-zero** when every catalog request failed (401, expired session, DNS, 403) instead of printing `[]` / "No services found." with exit 0.
+- `--json` now works on `profile list` (auth mode and password source, never the password), `profile where` and `alias list`; `functions --json` prints `[]` instead of text when a service has none. `profile list` shows the language column.
+- `build --count` emits `$count=true` for V4 services (it always emitted the V2 `$inlinecount`).
+- `-p DEV offline list` explains that the global `-p` fills the offline commands' `--profile` and lists the existing buckets, instead of a bare "not found".
+- `profile add` re-runs keep `insecure_tls`, keep a plaintext password when no new one is given, keep Browser SSO mode when run without credentials, write the keyring only when a password is given (it wrote an empty one and claimed it was stored), and remove the keyring entry an auth-mode or username change orphans. The desktop edit dialog gets the same fixes.
+- `sap-odata.exe` carries a Windows version resource (it reported 0.0.0.0).
+
+### Fixes — SAP protocol
+
+- **V4 error messages are shown.** Only the V2 envelope (`error.message.value`) was read, so every V4 error lost SAP's message text.
+- **Requests time out** instead of hanging forever: 30 s to connect, 300 s of silence while waiting for or reading a response (resets on every chunk). `SAP_ODATA_READ_TIMEOUT_SECS` changes it; `0` disables it. Transport errors now name their cause (connection refused, DNS, TLS).
+- **Namespaced V4 services resolve by name** (`-s /IWBEP/TEA`): the expanded catalog's URL is used, and the per-group lookup percent-encodes the id.
+- SAP's **403 "No service found for namespace …"** is reported as a wrong path / unregistered service with a matching hint, not as an authorization failure ("check password / SU53").
+- A `--language` override (or `SAP_LANGUAGE`, or editing only a profile's language) **no longer discards the persisted Browser SSO session** — language doesn't affect session validity.
+- Browser SSO sessions are stored as raw bytes, nearly **tripling the cookie capacity** of the Windows credential store (~960 → 2560 compressed bytes); sessions saved by 0.1.0 still load. When saving the session fails, the desktop sign-in says so instead of silently reporting success.
+- Connected-profile writes (profile / alias add and remove, setup wizard, desktop profile dialog) **take the offline store's lock** and replace only the connections table, so they can't drop or resurrect offline-library entries written meanwhile.
+- `services -v` can no longer panic on multi-byte catalog text.
+
+### Fixes — Fiori-readiness lint
+
+- Navigation paths (`_TravelEnterpriseVH/TripTypeEnterpriseName`, `author/name`) are no longer reported as dangling references by the integrity rules — false warnings that failed `lint --fail-on warn`.
+- `UI.LineItem` keeps `DataFieldWithUrl` / `WithIntentBasedNavigation` / `WithNavigationPath` / `WithAction` columns (only `DataFieldFor*` are not columns).
+- An entity-level `UI.TextArrangement` applies only to properties with a `Common.Text`, so `text_arrangement_lonely` no longer flags the description columns themselves.
+
+### Fixes — Desktop app
+
+- **Stale responses no longer win.** A slower, older response could render into the same tab: a catalog from the previous profile after a profile switch, rows from the previous entity set, or an earlier run overwriting a re-run.
+- **Filter literals follow the OData version and type.** GUID / DateTime / DateTimeOffset / Date / TimeOfDay / Time literals are written per V2 or V4 (e.g. `datetimeoffset'…'` vs bare), from what the user typed or from raw result values (`/Date(…)/`). Click-to-filter on a result cell used to always write a quoted string (`Qty eq '5'` → 400); the filter bar's "contains" becomes `substringof` on V2; value-help constants keep NUMC-style codes quoted.
+- Pasted service paths get their **OData version from `$metadata`** (and the V2/V4 badge).
+- Entity details no longer leak across context: history replay into another entity set re-describes it, replay into another service is refused with a message, a profile switch clears them. Toggling SAP View re-renders the results grid.
+
+### New — Desktop app
+
+- **CLI** button next to **URL**: copies the current query as a `sap-odata … run …` command (quoted for Bash and PowerShell) — for scripts or an AI agent.
+- **collapse** in the entity-details header folds the property tables away to give the results room (remembered per tab).
+- The status bar shows the **version**; clicking it checks GitHub for a newer release (user-initiated only — no telemetry). **Feedback** opens the GitHub issue chooser.
+
+### New — Configuration
+
+- `SAP_ODATA_CONFIG_DIR` pins the config directory (connections + offline library), ahead of the portable and OS-default locations.
+
+### Build / CI
+
+- Declared and CI-tested minimum Rust versions: **1.88** for core + CLI (new `msrv` job), **1.90** for the desktop app. The README's "1.85+" was never true.
+- New CLI output-contract tests (the compiled binary against an isolated config dir), catalog resolution tests, and `scripts/test-odata-literals.mjs` (CI-gated).
+- Dependencies: Tauri 2.12, comfy-table 8, dialoguer 0.12 (plus the monthly minor/patch round).
+
 ## [0.1.0] — 2026-07-05
 
 **First non-prerelease release.** The interfaces that alpha.1–alpha.4 iterated on — CLI command surface, `connections.toml` schema, offline library layout, `parse_metadata` — are now treated as stable within 0.1.x. Binaries remain unsigned (SmartScreen warning documented in the README); the new package-manager channels below don't depend on signing.
