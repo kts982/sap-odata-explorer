@@ -10,7 +10,8 @@
 // final filenames so the hashes line up with what's actually uploaded.
 //
 // Run after `cargo tauri build` + `cargo build --release -p sap-odata-cli`
-// from the repo root:
+// from the repo root, both built with the home directory remapped (see
+// docs/RELEASE-CHECKLIST.md) — the script refuses binaries that embed it:
 //
 //   node scripts/stage-release-assets.mjs            # version from tauri.conf.json
 //   node scripts/stage-release-assets.mjs --tag v0.1.0-alpha.3
@@ -22,6 +23,7 @@
 
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, copyFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, basename } from 'node:path';
 import { argv, exit } from 'node:process';
 
@@ -68,10 +70,12 @@ const assets = [
   {
     src: join(REPO_ROOT, 'target', 'release', 'sap-odata-explorer-app.exe'),
     dest: `SAP-OData-Explorer_${version}_portable.exe`,
+    raw: true,
   },
   {
     src: join(REPO_ROOT, 'target', 'release', 'sap-odata.exe'),
     dest: 'sap-odata.exe',
+    raw: true,
   },
 ];
 
@@ -81,6 +85,19 @@ const missing = assets.filter(a => !existsSync(a.src));
 if (missing.length > 0) {
   console.error('Missing build artifacts — run cargo tauri build + cargo build --release first:');
   for (const m of missing) console.error(`  - ${m.src}`);
+  exit(1);
+}
+
+// Rust embeds dependency and toolchain source paths for panic messages.
+// Without --remap-path-prefix they carry the build machine's home directory,
+// and with it the local user name. The installers wrap the same GUI exe
+// compressed, so checking the two raw executables covers all four.
+const home = Buffer.from(homedir());
+const leaking = assets.filter(a => a.raw && readFileSync(a.src).includes(home));
+if (leaking.length > 0) {
+  console.error(`These binaries embed the home directory (${homedir()}):`);
+  for (const l of leaking) console.error(`  - ${l.src}`);
+  console.error('Rebuild with RUSTFLAGS="--remap-path-prefix=<home>=~" (docs/RELEASE-CHECKLIST.md).');
   exit(1);
 }
 

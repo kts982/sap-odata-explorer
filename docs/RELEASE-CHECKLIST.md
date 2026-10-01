@@ -56,8 +56,10 @@ Each release **must** attach exactly these five assets so the Installation table
 | `sap-odata.exe` | `target/release/sap-odata.exe` | CLI portable |
 | `SHA256SUMS.txt` | Generated locally over the four binaries above | Checksums |
 
-- Build artifacts from a clean tree:
+- Build artifacts from a clean tree, with the home directory remapped. Rust embeds dependency and toolchain source paths for panic messages; unmapped, they carry the build machine's home directory and user name. The staging script refuses binaries that still contain it.
   ```
+  # PowerShell:  $env:RUSTFLAGS = "--remap-path-prefix=$HOME=~"
+  # Git Bash:    export RUSTFLAGS="--remap-path-prefix=$(cygpath -w ~)=~"
   cargo build --release -p sap-odata-cli
   cd tauri-app && cargo tauri build && cd ..
   node scripts/stage-release-assets.mjs --tag v<release-tag>
