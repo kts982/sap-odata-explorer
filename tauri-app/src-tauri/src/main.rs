@@ -520,15 +520,21 @@ async fn browser_sign_in_for_connection(
         },
     );
 
-    // Persist to OS keyring if we know the profile name (so the CLI can reuse it).
+    // Persist to OS keyring if we know the profile name (so the CLI can
+    // reuse it). A failure doesn't fail the sign-in — the desktop session
+    // works — but the user has to hear about it: release builds have no
+    // console, and otherwise the CLI keeps saying "no active session".
+    let mut persist_warning: Option<String> = None;
     if let Some(ref pname) = profile_name {
         let fingerprint =
             sap_odata_core::session::connection_fingerprint(&base_url, &client, &language);
-        match sap_odata_core::session::save(pname, &request_url, &fingerprint, &cookie_strings) {
-            Ok(()) => {}
-            Err(e) => {
-                eprintln!("Warning: could not persist browser session for '{pname}': {e}");
-            }
+        if let Err(e) =
+            sap_odata_core::session::save(pname, &request_url, &fingerprint, &cookie_strings)
+        {
+            tracing::warn!("could not persist browser session for '{pname}': {e}");
+            persist_warning = Some(format!(
+                " — but the session could not be saved for CLI reuse: {e}"
+            ));
         }
     }
 
@@ -552,7 +558,10 @@ async fn browser_sign_in_for_connection(
 
     match sap_client.ensure_session(browser_probe_path()).await {
         Ok(()) => Ok(CommandOk {
-            data: "Browser sign-in successful".to_string(),
+            data: format!(
+                "Browser sign-in successful{}",
+                persist_warning.unwrap_or_default()
+            ),
             trace: sap_client.diagnostics_snapshot(),
         }),
         Err(e) => Err(CommandError::with_client(
@@ -1171,7 +1180,8 @@ fn add_profile(
                 cfg.connections.insert(name.clone(), profile_with_pw);
                 let dir = config::get_or_create_config_dir()
                     .map_err(|e| format!("Config dir error: {e}"))?;
-                config::save_connections(&cfg, &dir.path).map_err(|e| format!("Save error: {e}"))?;
+                config::save_connections(&cfg, &dir.path)
+                    .map_err(|e| format!("Save error: {e}"))?;
                 let base = format!("Profile '{}' saved (password in config file)", name);
                 return Ok(with_warnings(base, remove_orphaned_keyring_entry()));
             }

@@ -1,9 +1,11 @@
 //! Persist browser SSO session cookies in the OS keyring.
 //!
-//! Cookies are serialized to JSON, gzip-compressed, then stored as a byte
-//! secret under a keyring entry keyed by profile name. On Windows, the
-//! Credential Manager blob limit is ~2.5KB — compression keeps typical
-//! SAP + Azure AD cookie sets well under that.
+//! Cookies are serialized to JSON, gzip-compressed, then stored as a raw
+//! byte secret under a keyring entry keyed by profile name. The Windows
+//! Credential Manager caps a credential blob at 2560 bytes
+//! ([`MAX_STORED_BYTES`]). Sessions written by 0.1.0 were base64 text
+//! stored as a *password* — UTF-16 on Windows, so only ~960 compressed
+//! bytes fit — and still load.
 
 use std::io::{Read, Write};
 
@@ -13,6 +15,11 @@ use serde::{Deserialize, Serialize};
 
 #[cfg_attr(test, allow(dead_code))]
 const KEYRING_SERVICE: &str = "sap-odata-explorer:session";
+
+/// Windows Credential Manager blob limit (`CRED_MAX_CREDENTIAL_BLOB_SIZE`).
+pub const MAX_STORED_BYTES: usize = 2560;
+
+const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
 // ── keyring backend ──
 //
@@ -24,21 +31,21 @@ const KEYRING_SERVICE: &str = "sap-odata-explorer:session";
 // keyring.
 
 #[cfg(not(test))]
-fn kv_set(profile_name: &str, encoded: &str) -> anyhow::Result<()> {
+fn kv_set(profile_name: &str, bytes: &[u8]) -> anyhow::Result<()> {
     let entry = keyring::Entry::new(KEYRING_SERVICE, profile_name)
         .map_err(|e| anyhow::anyhow!("keyring error: {e}"))?;
     entry
-        .set_password(encoded)
+        .set_secret(bytes)
         .map_err(|e| anyhow::anyhow!("failed to store session: {e}"))?;
     Ok(())
 }
 
 #[cfg(not(test))]
-fn kv_get(profile_name: &str) -> anyhow::Result<Option<String>> {
+fn kv_get(profile_name: &str) -> anyhow::Result<Option<Vec<u8>>> {
     let entry = keyring::Entry::new(KEYRING_SERVICE, profile_name)
         .map_err(|e| anyhow::anyhow!("keyring error: {e}"))?;
-    match entry.get_password() {
-        Ok(s) => Ok(Some(s)),
+    match entry.get_secret() {
+        Ok(bytes) => Ok(Some(bytes)),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(e) => Err(anyhow::anyhow!("failed to load session: {e}")),
     }
@@ -60,21 +67,21 @@ mod test_backend {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
-    static STORE: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+    static STORE: Mutex<Option<HashMap<String, Vec<u8>>>> = Mutex::new(None);
 
-    fn with_store<R>(f: impl FnOnce(&mut HashMap<String, String>) -> R) -> R {
+    fn with_store<R>(f: impl FnOnce(&mut HashMap<String, Vec<u8>>) -> R) -> R {
         let mut guard = STORE.lock().unwrap();
         f(guard.get_or_insert_with(HashMap::new))
     }
 
-    pub fn set(key: &str, value: &str) -> anyhow::Result<()> {
+    pub fn set(key: &str, value: &[u8]) -> anyhow::Result<()> {
         with_store(|m| {
-            m.insert(key.to_string(), value.to_string());
+            m.insert(key.to_string(), value.to_vec());
         });
         Ok(())
     }
 
-    pub fn get(key: &str) -> anyhow::Result<Option<String>> {
+    pub fn get(key: &str) -> anyhow::Result<Option<Vec<u8>>> {
         Ok(with_store(|m| m.get(key).cloned()))
     }
 
@@ -87,18 +94,45 @@ mod test_backend {
 }
 
 #[cfg(test)]
-fn kv_set(profile_name: &str, encoded: &str) -> anyhow::Result<()> {
-    test_backend::set(profile_name, encoded)
+fn kv_set(profile_name: &str, bytes: &[u8]) -> anyhow::Result<()> {
+    test_backend::set(profile_name, bytes)
 }
 
 #[cfg(test)]
-fn kv_get(profile_name: &str) -> anyhow::Result<Option<String>> {
+fn kv_get(profile_name: &str) -> anyhow::Result<Option<Vec<u8>>> {
     test_backend::get(profile_name)
 }
 
 #[cfg(test)]
 fn kv_del(profile_name: &str) -> anyhow::Result<()> {
     test_backend::del(profile_name)
+}
+
+/// The gzip bytes inside a stored session: raw (current format), or the
+/// 0.1.0 format — base64 text, read back as UTF-16LE (Windows stored it as
+/// a password) or UTF-8 (other backends).
+fn stored_gzip_bytes(stored: &[u8]) -> anyhow::Result<Vec<u8>> {
+    if stored.starts_with(&GZIP_MAGIC) {
+        return Ok(stored.to_vec());
+    }
+    let looks_utf16 = stored.len() >= 2
+        && stored.len().is_multiple_of(2)
+        && stored.iter().skip(1).step_by(2).all(|b| *b == 0);
+    let text = if looks_utf16 {
+        let units: Vec<u16> = stored
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
+            .collect();
+        String::from_utf16(&units).map_err(|e| anyhow::anyhow!("corrupt session blob: {e}"))?
+    } else {
+        String::from_utf8(stored.to_vec())
+            .map_err(|e| anyhow::anyhow!("corrupt session blob: {e}"))?
+    };
+    base64::engine::general_purpose::STANDARD
+        .decode(text.trim())
+        .map_err(|e| anyhow::anyhow!("corrupt session blob: {e}"))
 }
 
 /// A persisted browser SSO session.
@@ -201,11 +235,16 @@ pub fn save(
 
     let json = serde_json::to_vec(&session)?;
     let compressed = gzip_compress(&json)?;
-    // Base64-encode so we can use set_password (many backends prefer UTF-8
-    // strings). Overhead is ~33% but keeps compatibility across platforms.
-    let encoded = base64::engine::general_purpose::STANDARD.encode(&compressed);
+    if cfg!(windows) && compressed.len() > MAX_STORED_BYTES {
+        anyhow::bail!(
+            "session cookies too large for the Windows credential store \
+             ({} cookies, {} bytes compressed, limit {MAX_STORED_BYTES})",
+            cookies.len(),
+            compressed.len()
+        );
+    }
 
-    kv_set(profile_name, &encoded)?;
+    kv_set(profile_name, &compressed)?;
 
     tracing::debug!(
         "Session persisted for profile '{}' ({} cookies, {} bytes compressed)",
@@ -220,14 +259,12 @@ pub fn save(
 /// Does NOT validate the connection fingerprint — callers should prefer
 /// `load_for_connection` to prevent replaying cookies to the wrong SAP system.
 pub fn load(profile_name: &str) -> anyhow::Result<Option<PersistedSession>> {
-    let encoded = match kv_get(profile_name)? {
-        Some(s) => s,
+    let stored = match kv_get(profile_name)? {
+        Some(bytes) => bytes,
         None => return Ok(None),
     };
 
-    let compressed = base64::engine::general_purpose::STANDARD
-        .decode(&encoded)
-        .map_err(|e| anyhow::anyhow!("corrupt session blob: {e}"))?;
+    let compressed = stored_gzip_bytes(&stored)?;
     let json = gzip_decompress(&compressed)?;
     let session: PersistedSession =
         serde_json::from_slice(&json).map_err(|e| anyhow::anyhow!("corrupt session data: {e}"))?;
@@ -379,6 +416,54 @@ mod tests {
         assert!(
             load(profile).unwrap().is_none(),
             "stale session must be cleared on mismatch"
+        );
+    }
+
+    fn legacy_session_text(cookie: &str) -> String {
+        let session = PersistedSession {
+            request_url: "https://sap.corp/".into(),
+            connection_fingerprint: connection_fingerprint("https://sap.corp", "100", "EN"),
+            cookies: vec![cookie.into()],
+            saved_at: 1,
+        };
+        let gz = gzip_compress(&serde_json::to_vec(&session).unwrap()).unwrap();
+        base64::engine::general_purpose::STANDARD.encode(gz)
+    }
+
+    #[test]
+    fn sessions_are_stored_as_raw_gzip_bytes() {
+        let profile = "store_raw";
+        let fp = connection_fingerprint("https://sap.corp", "100", "EN");
+        save(profile, "https://sap.corp/", &fp, &["X=1".into()]).unwrap();
+        let stored = kv_get(profile).unwrap().unwrap();
+        assert!(
+            stored.starts_with(&GZIP_MAGIC),
+            "no base64 wrapping any more"
+        );
+    }
+
+    #[test]
+    fn legacy_utf16_base64_sessions_still_load() {
+        // 0.1.0 on Windows: base64 text stored via set_password → UTF-16LE blob.
+        let profile = "legacy_utf16";
+        let blob: Vec<u8> = legacy_session_text("A=1")
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        kv_set(profile, &blob).unwrap();
+        assert_eq!(
+            load(profile).unwrap().unwrap().cookies,
+            vec!["A=1".to_string()]
+        );
+    }
+
+    #[test]
+    fn legacy_utf8_base64_sessions_still_load() {
+        let profile = "legacy_utf8";
+        kv_set(profile, legacy_session_text("B=2").as_bytes()).unwrap();
+        assert_eq!(
+            load(profile).unwrap().unwrap().cookies,
+            vec!["B=2".to_string()]
         );
     }
 
