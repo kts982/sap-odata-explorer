@@ -3,7 +3,7 @@ import { __classPrivateFieldSet, __classPrivateFieldGet } from './external/tslib
 // Copyright 2019-2024 Tauri Programme within The Commons Conservancy
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
-var _Channel_onmessage, _Channel_nextMessageIndex, _Channel_pendingMessages, _Channel_messageEndIndex, _Resource_rid;
+var _Channel_instances, _Channel_onmessage, _Channel_nextMessageIndex, _Channel_pendingMessages, _Channel_messageEndIndex, _Channel_deliver, _Resource_rid;
 /**
  * Invoke your custom commands.
  *
@@ -115,6 +115,7 @@ callback, once = false) {
  */
 class Channel {
     constructor(onmessage) {
+        _Channel_instances.add(this);
         _Channel_onmessage.set(this, void 0);
         // the index is used as a mechanism to preserve message order
         _Channel_nextMessageIndex.set(this, 0);
@@ -135,12 +136,12 @@ class Channel {
             const message = rawMessage.message;
             // Process the message if we're at the right order
             if (index == __classPrivateFieldGet(this, _Channel_nextMessageIndex, "f")) {
-                __classPrivateFieldGet(this, _Channel_onmessage, "f").call(this, message);
+                __classPrivateFieldGet(this, _Channel_instances, "m", _Channel_deliver).call(this, message);
                 __classPrivateFieldSet(this, _Channel_nextMessageIndex, __classPrivateFieldGet(this, _Channel_nextMessageIndex, "f") + 1, "f");
                 // process pending messages
                 while (__classPrivateFieldGet(this, _Channel_nextMessageIndex, "f") in __classPrivateFieldGet(this, _Channel_pendingMessages, "f")) {
                     const message = __classPrivateFieldGet(this, _Channel_pendingMessages, "f")[__classPrivateFieldGet(this, _Channel_nextMessageIndex, "f")];
-                    __classPrivateFieldGet(this, _Channel_onmessage, "f").call(this, message);
+                    __classPrivateFieldGet(this, _Channel_instances, "m", _Channel_deliver).call(this, message);
                     // eslint-disable-next-line @typescript-eslint/no-array-delete
                     delete __classPrivateFieldGet(this, _Channel_pendingMessages, "f")[__classPrivateFieldGet(this, _Channel_nextMessageIndex, "f")];
                     __classPrivateFieldSet(this, _Channel_nextMessageIndex, __classPrivateFieldGet(this, _Channel_nextMessageIndex, "f") + 1, "f");
@@ -172,7 +173,19 @@ class Channel {
     get onmessage() {
         return __classPrivateFieldGet(this, _Channel_onmessage, "f");
     }
-    [(_Channel_onmessage = new WeakMap(), _Channel_nextMessageIndex = new WeakMap(), _Channel_pendingMessages = new WeakMap(), _Channel_messageEndIndex = new WeakMap(), SERIALIZE_TO_IPC_FN)]() {
+    [(_Channel_onmessage = new WeakMap(), _Channel_nextMessageIndex = new WeakMap(), _Channel_pendingMessages = new WeakMap(), _Channel_messageEndIndex = new WeakMap(), _Channel_instances = new WeakSet(), _Channel_deliver = function _Channel_deliver(message) {
+        try {
+            __classPrivateFieldGet(this, _Channel_onmessage, "f").call(this, message);
+        }
+        catch (error) {
+            // A throwing handler must not stall the channel: the message index would
+            // never advance and every later message would stay queued. Rethrow
+            // asynchronously so the error is still reported as uncaught.
+            queueMicrotask(() => {
+                throw error;
+            });
+        }
+    }, SERIALIZE_TO_IPC_FN)]() {
         return `__CHANNEL__:${this.id}`;
     }
     toJSON() {
