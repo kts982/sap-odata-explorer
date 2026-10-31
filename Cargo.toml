@@ -21,7 +21,18 @@ thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["cookies", "json"] }
+# TLS stays on native-tls (SChannel on Windows: Windows certificate store,
+# so corporate CAs keep working) without ALPN, i.e. HTTP/1.1 over TLS, the
+# same as reqwest 0.12's default. reqwest 0.13 defaults to rustls and
+# would negotiate HTTP/2, which Negotiate (Windows SSO) does not survive.
+reqwest = { version = "0.13", default-features = false, features = [
+  "native-tls-no-alpn",
+  "charset",
+  "http2",
+  "system-proxy",
+  "cookies",
+  "json",
+] }
 roxmltree = "0.20"
 clap = { version = "4", features = ["derive", "env"] }
 comfy-table = "8"
