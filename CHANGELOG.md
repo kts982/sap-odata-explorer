@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fixes
+
+- `services --json` fills `version` for V2 services. SAP Gateway sends `TechnicalServiceVersion` as a number, which was read as a missing string, so the field was empty for every V2 service.
+
+### Dependencies
+
+- reqwest 0.13. TLS is unchanged: still the operating system's TLS stack (SChannel on Windows, so certificates from the Windows store keep working) and HTTP/1.1 over TLS, which Windows SSO (Negotiate) needs. reqwest 0.13 would otherwise switch to rustls and negotiate HTTP/2.
+- rustls 0.23.46 (RUSTSEC-2026-0347, -0348, -0349), Tauri 2.12.5 / `@tauri-apps/api` 2.12.4, and all other semver-compatible updates.
+
 ## [0.2.0] — 2026-10-01
 
 Correctness and security fixes from a full code review, plus desktop ergonomics: autocomplete in the query fields, paging and counts, row detail with navigation drill-down, persistent history, environment labels, a bundled sample service, and offline-bucket browsing from the CLI. `connections.toml` and the offline library layout are unchanged; session caches saved by 0.1.0 still load. Binaries remain unsigned.
