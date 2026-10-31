@@ -112,7 +112,7 @@ async fn fetch_v2_catalog(client: &SapClient) -> Result<Vec<CatalogEntry>, OData
         .map(|entry| CatalogEntry {
             title: str_field(entry, "Title"),
             technical_name: str_field(entry, "TechnicalServiceName"),
-            version: str_field(entry, "TechnicalServiceVersion"),
+            version: version_field(entry, "TechnicalServiceVersion"),
             description: str_field(entry, "Description"),
             service_url: str_field(entry, "ServiceUrl"),
             is_v4: false,
@@ -329,6 +329,16 @@ fn str_field(value: &serde_json::Value, field: &str) -> String {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string()
+}
+
+/// `TechnicalServiceVersion` is Edm.Int16, which V2 JSON sends as a
+/// number; a string is accepted too.
+fn version_field(value: &serde_json::Value, field: &str) -> String {
+    match value.get(field) {
+        Some(serde_json::Value::Number(n)) => n.to_string(),
+        Some(serde_json::Value::String(s)) => s.clone(),
+        _ => String::new(),
+    }
 }
 
 impl CatalogEntry {

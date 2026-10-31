@@ -147,3 +147,50 @@ async fn catalog_listing_survives_multibyte_text() {
     assert_eq!(result.entries.len(), 1);
     assert_eq!(result.entries[0].description, "Übersicht");
 }
+
+#[tokio::test]
+async fn v2_catalog_reads_numeric_service_version() {
+    // `TechnicalServiceVersion` is Edm.Int16, so SAP Gateway sends it as
+    // a JSON number. A string is accepted too.
+    let server = MockServer::start().await;
+    for root in [V2_CATALOG, V4_CATALOG] {
+        Mock::given(method("GET"))
+            .and(path(root))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+    }
+    mount_json(
+        &server,
+        format!("{V2_CATALOG}/ServiceCollection"),
+        serde_json::json!({ "d": { "results": [
+            {
+                "Title": "ZORDERS_SRV",
+                "TechnicalServiceName": "ZORDERS_SRV",
+                "TechnicalServiceVersion": 2,
+                "Description": "Orders",
+                "ServiceUrl": "/sap/opu/odata/sap/ZORDERS_SRV;v=2"
+            },
+            {
+                "Title": "ZLAGER_SRV",
+                "TechnicalServiceName": "ZLAGER_SRV",
+                "TechnicalServiceVersion": "1",
+                "Description": "Lager",
+                "ServiceUrl": "/sap/opu/odata/sap/ZLAGER_SRV"
+            }
+        ]}}),
+    )
+    .await;
+
+    let client = common::basic_client(&server);
+    let result = fetch_service_catalog(&client).await.unwrap();
+    let version_of = |name: &str| {
+        result
+            .entries
+            .iter()
+            .find(|e| e.technical_name == name)
+            .map(|e| e.version.as_str())
+    };
+    assert_eq!(version_of("ZORDERS_SRV"), Some("2"));
+    assert_eq!(version_of("ZLAGER_SRV"), Some("1"));
+}
