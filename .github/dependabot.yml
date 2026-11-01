@@ -44,3 +44,8 @@ updates:
       actions:
         patterns:
           - "*"
+    ignore:
+      # The ref is the Rust toolchain to install, not an action version:
+      # `@1.88` in the MSRV job is the workspace `rust-version` and only
+      # moves when that does. `@stable` refs are branches Dependabot skips.
+      - dependency-name: dtolnay/rust-toolchain
