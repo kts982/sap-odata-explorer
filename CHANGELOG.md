@@ -8,7 +8,7 @@ Fixes for macOS and Linux (saved passwords and Browser SSO sessions now persist 
 
 ### Added
 
-- `sap-odata skill [--save DIR]` prints the agent skill bundled with the installed CLI, or writes it to `DIR/SKILL.md`. The skill used to be reachable only from a repo checkout, so `cargo install`, winget and scoop users had no copy, and none that matched their version. `--save` writes UTF-8, which matters on Windows PowerShell 5.1, where `>` writes UTF-16.
+- `sap-odata skill [--save DIR]` prints the agent skill bundled with the installed CLI, or writes it to `DIR/SKILL.md`. The skill used to be reachable only from a repo checkout, so `cargo install`, winget and scoop users had no copy, and none that matched their version. `--save` writes UTF-8, which matters on Windows PowerShell 5.1, where `>` writes UTF-16. The idea comes from the [Liu-Hsin/sap-odata-explorer](https://github.com/Liu-Hsin/sap-odata-explorer) fork, which added a `skill` command first.
 
 ### Security
 
