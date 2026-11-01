@@ -8,6 +8,7 @@ Thanks for your interest! This is an early-stage project — issues, discussions
 - Rust 1.88+ for core + CLI, 1.90+ for the desktop app ([rustup.rs](https://rustup.rs))
 - Node.js 20+ (for Tauri app frontend build; Tailwind CSS v4 requires it)
 - Windows, Linux, or macOS
+- Linux only: `pkg-config`, OpenSSL and D-Bus headers (`libssl-dev libdbus-1-dev` on Debian/Ubuntu), plus the [Tauri system dependencies](https://tauri.app/start/prerequisites/#linux) for the desktop app
 
 **Clone and build:**
 

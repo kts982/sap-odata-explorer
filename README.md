@@ -82,6 +82,8 @@ cargo install sap-odata-cli
 # → `sap-odata` on your PATH
 ```
 
+On Linux the build needs `pkg-config` and the OpenSSL and D-Bus headers: `sudo apt install pkg-config libssl-dev libdbus-1-dev` (Debian/Ubuntu) or `sudo dnf install pkg-config openssl-devel dbus-devel` (Fedora). Passwords go to the Secret Service (GNOME Keyring, KWallet). On a machine without one, such as a headless server or WSL, `profile add` says so and `--plaintext` stores the password in the config file instead.
+
 **WinGet** (Windows — desktop app, MSI):
 
 ```powershell
@@ -98,7 +100,7 @@ scoop install sap-odata-explorer   # Desktop app (portable)
 
 ### Build from source (Linux, macOS, or if you prefer)
 
-**Prerequisites:** Rust 1.88+ for the CLI, 1.90+ for the desktop app ([rustup.rs](https://rustup.rs)), and Node.js 20+ for the desktop app frontend build.
+**Prerequisites:** Rust 1.88+ for the CLI, 1.90+ for the desktop app ([rustup.rs](https://rustup.rs)), and Node.js 20+ for the desktop app frontend build. On Linux, also the packages listed under **Cargo** above.
 
 ```bash
 git clone https://github.com/kts982/sap-odata-explorer.git

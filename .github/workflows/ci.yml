@@ -41,7 +41,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev pkg-config
 
       - name: Build core + CLI
         run: cargo build --release -p sap-odata-core -p sap-odata-cli
@@ -81,6 +81,11 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.88
       - uses: Swatinem/rust-cache@v2
+      - name: Install Linux dependencies
+        # The same headers a `cargo install` user on Linux needs (README).
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev libssl-dev pkg-config
       - name: cargo check (locked)
         run: cargo check -p sap-odata-core -p sap-odata-cli --locked
 

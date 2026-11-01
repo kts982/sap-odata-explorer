@@ -1616,8 +1616,9 @@ fn cmd_profile_add(
     } else if !password.is_empty() && !plaintext {
         if let Err(e) = config::set_password_in_keyring(name, user, password) {
             anyhow::bail!(
-                "could not store password in OS keyring: {e}
-                 Re-run with --plaintext to store the password in the config file instead                  (not recommended), or fix the keyring backend and retry."
+                "could not store password in OS keyring: {e}\n\
+                 Re-run with --plaintext to store the password in the config file \
+                 instead (not recommended), or fix the keyring backend and retry."
             );
         }
         Some("Password stored in OS keyring.")

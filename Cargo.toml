@@ -41,7 +41,19 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 percent-encoding = "2"
 toml = "1.1"
-keyring = { version = "3", features = ["windows-native"] }
+# One credential store per platform: Credential Manager (Windows), Keychain
+# (macOS), Secret Service over D-Bus (Linux, BSDs; GNOME Keyring, KWallet).
+# A target with no store enabled silently gets keyring's in-memory mock,
+# which loses every secret when the process exits; `config` refuses to
+# write there (`keyring_store_is_persistent`). No `crypto-*` feature: it
+# only encrypts the hop over the user's own session bus, and its weak
+# `secret-service?/…` reference locks keyring's unused zbus backend (~55
+# crates) into Cargo.lock for cargo-audit to scan.
+keyring = { version = "3", features = [
+  "windows-native",
+  "apple-native",
+  "sync-secret-service",
+] }
 directories = "6"
 base64 = "0.23"
 flate2 = "1"
