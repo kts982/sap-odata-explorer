@@ -177,22 +177,43 @@ fn validate_component(component: &str, full_path: &str) -> Result<(), PathError>
 /// intended.
 ///
 /// Both `path` and `root` must exist; this calls `fs::canonicalize` on each.
+/// A path for error messages: without the `\\?\` verbatim prefix that
+/// `canonicalize` adds on Windows, and with the home directory shown as
+/// `~`, so an error pasted into an issue or caught in a screenshot doesn't
+/// carry the OS user name. Still a path the user can follow.
+pub fn display_path(path: &Path) -> String {
+    let text = path.display().to_string();
+    let text = if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        text
+    };
+    if let Some(dirs) = directories::BaseDirs::new()
+        && let Ok(rest) = Path::new(&text).strip_prefix(dirs.home_dir())
+    {
+        return Path::new("~").join(rest).display().to_string();
+    }
+    text
+}
+
 pub fn canonicalize_under(path: &Path, root: &Path) -> Result<PathBuf, PathError> {
     let canonical_root = std::fs::canonicalize(root)
-        .map_err(|e| PathError::Io(format!("canonicalize root {}: {e}", root.display())))?;
+        .map_err(|e| PathError::Io(format!("canonicalize root {}: {e}", display_path(root))))?;
     let canonical_path = std::fs::canonicalize(path)
-        .map_err(|e| PathError::Io(format!("canonicalize path {}: {e}", path.display())))?;
+        .map_err(|e| PathError::Io(format!("canonicalize path {}: {e}", display_path(path))))?;
     if canonical_path == canonical_root {
         return Err(PathError::EscapesRoot(format!(
             "{} resolves to the root itself — strict-descendancy required",
-            path.display()
+            display_path(path)
         )));
     }
     if !canonical_path.starts_with(&canonical_root) {
         return Err(PathError::EscapesRoot(format!(
             "{} resolved outside of {}",
-            path.display(),
-            root.display()
+            display_path(path),
+            display_path(root)
         )));
     }
     Ok(canonical_path)
@@ -257,6 +278,37 @@ pub fn slugify(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_path_hides_home_dir_and_verbatim_prefix() {
+        let Some(dirs) = directories::BaseDirs::new() else {
+            return;
+        };
+        let home = dirs.home_dir();
+        let file = home.join("cfg").join("offline").join("svc.xml");
+        let shown = display_path(&file);
+        assert!(shown.starts_with('~'), "{shown}");
+        assert!(shown.ends_with("svc.xml"), "{shown}");
+        assert!(!shown.contains(&*home.to_string_lossy()), "{shown}");
+
+        // Outside the home directory: unchanged.
+        let other = Path::new(if cfg!(windows) {
+            r"D:\data\x.xml"
+        } else {
+            "/srv/x.xml"
+        });
+        assert_eq!(display_path(other), other.display().to_string());
+
+        #[cfg(windows)]
+        {
+            let verbatim = PathBuf::from(format!(r"\\?\{}", file.display()));
+            assert_eq!(display_path(&verbatim), shown);
+            assert_eq!(
+                display_path(Path::new(r"\\?\UNC\srv\share\f.xml")),
+                r"\\srv\share\f.xml"
+            );
+        }
+    }
 
     fn root() -> PathBuf {
         PathBuf::from("/tmp/offline-root")

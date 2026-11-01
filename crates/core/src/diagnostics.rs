@@ -107,16 +107,45 @@ pub(crate) fn extract_sensitive_request_values(headers: &HeaderMap) -> Vec<Strin
         {
             out.push(v.to_string());
             if lower == "cookie" {
-                for piece in v.split(';') {
-                    let piece = piece.trim();
-                    if !piece.is_empty() && piece != v {
-                        out.push(piece.to_string());
-                    }
-                }
+                out.extend(cookie_pieces(v).into_iter().filter(|p| p != v));
             }
         }
     }
     out
+}
+
+/// Every `name=value` pair of a `Cookie` header, plus each bare value: a
+/// body can echo a token without its name (a MYSAPSSO2 ticket, say).
+fn cookie_pieces(header: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for pair in header.split(';').map(str::trim).filter(|p| !p.is_empty()) {
+        out.push(pair.to_string());
+        if let Some((_, value)) = pair.split_once('=')
+            && !value.is_empty()
+        {
+            out.push(value.to_string());
+        }
+    }
+    out
+}
+
+/// The `Cookie` header reqwest adds from its jar *inside* `execute`, after
+/// the request headers were captured: its values go on the scrub list, and
+/// the trace gets a `cookie` row naming the cookies (values redacted), so
+/// an SSO trace shows whether e.g. MYSAPSSO2 went out at all.
+pub(crate) fn jar_cookie_diagnostics(jar_header: &str) -> (Vec<String>, HttpHeaderView) {
+    let mut values = vec![jar_header.to_string()];
+    values.extend(cookie_pieces(jar_header));
+    let names: Vec<&str> = jar_header
+        .split(';')
+        .filter_map(|p| p.trim().split_once('=').map(|(n, _)| n.trim()))
+        .filter(|n| !n.is_empty())
+        .collect();
+    let view = HttpHeaderView {
+        name: "cookie".to_string(),
+        value: format!("<redacted> (from cookie jar: {})", names.join(", ")),
+    };
+    (values, view)
 }
 
 pub(crate) fn response_headers_for_diagnostics(headers: &HeaderMap) -> Vec<HttpHeaderView> {
@@ -291,9 +320,11 @@ mod tests {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
         let values = extract_sensitive_request_values(&headers);
-        assert_eq!(values.len(), 3);
+        assert_eq!(values.len(), 4, "{values:?}");
         assert!(values.contains(&"Bearer xxx".to_string()));
         assert!(values.contains(&"session=yyy".to_string()));
+        // The bare cookie value too: a body can echo a token without its name.
+        assert!(values.contains(&"yyy".to_string()));
         assert!(values.contains(&"zzz".to_string()));
         assert!(!values.iter().any(|v| v == "application/json"));
     }

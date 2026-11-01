@@ -136,7 +136,7 @@ pub fn delete_offline_service(
                     }
                     Err(e) => {
                         return Err(DeleteError::Io {
-                            path: canonical.display().to_string(),
+                            path: super::paths::display_path(&canonical),
                             source: e,
                         });
                     }
@@ -239,7 +239,7 @@ pub fn delete_offline_profile(
                 }
                 Err(e) => {
                     return Err(DeleteError::Io {
-                        path: canonical.display().to_string(),
+                        path: super::paths::display_path(&canonical),
                         source: e,
                     });
                 }
@@ -280,7 +280,7 @@ pub fn delete_offline_profile(
                 }
                 Err(e) => {
                     return Err(DeleteError::Io {
-                        path: canonical_bucket.display().to_string(),
+                        path: super::paths::display_path(&canonical_bucket),
                         source: e,
                     });
                 }

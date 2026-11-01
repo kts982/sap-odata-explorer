@@ -49,13 +49,16 @@ use super::paths::{PathError, canonicalize_under, safe_join_under};
 pub enum StorageError {
     #[error("path safety violation: {0}")]
     Path(#[from] PathError),
-    #[error("I/O error at {path}: {source}")]
+    #[error("I/O error at {}: {source}", super::paths::display_path(path))]
     Io {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
-    #[error("could not create directory {path}: {source}")]
+    #[error(
+        "could not create directory {}: {source}",
+        super::paths::display_path(path)
+    )]
     Mkdir {
         path: PathBuf,
         #[source]
@@ -130,8 +133,8 @@ pub fn write_bytes_atomically(
     if !canonical_parent.starts_with(&canonical_root) {
         return Err(StorageError::Path(PathError::EscapesRoot(format!(
             "parent {} resolved outside of root {}",
-            parent.display(),
-            root.display()
+            super::paths::display_path(parent),
+            super::paths::display_path(root)
         ))));
     }
 

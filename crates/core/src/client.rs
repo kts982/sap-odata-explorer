@@ -1,6 +1,6 @@
 use reqwest::{
     Client, Response, StatusCode,
-    cookie::Jar,
+    cookie::{CookieStore, Jar},
     header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderValue},
 };
 use std::{
@@ -44,6 +44,25 @@ pub fn read_timeout_from_env() -> Option<Duration> {
         Some(secs) => Some(Duration::from_secs(secs)),
         None => Some(DEFAULT_READ_TIMEOUT),
     }
+}
+
+/// Default cap on one response body, in MiB. Far above any realistic
+/// `$metadata` or result page; it bounds a server or proxy that never stops
+/// sending, which the read timeout can't (it resets on every chunk).
+pub const DEFAULT_MAX_RESPONSE_MB: u64 = 512;
+
+/// Environment variable overriding [`DEFAULT_MAX_RESPONSE_MB`], in MiB.
+/// `0` disables the cap.
+pub const MAX_RESPONSE_ENV: &str = "SAP_ODATA_MAX_RESPONSE_MB";
+
+/// Response size cap in bytes from [`MAX_RESPONSE_ENV`], falling back to
+/// the default. `None` means no cap.
+pub fn max_response_bytes_from_env() -> Option<u64> {
+    let mb = std::env::var(MAX_RESPONSE_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_MAX_RESPONSE_MB);
+    (mb > 0).then(|| mb.saturating_mul(1024 * 1024))
 }
 
 /// SAP OData HTTP client handling authentication, CSRF tokens, and SAP-specific headers.
@@ -439,8 +458,19 @@ impl SapClient {
         // self.http.execute(request) consumes the request. These get stored
         // on the trace entry (skip-serialised) so the body preview can
         // defensively redact any echoes of them.
-        let sensitive_values = extract_sensitive_request_values(request.headers());
-        let request_headers = request_headers_for_diagnostics(request.headers());
+        let mut sensitive_values = extract_sensitive_request_values(request.headers());
+        let mut request_headers = request_headers_for_diagnostics(request.headers());
+        // reqwest adds the jar's cookies (MYSAPSSO2, SAP_SESSIONID_*) inside
+        // `execute`, and only when the request has no Cookie header of its
+        // own: mirror that here so they are scrubbed and visible.
+        if !request.headers().contains_key(reqwest::header::COOKIE)
+            && let Some(jar_header) = self.cookie_jar.cookies(request.url())
+            && let Ok(jar_header) = jar_header.to_str()
+        {
+            let (values, view) = crate::diagnostics::jar_cookie_diagnostics(jar_header);
+            sensitive_values.extend(values);
+            request_headers.push(view);
+        }
         let started = Instant::now();
 
         match self.http.execute(request).await {
@@ -517,11 +547,60 @@ impl SapClient {
         resp: Response,
     ) -> Result<String, ODataError> {
         let content_type = response_content_type(&resp);
-        let text = resp.text().await?;
+        let text =
+            read_body_capped(resp, content_type.as_deref(), max_response_bytes_from_env()).await?;
         self.diagnostics
             .set_response_body_preview(trace_id, content_type.as_deref(), &text);
         Ok(text)
     }
+}
+
+/// `Response::text()` with a size cap: stops reading once the body passes
+/// `cap` bytes instead of buffering whatever the server sends. Decodes by
+/// the `Content-Type` charset (UTF-8 by default, BOM honoured), as
+/// `text()` does.
+async fn read_body_capped(
+    mut resp: Response,
+    content_type: Option<&str>,
+    cap: Option<u64>,
+) -> Result<String, ODataError> {
+    let too_large = |cap: u64| {
+        ODataError::ResponseParse(format!(
+            "response body is larger than {} MB. Request less data (--top, --select, a filter) \
+             or raise the limit with {MAX_RESPONSE_ENV} (0 = no limit).",
+            cap / (1024 * 1024)
+        ))
+    };
+    if let (Some(cap), Some(len)) = (cap, resp.content_length())
+        && len > cap
+    {
+        return Err(too_large(cap));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        if let Some(cap) = cap
+            && (body.len() + chunk.len()) as u64 > cap
+        {
+            return Err(too_large(cap));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let (text, _, _) = charset_encoding(content_type).decode(&body);
+    Ok(text.into_owned())
+}
+
+fn charset_encoding(content_type: Option<&str>) -> &'static encoding_rs::Encoding {
+    content_type
+        .and_then(|ct| {
+            ct.split(';').skip(1).find_map(|param| {
+                let (key, value) = param.split_once('=')?;
+                key.trim()
+                    .eq_ignore_ascii_case("charset")
+                    .then(|| value.trim().trim_matches('"'))
+            })
+        })
+        .and_then(|label| encoding_rs::Encoding::for_label(label.as_bytes()))
+        .unwrap_or(encoding_rs::UTF_8)
 }
 
 fn response_content_type(resp: &Response) -> Option<String> {
@@ -861,6 +940,58 @@ fn extract_host(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A real `reqwest::Response` carrying `body` with `content_type`.
+    async fn response_with(body: Vec<u8>, content_type: &str) -> (wiremock::MockServer, Response) {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_raw(body, content_type))
+            .mount(&server)
+            .await;
+        let resp = reqwest::get(server.uri()).await.unwrap();
+        (server, resp)
+    }
+
+    #[tokio::test]
+    async fn body_over_the_cap_is_refused_with_the_env_var_named() {
+        let (_server, resp) = response_with(vec![b'x'; 4096], "application/json").await;
+        let err = read_body_capped(resp, Some("application/json"), Some(1024))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains(MAX_RESPONSE_ENV), "{err}");
+    }
+
+    #[tokio::test]
+    async fn body_at_or_under_the_cap_or_without_cap_is_read() {
+        for cap in [Some(4096), None] {
+            let (_server, resp) = response_with(vec![b'x'; 4096], "application/json").await;
+            let text = read_body_capped(resp, Some("application/json"), cap)
+                .await
+                .unwrap();
+            assert_eq!(text.len(), 4096);
+        }
+    }
+
+    #[tokio::test]
+    async fn body_is_decoded_by_its_charset_like_text() {
+        // "Größe" in ISO-8859-1, and UTF-8 with a BOM (dropped, as text() does).
+        let latin1 = vec![b'G', b'r', 0xF6, 0xDF, b'e'];
+        let ct = "text/plain; charset=\"ISO-8859-1\"";
+        let (_s1, resp) = response_with(latin1, ct).await;
+        assert_eq!(
+            read_body_capped(resp, Some(ct), None).await.unwrap(),
+            "Größe"
+        );
+
+        let utf8_bom = [&[0xEF, 0xBB, 0xBF][..], "Größe".as_bytes()].concat();
+        let (_s2, resp) = response_with(utf8_bom, "application/json").await;
+        assert_eq!(
+            read_body_capped(resp, Some("application/json"), None)
+                .await
+                .unwrap(),
+            "Größe"
+        );
+    }
 
     fn basic_auth() -> AuthConfig {
         AuthConfig::Basic {

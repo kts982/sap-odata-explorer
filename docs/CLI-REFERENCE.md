@@ -73,6 +73,8 @@ SAP_ODATA_CONFIG_DIR=./ci-config sap-odata offline list
 
 Requests time out instead of hanging: 30 s to connect, and 300 s of silence while waiting for (or reading) a response. The read timeout resets on every chunk received, so large downloads that keep streaming are not cut off. `SAP_ODATA_READ_TIMEOUT_SECS` changes it (`0` disables it) — e.g. for a system with a raised ICM processing timeout. The desktop app honours the same variable.
 
+A single response body is capped at 512 MB, far above any real `$metadata` or result page, so a server or proxy that never stops sending can't exhaust memory. A response over the cap fails with a message naming `SAP_ODATA_MAX_RESPONSE_MB`, which raises it (`0` removes it); for a deliberate bulk read, `--top` / `--select` / a filter usually serve better. The desktop app honours the same variable.
+
 ## Service path resolution
 
 For commands that need `--service`, the CLI resolves the value in this order:

@@ -94,7 +94,7 @@ pub fn read_offline_metadata(
     //    result is the canonical XML body — `parse_metadata` doesn't
     //    have to handle a leading BOM character.
     let bytes = std::fs::read(&canonical).map_err(|e| OfflineReadError::Io {
-        path: canonical.display().to_string(),
+        path: super::paths::display_path(&canonical),
         source: e,
     })?;
     let stripped = strip_utf8_bom(&bytes);

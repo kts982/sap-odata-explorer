@@ -3237,6 +3237,7 @@ dependencies = [
  "anyhow",
  "base64 0.23.1",
  "directories",
+ "encoding_rs",
  "flate2",
  "keyring",
  "percent-encoding",

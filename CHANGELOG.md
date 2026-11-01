@@ -8,6 +8,12 @@ All notable changes to this project are documented here. Format loosely follows 
 
 - `sap-odata skill [--save DIR]` prints the agent skill bundled with the installed CLI, or writes it to `DIR/SKILL.md`. The skill used to be reachable only from a repo checkout, so `cargo install`, winget and scoop users had no copy, and none that matched their version. `--save` writes UTF-8, which matters on Windows PowerShell 5.1, where `>` writes UTF-16.
 
+### Security
+
+- **The HTTP trace scrubs the session cookies.** reqwest adds the cookie jar (`MYSAPSSO2`, `SAP_SESSIONID_*`) after the trace captured the request headers, so those values were never on the scrub list for response-body previews. A body echoing a logon ticket would have shown it in `-v` output and the desktop request log. The trace now also shows which cookies went out (names only, values redacted), which an SSO trace was missing. Bare cookie values are scrubbed too, not just `name=value` pairs.
+- **Offline-library errors no longer show the Windows user name.** They printed canonical paths such as `\\?\C:\Users\<name>\AppData\…`; the home directory now shows as `~` and the `\\?\` prefix is gone, so errors are safe to paste into an issue or screenshot.
+- **A response body is capped at 512 MB** instead of being buffered whatever its size: a server or proxy that never stops sending could exhaust memory (the read timeout resets on every chunk). `SAP_ODATA_MAX_RESPONSE_MB` raises the cap, `0` removes it.
+
 ### Fixes
 
 - **Passwords and Browser SSO sessions persist on macOS and Linux.** Only the Windows credential store was compiled in, so other platforms used the keyring crate's in-memory stand-in: `profile add` reported the password as stored, and it was gone on the next run. macOS now uses the Keychain and Linux the Secret Service (GNOME Keyring, KWallet). A build with no credential store refuses the write and points to `--plaintext`, instead of claiming success. Building on Linux now also needs the D-Bus headers (`libdbus-1-dev`); see the README.

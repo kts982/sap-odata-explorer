@@ -526,3 +526,57 @@ async fn browser_sso_login_page_on_403_is_an_auth_failure() {
     assert!(matches!(err, ODataError::AuthFailed(_)), "{err:?}");
     assert!(err.to_string().contains("signout"), "{err}");
 }
+
+// ── trace redaction of cookie-jar cookies ─────────────────────────────────
+
+#[tokio::test]
+async fn trace_scrubs_jar_cookies_and_shows_their_names() {
+    // The SAP logon ticket arrives via Set-Cookie and reqwest re-sends it
+    // from its jar. A body that echoes the bare value must not leak it
+    // into the trace, and the trace should show the cookie went out.
+    const TICKET: &str = "AjQxMDMBABhLAFQAUwBJAE8AIAAgACAAIAAgACAAIAACAAYwADAAMQADABA";
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(SERVICE_PATH))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("set-cookie", format!("MYSAPSSO2={TICKET}; Path=/").as_str()),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{SERVICE_PATH}/$metadata")))
+        .respond_with(ResponseTemplate::new(400).set_body_raw(
+            format!(r#"{{"error":{{"code":"ZX/001","message":{{"value":"echo {TICKET}"}}}}}}"#),
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
+    let client = common::basic_client(&server);
+    let _ = client.fetch_metadata(SERVICE_PATH).await.unwrap_err();
+    let trace = client.diagnostics_snapshot();
+    let metadata_call = trace
+        .iter()
+        .find(|e| e.url.contains("$metadata"))
+        .expect("metadata request traced");
+
+    let preview = metadata_call.response_body_preview.as_deref().unwrap_or("");
+    assert!(preview.contains("echo <redacted>"), "{preview}");
+    assert!(
+        !preview.contains(TICKET),
+        "ticket leaked into the trace: {preview}"
+    );
+
+    let cookie_row = metadata_call
+        .request_headers
+        .iter()
+        .find(|h| h.name == "cookie")
+        .expect("jar cookie shown in the trace");
+    assert!(
+        cookie_row.value.contains("MYSAPSSO2"),
+        "{}",
+        cookie_row.value
+    );
+    assert!(!cookie_row.value.contains(TICKET), "{}", cookie_row.value);
+}
