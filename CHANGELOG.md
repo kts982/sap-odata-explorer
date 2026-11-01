@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Format loosely follows 
 
 ## [Unreleased]
 
+### Added
+
+- `sap-odata skill [--save DIR]` prints the agent skill bundled with the installed CLI, or writes it to `DIR/SKILL.md`. The skill used to be reachable only from a repo checkout, so `cargo install`, winget and scoop users had no copy, and none that matched their version. `--save` writes UTF-8, which matters on Windows PowerShell 5.1, where `>` writes UTF-16.
+
 ### Fixes
 
 - **Passwords and Browser SSO sessions persist on macOS and Linux.** Only the Windows credential store was compiled in, so other platforms used the keyring crate's in-memory stand-in: `profile add` reported the password as stored, and it was gone on the next run. macOS now uses the Keychain and Linux the Secret Service (GNOME Keyring, KWallet). A build with no credential store refuses the write and points to `--plaintext`, instead of claiming success. Building on Linux now also needs the D-Bus headers (`libdbus-1-dev`); see the README.

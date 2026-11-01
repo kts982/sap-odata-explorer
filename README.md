@@ -194,6 +194,7 @@ If you prefer scripted setup, `sap-odata profile add ...` is still available for
 | `offline import <file>` | Import an EDMX file (API Hub, GW_CLIENT, curl dump). No connection needed. `--offline-profile NAME` to target a specific bucket. |
 | `offline list [--profile NAME]` | List offline buckets, or services within one. |
 | `offline delete --profile NAME [--service-id ID]` | Remove a whole bucket or one service. `-y` skips the confirm prompt. |
+| `skill [--save DIR]` | Print the agent skill matching this CLI version, or write it to `DIR/SKILL.md` (see [Use with AI agents](#use-with-ai-agents)). |
 
 See [CLI-REFERENCE.md](docs/CLI-REFERENCE.md) for all options (or run `sap-odata <command> --help`).
 
@@ -206,16 +207,19 @@ is a ready-made skill that teaches a coding agent the safe workflows —
 discovery, describe, queries, lint, offline EDMX — plus the failure
 playbook (SSO expiry, keyring states, unpublished V4 catalogs).
 
-For [Claude Code](https://claude.com/claude-code), copy the folder into your
-skills directory:
+The skill ships inside the CLI, so it always matches the installed version.
+For [Claude Code](https://claude.com/claude-code), write it into your skills
+directory:
 
-```powershell
-# personal (all projects)          # or per-project
-~/.claude/skills/sap-odata-cli/    <project>/.claude/skills/sap-odata-cli/
+```bash
+sap-odata skill --save ~/.claude/skills/sap-odata-cli    # personal (all projects)
+sap-odata skill --save .claude/skills/sap-odata-cli      # or per-project
 ```
 
-For other agents (Cursor, Codex, ...), reference the file from your rules /
-`AGENTS.md`. The skill assumes profiles already exist — agents are told to
+Re-run after upgrading the CLI. For other agents (Cursor, Codex, ...),
+`sap-odata skill` prints it; save it where your rules / `AGENTS.md` can
+reference it. On Windows PowerShell 5.1 use `--save` rather than `>`, which
+writes UTF-16. The skill assumes profiles already exist — agents are told to
 never run the interactive `setup` wizard and never to handle passwords.
 
 ## Authentication

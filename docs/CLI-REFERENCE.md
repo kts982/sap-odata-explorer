@@ -22,6 +22,7 @@ Full command reference for `sap-odata`. For a quick start, see the [main README]
   - [`verify`](#verify)
   - [`offline`](#offline)
   - [`signout`](#signout)
+  - [`skill`](#skill)
 - [HTTP trace (`--verbose`)](#http-trace---verbose)
 - [Configuration file](#configuration-file)
 - [Troubleshooting](#troubleshooting)
@@ -522,6 +523,22 @@ sap-odata signout DEV
 ```
 
 Only meaningful for Browser SSO profiles. On Basic / Windows SSO profiles it's a no-op.
+
+### `skill`
+
+Print the agent skill (`SKILL.md`) bundled with this CLI version, or write it into a directory. No profile or connection needed.
+
+| Flag | Purpose |
+|---|---|
+| `--save <DIR>` | Write `DIR/SKILL.md` (UTF-8, LF; the directory is created) instead of printing |
+
+```bash
+sap-odata skill --save ~/.claude/skills/sap-odata-cli   # Claude Code, all projects
+sap-odata skill --save .claude/skills/sap-odata-cli     # Claude Code, this project
+sap-odata skill                                         # print, for other agents
+```
+
+The skill is embedded at build time, so it always matches the installed CLI; re-run after upgrading. On Windows PowerShell 5.1, prefer `--save` to `>` (which writes UTF-16).
 
 ## HTTP trace (`--verbose`)
 

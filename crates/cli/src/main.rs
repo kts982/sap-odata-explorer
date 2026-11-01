@@ -74,6 +74,28 @@ enum Commands {
         name: String,
     },
 
+    /// Print the agent skill (SKILL.md) that matches this CLI version
+    #[command(
+        long_about = "Print the agent skill (SKILL.md) that matches this CLI version.\n\
+        \n\
+        The skill teaches a coding agent (Claude Code, Cursor, Codex, ...) the\n\
+        safe workflows and the failure playbook for this CLI. It ships inside\n\
+        the binary, so it always matches the installed version.\n\
+        \n\
+        Examples:\n  \
+          sap-odata skill --save ~/.claude/skills/sap-odata-cli\n  \
+          sap-odata skill --save .claude/skills/sap-odata-cli\n  \
+          sap-odata skill > AGENTS-sap-odata.md\n\
+        \n\
+        Prefer --save on Windows PowerShell 5.1: its `>` writes UTF-16,\n\
+        which agents can't read. --save always writes UTF-8."
+    )]
+    Skill {
+        /// Write SKILL.md into this directory (created if missing) instead of printing it
+        #[arg(long, value_name = "DIR")]
+        save: Option<std::path::PathBuf>,
+    },
+
     /// Manage connection profiles
     Profile {
         #[command(subcommand)]
@@ -579,6 +601,9 @@ async fn main() -> Result<()> {
     if let Commands::Signout { name } = &cli.command {
         return cmd_signout(name);
     }
+    if let Commands::Skill { save } = &cli.command {
+        return cmd_skill(save.as_deref());
+    }
     // `offline import` reads a local file and doesn't talk to SAP —
     // skip the connection-resolution step that follows so the user
     // can import without any profile / URL / credentials configured.
@@ -667,7 +692,8 @@ async fn main() -> Result<()> {
             Commands::Profile { .. }
             | Commands::Alias { .. }
             | Commands::Setup
-            | Commands::Signout { .. } => unreachable!(),
+            | Commands::Signout { .. }
+            | Commands::Skill { .. } => unreachable!(),
             Commands::Services {
                 filter,
                 v2,
@@ -1366,6 +1392,35 @@ fn cmd_signout(name: &str) -> Result<()> {
     sap_odata_core::session::clear(name)
         .with_context(|| format!("failed to clear session for '{name}'"))?;
     println!("  Cleared persisted Browser SSO session for profile '{name}'.");
+    Ok(())
+}
+
+// ══════════════════════════════════════════════════════════════
+// ── SKILL ──
+// ══════════════════════════════════════════════════════════════
+
+/// The agent skill, embedded so `cargo install` / winget / scoop users get
+/// the copy that matches their binary. A copy of the repo's canonical
+/// `skills/sap-odata-cli/SKILL.md` (crates.io packages can't reach files
+/// outside the crate); `tests::embedded_skill_matches_repo_skill` keeps
+/// the two identical.
+const SKILL_MD: &str = include_str!("../skill/SKILL.md");
+
+/// The skill with LF line endings, whatever the checkout it was built from.
+fn skill_text() -> String {
+    SKILL_MD.replace("\r\n", "\n")
+}
+
+fn cmd_skill(save: Option<&std::path::Path>) -> Result<()> {
+    let text = skill_text();
+    let Some(dir) = save else {
+        print!("{text}");
+        return Ok(());
+    };
+    std::fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
+    let path = dir.join("SKILL.md");
+    std::fs::write(&path, text).with_context(|| format!("failed to write {}", path.display()))?;
+    eprintln!("  Skill written to {}", path.display());
     Ok(())
 }
 
@@ -3221,4 +3276,37 @@ fn print_results_table(rows: &[serde_json::Value]) {
 
     println!("{table}");
     println!("\n  {} row(s) returned\n", rows.len());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The embedded skill is a copy of the repo's canonical one. When this
+    /// fails, copy `skills/sap-odata-cli/SKILL.md` over
+    /// `crates/cli/skill/SKILL.md`. Skipped outside the repo (a crates.io
+    /// package has only the embedded copy).
+    #[test]
+    fn embedded_skill_matches_repo_skill() {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../skills/sap-odata-cli/SKILL.md");
+        let Ok(canonical) = std::fs::read_to_string(&repo) else {
+            return;
+        };
+        assert!(
+            canonical.replace("\r\n", "\n") == skill_text(),
+            "crates/cli/skill/SKILL.md is out of date: copy skills/sap-odata-cli/SKILL.md over it"
+        );
+    }
+
+    #[test]
+    fn skill_has_frontmatter_and_lf_endings() {
+        let text = skill_text();
+        assert!(
+            text.starts_with("---\nname: sap-odata-cli\n"),
+            "{}",
+            &text[..40]
+        );
+        assert!(!text.contains('\r'));
+    }
 }
