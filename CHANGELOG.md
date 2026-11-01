@@ -6,6 +6,8 @@ All notable changes to this project are documented here. Format loosely follows 
 
 ### Fixes
 
+- **Passwords and Browser SSO sessions persist on macOS and Linux.** Only the Windows credential store was compiled in, so other platforms used the keyring crate's in-memory stand-in: `profile add` reported the password as stored, and it was gone on the next run. macOS now uses the Keychain and Linux the Secret Service (GNOME Keyring, KWallet). A build with no credential store refuses the write and points to `--plaintext`, instead of claiming success. Building on Linux now also needs the D-Bus headers (`libdbus-1-dev`); see the README.
+- The CLI's "could not store password in OS keyring" error printed a run of stray spaces in the middle of its `--plaintext` hint.
 - `services --json` fills `version` for V2 services. SAP Gateway sends `TechnicalServiceVersion` as a number, which was read as a missing string, so the field was empty for every V2 service.
 
 ### Dependencies

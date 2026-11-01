@@ -438,12 +438,39 @@ pub fn get_password_from_keyring(profile_name: &str, username: &str) -> Option<S
     }
 }
 
+/// Whether this build's credential store keeps secrets after the process
+/// exits. On a target with no store enabled in `Cargo.toml`, keyring falls
+/// back to its in-memory mock: writes succeed, but every later
+/// `Entry::new` starts empty, so the secret is gone on the next read.
+fn keyring_store_is_persistent() -> bool {
+    use keyring::credential::CredentialPersistence;
+    matches!(
+        keyring::default::default_credential_builder().persistence(),
+        CredentialPersistence::UntilDelete
+    )
+}
+
+/// Refuse a keyring write the store would drop when the process exits, so
+/// callers take their fail-closed path (`--plaintext`, the desktop
+/// plaintext prompt) instead of reporting a password as stored.
+pub(crate) fn ensure_persistent_keyring_store() -> anyhow::Result<()> {
+    if keyring_store_is_persistent() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "this build has no OS credential store for {}; the keyring would \
+         only hold it in memory until the program exits",
+        std::env::consts::OS
+    )
+}
+
 /// Store a password in the OS keyring.
 pub fn set_password_in_keyring(
     profile_name: &str,
     username: &str,
     password: &str,
 ) -> anyhow::Result<()> {
+    ensure_persistent_keyring_store()?;
     let target = format!("{KEYRING_SERVICE}:{profile_name}:{username}");
     let entry = keyring::Entry::new(&target, username)
         .map_err(|e| anyhow::anyhow!("keyring error: {e}"))?;
@@ -714,6 +741,17 @@ base_url = \"https://sap.corp\"
             profile_carry_over(Some(&sso), true, "u", true).orphaned_keyring_user,
             None
         );
+    }
+
+    /// Fails when `Cargo.toml` loses this platform's keyring feature and
+    /// keyring falls back to its in-memory mock. Until 0.3 only
+    /// `windows-native` was enabled, so macOS and Linux "stored" passwords
+    /// that were gone on the next run.
+    #[test]
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    fn os_credential_store_is_compiled_in() {
+        assert!(keyring_store_is_persistent());
+        assert!(ensure_persistent_keyring_store().is_ok());
     }
 
     #[test]

@@ -32,6 +32,8 @@ const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
 #[cfg(not(test))]
 fn kv_set(profile_name: &str, bytes: &[u8]) -> anyhow::Result<()> {
+    crate::config::ensure_persistent_keyring_store()
+        .map_err(|e| anyhow::anyhow!("failed to store session: {e}"))?;
     let entry = keyring::Entry::new(KEYRING_SERVICE, profile_name)
         .map_err(|e| anyhow::anyhow!("keyring error: {e}"))?;
     entry
