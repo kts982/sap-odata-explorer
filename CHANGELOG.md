@@ -2,7 +2,9 @@
 
 All notable changes to this project are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.2.1] — 2026-11-01
+
+Fixes for macOS and Linux (saved passwords and Browser SSO sessions now persist in the Keychain / Secret Service), for 403 errors, which were reported as failed logons with an SU53 hint, and for `verify` on draft-enabled RAP services, plus trace and parser hardening and a `skill` command for coding agents. `connections.toml`, the offline library and keyring entries are unchanged. Building the CLI on Linux now also needs the D-Bus headers (`libdbus-1-dev`). Binaries remain unsigned.
 
 ### Added
 
@@ -26,6 +28,8 @@ All notable changes to this project are documented here. Format loosely follows 
 
 - reqwest 0.13. TLS is unchanged: still the operating system's TLS stack (SChannel on Windows, so certificates from the Windows store keep working) and HTTP/1.1 over TLS, which Windows SSO (Negotiate) needs. reqwest 0.13 would otherwise switch to rustls and negotiate HTTP/2.
 - rustls 0.23.46 (RUSTSEC-2026-0347, -0348, -0349), Tauri 2.12.5 / `@tauri-apps/api` 2.12.4, and all other semver-compatible updates.
+- roxmltree 0.21.2: a deeply nested XML document no longer overflows the parser's stack (it parsed element content recursively), which matters for EDMX files imported into the offline library; consecutive text nodes no longer merge in quadratic time. Parsed metadata is unchanged.
+- toml 1.1. `connections.toml` is written byte-for-byte as before and still reads in 0.2.0.
 
 ## [0.2.0] — 2026-10-01
 

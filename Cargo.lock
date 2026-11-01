@@ -3215,7 +3215,7 @@ dependencies = [
 
 [[package]]
 name = "sap-odata-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -3232,7 +3232,7 @@ dependencies = [
 
 [[package]]
 name = "sap-odata-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -3258,7 +3258,7 @@ dependencies = [
 
 [[package]]
 name = "sap-odata-explorer-app"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "reqwest",
