@@ -407,7 +407,7 @@ sap-odata -p DEV -s UI_PHYSSTOCKPROD_1 annotations --json \
 
 ### `verify`
 
-Smoke-test every entity set in a service. Issues a small `$top` GET against each set and reports OK / FAIL with row counts. Intended as a CI- or agent-friendly health check after a backend change.
+Smoke-test every entity set in a service. Issues a small `$top` GET against each set and reports OK / FAIL / SKIP with row counts; a FAIL note carries SAP's own message. Intended as a CI- or agent-friendly health check after a backend change.
 
 | Flag | Purpose |
 |---|---|
@@ -420,7 +420,7 @@ sap-odata -p DEV -s API_BUSINESS_PARTNER verify
 sap-odata -p DEV -s API_BUSINESS_PARTNER verify --top 5 --json
 ```
 
-Exit code is `0` when every probe succeeded, `1` if any probe failed. SAP V4 framework sets (`SAP__*`, `__*` prefixes) are skipped — they're runtime plumbing, not part of the data model under test.
+Exit code is `0` when every probe succeeded, `1` if any probe failed. SAP V4 framework sets (`SAP__*`, `__*` prefixes) are left out — they're runtime plumbing, not part of the data model under test. Sets the metadata marks as readable only through navigation or `$expand` (V2 `sap:addressable="false"`, V4 `Capabilities.ReadRestrictions` `Readable=false` — RAP's `I_DraftAdministrativeData`, for one) are listed as SKIP (`"status": "skipped"` in JSON) and not probed: SAP refuses a direct read of them with 403 for every user, so probing would report a failure the service is designed to give.
 
 ### `offline`
 
@@ -591,10 +591,12 @@ The CLI surfaces SAP-specific hints alongside raw HTTP status codes. These are t
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `service not found: /sap/opu/odata/... — Hint: The OData service path may be wrong, inactive, or not registered in /IWFND/MAINT_SERVICE.` | Service exists in the backend but isn't activated in Gateway | Add it via `/IWFND/MAINT_SERVICE` (transaction) |
-| `server returned 403 Forbidden — Hint: Access to the SAP Gateway catalog was denied.` | User lacks catalog read authorisation | Check roles for `/IWFND/CATALOGSERVICE`; users often need `SAP_GATEWAY_ADMIN` or equivalent |
+| `server returned 403 Forbidden` + `SAP error: …` | The logon worked and SAP refused this request; its message says why. SAP uses 403 for more than missing authorisations (a set readable only via navigation, an unknown service path, CSRF), so the CLI doesn't guess | Read SAP's message; the hint names the message (SE91) or exception class (SE24). If it is an authorisation failure, SU53 on the backend shows the failed check |
+| `… can only be accessed by navigation or expand` | The entity set is readable only through its parent (`$expand` / navigation), e.g. RAP draft administrative data | Query the parent with `--expand` instead; `verify` skips these sets |
+| `Hint: The V4 service catalog refused the request.` | The `/IWFND/CONFIG` V4 catalog node is often inactive on customer systems | Pass the full `/sap/opu/odata4/...` service path with `-s` |
 | `browser sign-in incomplete; SAP or the IdP returned HTML instead of OData` | Browser SSO session expired / cookies stale | Run `sap-odata signout <profile>` then sign in again from the desktop app |
 | `server returned 500 ... — Hint: SAP returned a server-side error. Check /IWFND/ERROR_LOG, ST22, and backend application logs.` | Dump or application error in the backend | Use transaction `/IWFND/ERROR_LOG` for the gateway error, `ST22` for ABAP short dumps |
-| `Authentication was accepted by the HTTP stack but SAP rejected the request.` | SSO transport worked, but the resolved user lacks service authorisation | Check SU53 on the backend for missing authorisation objects |
+| `authentication failed: server returned 401 Unauthorized` | SAP refused the logon: wrong user, password or client, or a locked user | Fix the profile (`profile add` stores a new password); for Windows SSO, check that the system accepts SPNEGO for your Windows user |
 | `could not fetch the service catalog: V2 catalog: ...; V4 catalog: ...` | Every catalog request failed (auth, expired session, network, SICF node inactive) | The per-catalog reasons follow the colon; rerun with `--verbose` for the full HTTP trace |
 | `No services found.` | The catalog answered but nothing matched | Loosen `-f`; try without `--v4`/`--v2` |
 

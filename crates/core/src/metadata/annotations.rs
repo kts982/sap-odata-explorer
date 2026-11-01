@@ -38,7 +38,7 @@ use super::{children_by_tag, strip_alias_prefix};
 /// into callers.
 pub(super) fn apply_v4_typed_annotations(
     entity_types: &mut [EntityType],
-    entity_sets: &[EntitySet],
+    entity_sets: &mut [EntitySet],
     schema: &roxmltree::Node,
 ) {
     // Entity-type-level `UI.TextArrangement` defaults, applied after the
@@ -214,6 +214,21 @@ pub(super) fn apply_v4_typed_annotations(
                     if let Some(et) = entity_types.iter_mut().find(|t| t.name == type_name) {
                         apply_entity_set_capability(&lower, &annot, et);
                     }
+                }
+            } else if lower.ends_with(".readrestrictions") {
+                // Entity-set–scoped, and kept on the set itself: only
+                // `Readable` is used. `false` = reachable through
+                // navigation / $expand only. A nav-property target
+                // ("Container/Set/Nav") matches no set name and is skipped.
+                if let Some((_, set_name)) = target.split_once('/')
+                    && let Some(set) = entity_sets.iter_mut().find(|s| s.name == set_name)
+                    && let Some(record) = children_by_tag(&annot, "Record").into_iter().next()
+                    && let Some(readable) = children_by_tag(&record, "PropertyValue")
+                        .into_iter()
+                        .find(|pv| pv.attribute("Property") == Some("Readable"))
+                        .and_then(|pv| pv.attribute("Bool").map(|v| v == "true"))
+                {
+                    set.readable = Some(readable);
                 }
             } else if lower.ends_with(".topsupported") || lower.ends_with(".skipsupported") {
                 // Standalone `<Annotation ... Bool="false"/>` on an entity

@@ -27,7 +27,7 @@ The only things it mutates are its own local files (profiles in
 - **Prefer small probes.** Use `--top 5` (or less) for samples; use
   `--count --top 0` when only a row count is needed.
 - Exit codes are meaningful: non-zero = failure. `verify` exits 1 if any
-  entity-set probe failed; `lint --fail-on <warn|miss>` exits non-zero at that
+  entity-set probe failed (sets readable only via navigation are SKIP, not FAIL); `lint --fail-on <warn|miss>` exits non-zero at that
   severity — both are CI-gate friendly.
 
 ## Orientation — what system, what services
@@ -132,7 +132,9 @@ they name the fixing transaction. Common cases:
 | Signal | Meaning | Your move |
 |---|---|---|
 | `not registered in /IWFND/MAINT_SERVICE` | service not activated in Gateway | tell the user; it needs an admin |
-| 403 on catalog | user lacks catalog authorization | tell the user (roles / SU53) |
+| `server returned 403 Forbidden` + `SAP error: …` | SAP refused this request; its message is the reason. 403 is NOT always missing authorization | quote SAP's message to the user; suggest roles / SU53 only if the message itself says authorization |
+| `can only be accessed by navigation or expand` | set is readable only through its parent | query the parent with `--expand <nav>` instead |
+| `authentication failed: … 401` | logon refused (user / password / client / locked) | tell the user; never handle the password yourself |
 | `browser sign-in incomplete` / HTML instead of OData | Browser SSO session expired | user must run `sap-odata signout <profile>` and re-sign-in from the desktop app — you cannot do this |
 | `keyring locked` / `keyring corrupt` in `profile list` | OS credential store issue | user unlocks/repairs the credential store; do NOT re-add the profile |
 | V4 service not found via catalog search | V4 catalog node often unpublished | use the full `/sap/opu/odata4/...` path with `-s` |

@@ -486,6 +486,12 @@ pub struct AssociationEnd {
 pub struct EntitySet {
     pub name: String,
     pub entity_type: String,
+    /// `Some(false)` when the service says the set can't be read
+    /// directly, only through navigation or `$expand` from a parent: V2
+    /// `sap:addressable="false"`, V4 `Capabilities.ReadRestrictions`
+    /// `Readable=false`. RAP's `I_DraftAdministrativeData` is one; SAP
+    /// answers a direct read with 403. `None` = not stated.
+    pub readable: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]

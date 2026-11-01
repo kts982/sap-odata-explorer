@@ -434,3 +434,95 @@ async fn gateway_403_no_service_found_on_the_session_request() {
     let err = client.fetch_metadata(SERVICE_PATH).await.unwrap_err();
     assert!(matches!(err, ODataError::ServiceNotFound(_)), "got {err:?}");
 }
+
+// ── 403 is not "authentication failed" ────────────────────────────────────
+
+#[tokio::test]
+async fn forbidden_with_sap_message_is_not_reported_as_an_auth_failure() {
+    // A RAP service's answer to a direct read of a navigation-only entity
+    // set — observed with a SAP_ALL user, so the 403 is about the access
+    // path, not the user's roles.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(SERVICE_PATH))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{SERVICE_PATH}/$metadata")))
+        .respond_with(ResponseTemplate::new(403).set_body_raw(
+            r#"{"error":{"code":"SADL_GW/012","message":"The entity I_DRAFTADMINISTRATIVEDATA can only be accessed by navigation or expand","@SAP__common.ExceptionCategory":"Authorization_Error"}}"#,
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
+    let client = common::basic_client(&server);
+    let err = client.fetch_metadata(SERVICE_PATH).await.unwrap_err();
+    assert!(
+        !matches!(err, ODataError::AuthFailed(_)),
+        "403 with a SAP message must not read as a failed logon: {err:?}"
+    );
+    let msg = err.to_string();
+    assert!(msg.starts_with("server returned 403 Forbidden"), "{msg}");
+    assert!(
+        msg.contains("can only be accessed by navigation or expand"),
+        "{msg}"
+    );
+    assert!(msg.contains("not an authorization problem"), "{msg}");
+    assert!(!msg.contains("SU53"), "{msg}");
+    assert!(!msg.contains("authentication failed"), "{msg}");
+}
+
+#[tokio::test]
+async fn forbidden_on_the_session_request_keeps_sap_message() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(SERVICE_PATH))
+        .respond_with(ResponseTemplate::new(403).set_body_raw(
+            r#"{"error":{"code":"ZCM_ORDERS/042","message":{"lang":"en","value":"Some reason"}}}"#,
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
+    let client = common::basic_client(&server);
+    let err = client.fetch_metadata(SERVICE_PATH).await.unwrap_err();
+    assert!(!matches!(err, ODataError::AuthFailed(_)), "{err:?}");
+    let msg = err.to_string();
+    assert!(msg.contains("SAP error: Some reason"), "{msg}");
+    assert!(!msg.contains("SU53") && !msg.contains("password"), "{msg}");
+}
+
+#[tokio::test]
+async fn unauthorized_is_still_an_auth_failure() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(SERVICE_PATH))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+
+    let client = common::basic_client(&server);
+    let err = client.fetch_metadata(SERVICE_PATH).await.unwrap_err();
+    assert!(matches!(err, ODataError::AuthFailed(_)), "{err:?}");
+    assert!(err.to_string().contains("password"), "{err}");
+}
+
+#[tokio::test]
+async fn browser_sso_login_page_on_403_is_an_auth_failure() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(SERVICE_PATH))
+        .respond_with(
+            ResponseTemplate::new(403)
+                .set_body_raw("<html><body>Sign in</body></html>", "text/html"),
+        )
+        .mount(&server)
+        .await;
+
+    let client = common::browser_client(&server);
+    let err = client.fetch_metadata(SERVICE_PATH).await.unwrap_err();
+    assert!(matches!(err, ODataError::AuthFailed(_)), "{err:?}");
+    assert!(err.to_string().contains("signout"), "{err}");
+}

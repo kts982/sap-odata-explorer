@@ -248,7 +248,10 @@ enum Commands {
         \n\
         Issues a small `$top` GET against each set and reports OK / FAIL\n\
         with row counts. SAP V4 framework sets (SAP__/__ prefixed) are\n\
-        skipped because they're runtime plumbing, not user data.\n\
+        left out because they're runtime plumbing, not user data. Sets\n\
+        the metadata marks readable only via navigation / $expand (V2\n\
+        sap:addressable=\"false\", V4 ReadRestrictions Readable=false, e.g.\n\
+        RAP's I_DraftAdministrativeData) are listed as SKIP, not probed.\n\
         \n\
         Flags:\n  \
             --quick                only list entity sets, no per-set GET\n  \
@@ -2341,11 +2344,10 @@ async fn cmd_verify(
     // Skip SAP V4 framework sets (SAP__Messages, __OperationControl,
     // ...). Same rule cmd_entities uses for its table view — they're
     // runtime plumbing, not part of the data model under test.
-    let sets: Vec<&str> = meta
+    let sets: Vec<&sap_odata_core::metadata::EntitySet> = meta
         .entity_sets
         .iter()
-        .map(|es| es.name.as_str())
-        .filter(|name| !is_sap_system_field(name))
+        .filter(|es| !is_sap_system_field(&es.name))
         .collect();
 
     if sets.is_empty() {
@@ -2358,10 +2360,25 @@ async fn cmd_verify(
     }
 
     let mut results: Vec<VerifyResult> = Vec::with_capacity(sets.len());
-    for set in &sets {
+    for es in &sets {
+        let set = es.name.as_str();
+        // The service declares these readable only via navigation /
+        // $expand; a direct read is refused with 403 for every user, so
+        // probing them would report a failure the service is designed to give.
+        if es.readable == Some(false) {
+            results.push(VerifyResult {
+                set: set.to_string(),
+                status: VerifyStatus::Skipped,
+                rows: None,
+                note: Some(
+                    "not directly readable (metadata): navigation / $expand only".to_string(),
+                ),
+            });
+            continue;
+        }
         if quick {
             results.push(VerifyResult {
-                set: (*set).to_string(),
+                set: set.to_string(),
                 status: VerifyStatus::Ok,
                 rows: None,
                 note: Some("not probed (--quick)".to_string()),
@@ -2380,16 +2397,16 @@ async fn cmd_verify(
                     _ => None,
                 };
                 results.push(VerifyResult {
-                    set: (*set).to_string(),
+                    set: set.to_string(),
                     status: VerifyStatus::Ok,
                     rows,
                     note: None,
                 });
             }
             Err(e) => {
-                let note = truncate_for_table(&e.to_string(), 120);
+                let note = verify_failure_note(&e.to_string());
                 results.push(VerifyResult {
-                    set: (*set).to_string(),
+                    set: set.to_string(),
                     status: VerifyStatus::Fail,
                     rows: None,
                     note: Some(note),
@@ -2411,6 +2428,7 @@ async fn cmd_verify(
                     "status": match r.status {
                         VerifyStatus::Ok => "ok",
                         VerifyStatus::Fail => "fail",
+                        VerifyStatus::Skipped => "skipped",
                     },
                     "rows": r.rows,
                     "note": r.note,
@@ -2431,6 +2449,7 @@ async fn cmd_verify(
             let status_cell = match r.status {
                 VerifyStatus::Ok => Cell::new("OK").fg(Color::Green),
                 VerifyStatus::Fail => Cell::new("FAIL").fg(Color::Red),
+                VerifyStatus::Skipped => Cell::new("SKIP").fg(Color::Yellow),
             };
             let rows_cell = match r.rows {
                 Some(n) => Cell::new(n),
@@ -2445,17 +2464,21 @@ async fn cmd_verify(
         }
         println!("{table}");
 
-        let ok = results
-            .iter()
-            .filter(|r| matches!(r.status, VerifyStatus::Ok))
-            .count();
-        let fail = results.len() - ok;
+        let count = |s: VerifyStatus| results.iter().filter(|r| r.status == s).count();
+        let (ok, fail, skipped) = (
+            count(VerifyStatus::Ok),
+            count(VerifyStatus::Fail),
+            count(VerifyStatus::Skipped),
+        );
+        let probed = ok + fail;
+        let skipped_note = if skipped > 0 {
+            format!(" · {skipped} skipped")
+        } else {
+            String::new()
+        };
         eprintln!(
-            "\n  {} OK · {} FAIL ({} set{} probed)",
-            ok,
-            fail,
-            results.len(),
-            if results.len() == 1 { "" } else { "s" }
+            "\n  {ok} OK · {fail} FAIL{skipped_note} ({probed} set{} probed)",
+            if probed == 1 { "" } else { "s" }
         );
     }
 
@@ -2483,9 +2506,27 @@ struct VerifyResult {
     note: Option<String>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum VerifyStatus {
     Ok,
     Fail,
+    /// Not probed: the metadata says the set is readable only through
+    /// navigation / `$expand`. Not a failure.
+    Skipped,
+}
+
+/// One-line note for a failed probe: the error's first line (the HTTP
+/// status) plus SAP's own message, which carries the actual reason.
+fn verify_failure_note(err: &str) -> String {
+    let first = err.lines().next().unwrap_or(err).trim();
+    let note = match err
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("SAP error: "))
+    {
+        Some(sap) => format!("{first}: {sap}"),
+        None => first.to_string(),
+    };
+    truncate_for_table(&note, 160)
 }
 
 /// Trim a multi-line error message down to the first line and cap

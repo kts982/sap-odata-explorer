@@ -275,22 +275,13 @@ impl SapClient {
                 .read_response_text(trace_id, resp)
                 .await
                 .unwrap_or_default();
-            if is_unknown_service_403(status, &body) {
-                return Err(response_error(
-                    status,
-                    &response_url,
-                    response_content_type.as_deref(),
-                    &body,
-                    &self.connection.auth,
-                ));
-            }
-            return Err(ODataError::AuthFailed(auth_error_detail(
+            return Err(response_error(
                 status,
                 &response_url,
                 response_content_type.as_deref(),
                 &body,
                 &self.connection.auth,
-            )));
+            ));
         }
 
         if matches!(&self.connection.auth, AuthConfig::Browser) {
@@ -540,6 +531,20 @@ fn response_content_type(resp: &Response) -> Option<String> {
         .map(String::from)
 }
 
+/// Browser SSO got an HTML page (the IdP / SAP logon page) instead of
+/// OData: the session is gone, whatever the status code says.
+fn is_browser_login_page(auth: &AuthConfig, content_type: Option<&str>) -> bool {
+    matches!(auth, AuthConfig::Browser)
+        && content_type.is_some_and(|ct| ct.to_ascii_lowercase().starts_with("text/html"))
+}
+
+/// SADL message for a direct read of an entity set the service exposes
+/// only through navigation or `$expand` (RAP's `I_DraftAdministrativeData`,
+/// metadata `ReadRestrictions/Readable=false`). V4 sends this message id;
+/// V2 sends exception class `CX_SADL_PRIVILEGE_VIOLATION`, which is too
+/// broad to key a hint on.
+const SADL_NAVIGATION_ONLY: &str = "SADL_GW/012";
+
 /// SAP Gateway answers a request for an unregistered service (wrong
 /// path, wrong version, not activated) with 403 and "No service found for
 /// namespace …" — not an authorization problem, despite the status.
@@ -572,7 +577,14 @@ fn response_error(
         return ODataError::ServiceNotFound(detail);
     }
 
-    if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+    // 401 is a refused logon. 403 is only an auth failure when Browser SSO
+    // got a login page back; otherwise SAP answers 403 for many reasons
+    // that are not about the user's credentials or roles (a set readable
+    // only via navigation, an unknown service path, CSRF), and its message
+    // says which. Those take the generic path below.
+    if status == StatusCode::UNAUTHORIZED
+        || (status == StatusCode::FORBIDDEN && is_browser_login_page(auth, content_type))
+    {
         return ODataError::AuthFailed(auth_error_detail(status, url, content_type, body, auth));
     }
 
@@ -655,45 +667,78 @@ pub fn response_hint(
         );
     }
 
-    if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-        if matches!(auth, AuthConfig::Browser) && content_type.starts_with("text/html") {
-            return Some(
-                "Browser SSO usually returned a login page instead of an OData response. Run `signout <profile>` and re-sign-in from the desktop app, then inspect the request log for redirects."
-                    .to_string(),
-            );
-        }
-        if matches!(auth, AuthConfig::Browser) {
-            return Some(
-                "Browser SSO session likely expired. Run `signout <profile>` and re-sign-in from the desktop app."
-                    .to_string(),
-            );
-        }
-        if path.contains("/iwfnd/catalogservice") {
-            return Some(
-                "Access to the SAP Gateway catalog was denied. Check SAP authorizations for catalog discovery and that the user can reach /IWFND/CATALOGSERVICE."
-                    .to_string(),
-            );
-        }
-        if matches!(auth, AuthConfig::Basic { .. }) {
-            return Some(
-                "Basic authentication was accepted by the HTTP stack but SAP rejected the request. Check the profile's user, password, and service authorization. SU53 on the backend reveals missing authorisation objects."
-                    .to_string(),
-            );
-        }
+    let browser = matches!(auth, AuthConfig::Browser);
+    if (status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN)
+        && browser
+        && content_type.starts_with("text/html")
+    {
         return Some(
-            "Authentication succeeded at the transport layer but SAP denied access. Check the active session, assigned roles, and any front-door SSO policy."
+            "Browser SSO usually returned a login page instead of an OData response. Run `signout <profile>` and re-sign-in from the desktop app, then inspect the request log for redirects."
                 .to_string(),
         );
     }
 
-    // 4xx with a SAP error code in the body — point at SE91 for the
-    // message lookup. Only fires when there's a parseable code; the
+    // 401: SAP refused the logon itself, before any authorization check.
+    if status == StatusCode::UNAUTHORIZED {
+        let hint = match auth {
+            AuthConfig::Browser => {
+                "Browser SSO session likely expired. Run `signout <profile>` and re-sign-in from the desktop app."
+            }
+            AuthConfig::Basic { .. } => {
+                "SAP refused the logon. Check the profile's user, password and client (`profile add` stores a new password), and that the user is not locked in that client."
+            }
+            AuthConfig::Sso => {
+                "SAP refused the Windows SSO (SPNEGO) logon. `-v` shows what the server answered."
+            }
+        };
+        return Some(hint.to_string());
+    }
+
+    // 403: the logon worked, SAP refused this request. The reason is in
+    // SAP's message, so no hint second-guesses it with a cause that isn't
+    // certain (missing roles / SU53, a wrong password).
+    if status == StatusCode::FORBIDDEN {
+        if extract_sap_error_code(body).as_deref() == Some(SADL_NAVIGATION_ONLY) {
+            return Some(
+                "This entity set can only be read through navigation or $expand from its parent entity; the service's metadata marks it as not directly readable. It is not an authorization problem."
+                    .to_string(),
+            );
+        }
+        if extract_sap_error(body).is_none() {
+            if path.contains("/iwfnd/config/") {
+                return Some(
+                    "The V4 service catalog refused the request. This is typical when the /IWFND/CONFIG V4 catalog node isn't active; V4 services may still be reachable — pass the full /sap/opu/odata4/... path with -s."
+                        .to_string(),
+                );
+            }
+            if browser {
+                return Some(
+                    "Browser SSO session likely expired. Run `signout <profile>` and re-sign-in from the desktop app."
+                        .to_string(),
+                );
+            }
+            return Some(
+                "SAP refused the request without an OData error message, so the response doesn't say why. `-v` prints the full exchange."
+                    .to_string(),
+            );
+        }
+        // SAP's message is shown with the error; the code hint below
+        // points at its long text.
+    }
+
+    // 4xx with a SAP error code in the body — point at where the message
+    // is maintained. Only fires when there's a parseable code; the
     // generic `server returned 4xx` message already carries the
     // SAP-supplied message text via `extract_sap_error`.
     if status.is_client_error()
         && !status.is_success()
         && let Some(code) = extract_sap_error_code(body)
     {
+        if !code.contains('/') && code.starts_with("CX_") {
+            return Some(format!(
+                "SAP error code {code} is an exception class. SE24 (or ADT) shows its texts and where it is raised."
+            ));
+        }
         return Some(format!(
             "SAP error code {code}. Look the message up in SE91 (or your IDE's SAP message viewer) for the full text and where-used."
         ));
@@ -860,7 +905,7 @@ mod tests {
     }
 
     #[test]
-    fn hint_401_basic_mentions_su53() {
+    fn hint_401_basic_points_at_the_logon_not_authorizations() {
         let h = response_hint(
             StatusCode::UNAUTHORIZED,
             "https://example.com/sap/opu/odata/sap/ZMY_SVC",
@@ -869,7 +914,103 @@ mod tests {
             &basic_auth(),
         )
         .expect("expected a hint");
-        assert!(h.contains("SU53") || h.contains("authorization") || h.contains("authorisation"));
+        assert!(h.contains("password"), "{h}");
+        assert!(
+            !h.contains("SU53"),
+            "a refused logon never reaches an authorization check: {h}"
+        );
+    }
+
+    /// No 403 hint may name a cause SAP didn't state: not missing roles
+    /// (SU53), not the password. SAP answers 403 for structural reasons
+    /// too, and its message says which.
+    fn assert_no_guessed_cause(h: &str) {
+        assert!(!h.contains("SU53"), "{h}");
+        assert!(!h.contains("password"), "{h}");
+        assert!(!h.to_ascii_lowercase().contains("role"), "{h}");
+    }
+
+    #[test]
+    fn hint_403_navigation_only_set() {
+        // Verbatim shape of a RAP V4 service's answer to a direct read of
+        // I_DraftAdministrativeData (with SAP_ALL, so not an authorization).
+        let body = r#"{"error":{"code":"SADL_GW/012","message":"The entity I_DRAFTADMINISTRATIVEDATA can only be accessed by navigation or expand","@SAP__common.ExceptionCategory":"Authorization_Error"}}"#;
+        let h = response_hint(
+            StatusCode::FORBIDDEN,
+            "https://example.com/sap/opu/odata4/x/y/srvd/x/y/0001/I_DraftAdministrativeData",
+            Some("application/json"),
+            body,
+            &basic_auth(),
+        )
+        .expect("expected a hint");
+        assert!(h.contains("$expand"), "{h}");
+        assert!(h.contains("not an authorization problem"), "{h}");
+        assert_no_guessed_cause(&h);
+    }
+
+    #[test]
+    fn hint_403_with_sap_message_points_at_the_message_only() {
+        let body =
+            r#"{"error":{"code":"ZCM_ORDERS/042","message":{"lang":"en","value":"Some reason"}}}"#;
+        for auth in [basic_auth(), AuthConfig::Sso, AuthConfig::Browser] {
+            let h = response_hint(
+                StatusCode::FORBIDDEN,
+                "https://example.com/sap/opu/odata/sap/ZMY_SVC/Orders",
+                Some("application/json"),
+                body,
+                &auth,
+            )
+            .expect("expected a hint");
+            assert!(h.contains("SE91"), "{h}");
+            assert!(
+                !h.contains("signout"),
+                "SAP answered, the session works: {h}"
+            );
+            assert_no_guessed_cause(&h);
+        }
+    }
+
+    #[test]
+    fn hint_403_without_sap_message_is_neutral() {
+        let h = response_hint(
+            StatusCode::FORBIDDEN,
+            "https://example.com/sap/opu/odata/sap/ZMY_SVC/Orders",
+            Some("text/plain"),
+            "Forbidden",
+            &basic_auth(),
+        )
+        .expect("expected a hint");
+        assert!(h.contains("-v"), "{h}");
+        assert_no_guessed_cause(&h);
+    }
+
+    #[test]
+    fn hint_403_on_v4_catalog_mentions_the_catalog_node() {
+        let h = response_hint(
+            StatusCode::FORBIDDEN,
+            "https://example.com/sap/opu/odata4/iwfnd/config/default/iwfnd/catalog/0002/ServiceGroups",
+            Some("text/html"),
+            "<html>Forbidden</html>",
+            &basic_auth(),
+        )
+        .expect("expected a hint");
+        assert!(h.contains("/IWFND/CONFIG"), "{h}");
+        assert_no_guessed_cause(&h);
+    }
+
+    #[test]
+    fn hint_exception_class_code_points_at_se24() {
+        let body = r#"{"error":{"code":"CX_SADL_PRIVILEGE_VIOLATION","message":{"lang":"en","value":"x"}}}"#;
+        let h = response_hint(
+            StatusCode::FORBIDDEN,
+            "https://example.com/sap/opu/odata/sap/ZMY_SVC/X",
+            Some("application/json"),
+            body,
+            &basic_auth(),
+        )
+        .expect("expected a hint");
+        assert!(h.contains("SE24"), "{h}");
+        assert!(!h.contains("SE91"), "{h}");
     }
 
     #[test]

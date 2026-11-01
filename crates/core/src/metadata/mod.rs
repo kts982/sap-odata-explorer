@@ -85,7 +85,7 @@ pub fn parse_metadata(xml: &str) -> Result<ServiceMetadata, crate::error::ODataE
                 annotations.extend(parse_v4_annotations(schema_node));
             }
         }
-        annotations::apply_v4_typed_annotations(&mut entity_types, &entity_sets, schema_node);
+        annotations::apply_v4_typed_annotations(&mut entity_types, &mut entity_sets, schema_node);
     }
 
     // Apply V4 annotation labels to properties
@@ -355,6 +355,9 @@ fn parse_entity_container(
         .map(|es| EntitySet {
             name: es.attribute("Name").unwrap_or("").to_string(),
             entity_type: es.attribute("EntityType").unwrap_or("").to_string(),
+            // V2 only; V4 states it in `Capabilities.ReadRestrictions`,
+            // applied with the other typed annotations.
+            readable: parse_sap_bool(&es, "addressable"),
         })
         .collect();
 
@@ -2015,6 +2018,72 @@ mod tests {
         assert_eq!(ot.top_supported, Some(false));
         assert_eq!(ot.skip_supported, Some(false));
         assert_eq!(ot.non_expandable_properties, vec!["_Serial"]);
+    }
+
+    /// Shape of RAP's draft administrative data on a V4 service: readable
+    /// only through `DraftAdministrativeData` navigation / `$expand`.
+    #[test]
+    fn test_v4_read_restrictions_mark_entity_set_not_readable() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" xmlns="http://docs.oasis-open.org/odata/ns/edm" Version="4.0">
+  <edmx:DataServices>
+    <Schema Namespace="n" Alias="SAP__self">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+      </EntityType>
+      <EntityType Name="DraftAdminType">
+        <Key><PropertyRef Name="DraftUUID"/></Key>
+        <Property Name="DraftUUID" Type="Edm.Guid" Nullable="false"/>
+      </EntityType>
+      <EntityContainer Name="Container">
+        <EntitySet Name="Orders" EntityType="n.OrderType"/>
+        <EntitySet Name="DraftAdmin" EntityType="n.DraftAdminType"/>
+      </EntityContainer>
+      <Annotations Target="SAP__self.Container/DraftAdmin">
+        <Annotation Term="SAP__capabilities.ReadRestrictions">
+          <Record>
+            <PropertyValue Property="Readable" Bool="false"/>
+          </Record>
+        </Annotation>
+      </Annotations>
+      <Annotations Target="SAP__self.Container/Orders">
+        <Annotation Term="SAP__capabilities.ReadRestrictions">
+          <Record>
+            <PropertyValue Property="Readable" Bool="true"/>
+          </Record>
+        </Annotation>
+      </Annotations>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let set = |n: &str| meta.entity_sets.iter().find(|s| s.name == n).unwrap();
+        assert_eq!(set("DraftAdmin").readable, Some(false));
+        assert_eq!(set("Orders").readable, Some(true));
+    }
+
+    #[test]
+    fn test_v2_sap_addressable_false_marks_entity_set_not_readable() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="1.0" xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx" xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata" xmlns:sap="http://www.sap.com/Protocols/SAPData">
+  <edmx:DataServices m:DataServiceVersion="2.0">
+    <Schema Namespace="S" xmlns="http://schemas.microsoft.com/ado/2008/09/edm">
+      <EntityType Name="OrderType">
+        <Key><PropertyRef Name="ID"/></Key>
+        <Property Name="ID" Type="Edm.String" Nullable="false"/>
+      </EntityType>
+      <EntityContainer Name="S_Entities" m:IsDefaultEntityContainer="true">
+        <EntitySet Name="Orders" EntityType="S.OrderType"/>
+        <EntitySet Name="DraftAdmin" EntityType="S.OrderType" sap:addressable="false"/>
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let meta = parse_metadata(xml).unwrap();
+        let set = |n: &str| meta.entity_sets.iter().find(|s| s.name == n).unwrap();
+        assert_eq!(set("DraftAdmin").readable, Some(false));
+        assert_eq!(set("Orders").readable, None);
     }
 
     #[test]
