@@ -75,6 +75,8 @@ Requests time out instead of hanging: 30 s to connect, and 300 s of silence whil
 
 A single response body is capped at 512 MB, far above any real `$metadata` or result page, so a server or proxy that never stops sending can't exhaust memory. A response over the cap fails with a message naming `SAP_ODATA_MAX_RESPONSE_MB`, which raises it (`0` removes it); for a deliberate bulk read, `--top` / `--select` / a filter usually serve better. The desktop app honours the same variable.
 
+Proxy: `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` / `NO_PROXY` override the system proxy settings, which on Windows include a setup script (PAC) or auto-detection (WPAD). See [Proxy](../README.md#proxy) for the full order and limits.
+
 ## Service path resolution
 
 For commands that need `--service`, the CLI resolves the value in this order:

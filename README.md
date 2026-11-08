@@ -263,6 +263,16 @@ The desktop app also has a **Sign Out** button for Browser SSO profiles. That cl
 
 Sessions still expire server-side. When that happens, the CLI tells you to sign in again from the desktop app. If a profile's `base_url` or `client` changes, any persisted Browser SSO session is treated as stale and discarded automatically (`language` doesn't affect sessions).
 
+## Proxy
+
+The CLI and the desktop app reach the SAP system through the same proxy a browser on the machine would use:
+
+- **Windows:** the proxy setup script (PAC file) or "Automatically detect settings" (WPAD) from the Windows proxy settings, with Windows itself evaluating the script for the SAP host. Without either, the manual proxy from the same settings page.
+- **macOS:** the manual proxy from System Settings. **Linux:** the environment variables below.
+- **Environment variables** win over the system settings: `HTTPS_PROXY` for `https://` systems, `HTTP_PROXY` for `http://` systems, `ALL_PROXY` for both, and `NO_PROXY` for hosts to reach directly. Note that `HTTP_PROXY` alone does not apply to an `https://` system. Restart the desktop app after changing them.
+
+A proxy that wants a logon only works with Basic authentication, with the credentials in the variable (`http://user:password@proxy:8080`); a proxy that authenticates with the Windows logon (NTLM / Kerberos) is not supported, nor are SOCKS proxies. `sap-odata -v` logs which proxy the system lookup picked.
+
 ## Security notes
 
 - **TLS verification** is enabled by default. For self-signed SAP certificates, set `insecure_tls = true` in the profile's `connections.toml`.

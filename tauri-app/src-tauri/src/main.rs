@@ -657,9 +657,10 @@ fn version_triple(v: &str) -> Option<(u64, u64, u64)> {
 /// the request itself; it never runs on its own.
 #[tauri::command]
 async fn check_for_update() -> Result<UpdateInfo, String> {
-    let http = reqwest::Client::builder()
+    let builder = reqwest::Client::builder()
         .user_agent(concat!("sap-odata-explorer/", env!("CARGO_PKG_VERSION")))
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(15));
+    let http = sap_odata_core::proxy::apply_system_proxy(builder, LATEST_RELEASE_API)
         .build()
         .map_err(|e| format!("update check failed: {e}"))?;
     let release: serde_json::Value = http

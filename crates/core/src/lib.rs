@@ -7,6 +7,7 @@ pub mod error;
 pub mod lint;
 pub mod metadata;
 pub mod offline;
+pub mod proxy;
 pub mod query;
 pub mod session;
 pub mod sspi;
