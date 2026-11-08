@@ -49,6 +49,14 @@ connection flags (`--service`/`-s`, `--url`, `--client`, `--language`,
 | `--verbose` | `-v` | — | Enable debug logs and print the full HTTP trace to stderr after the command runs |
 
 CLI flags override environment variables, which override profile values.
+A `--user` other than the profile's user needs `--password` (or
+`SAP_PASSWORD`) as well: the profile's saved password is only sent for the
+profile's own user, never for another user, where it would count as a
+failed logon. To run a request as a business user with a developer profile:
+
+```bash
+SAP_PASSWORD='***' sap-odata -p DEV --user BIZ_USER -s API_BUSINESS_PARTNER run A_BusinessPartner --top 5
+```
 
 ## Environment variables
 
@@ -74,6 +82,8 @@ SAP_ODATA_CONFIG_DIR=./ci-config sap-odata offline list
 Requests time out instead of hanging: 30 s to connect, and 300 s of silence while waiting for (or reading) a response. The read timeout resets on every chunk received, so large downloads that keep streaming are not cut off. `SAP_ODATA_READ_TIMEOUT_SECS` changes it (`0` disables it) — e.g. for a system with a raised ICM processing timeout. The desktop app honours the same variable.
 
 A single response body is capped at 512 MB, far above any real `$metadata` or result page, so a server or proxy that never stops sending can't exhaust memory. A response over the cap fails with a message naming `SAP_ODATA_MAX_RESPONSE_MB`, which raises it (`0` removes it); for a deliberate bulk read, `--top` / `--select` / a filter usually serve better. The desktop app honours the same variable.
+
+Proxy: `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` / `NO_PROXY` override the system proxy settings, which on Windows include a setup script (PAC) or auto-detection (WPAD). See [Proxy](../README.md#proxy) for the full order and limits.
 
 ## Service path resolution
 

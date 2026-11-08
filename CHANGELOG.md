@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fixes
+
+- **The Windows proxy setup script (PAC) and "Automatically detect settings" (WPAD) are honoured** ([#29](https://github.com/kts982/sap-odata-explorer/issues/29)). Only the manual Windows proxy was read, so on a network that hands out its proxy through a PAC file the SAP host failed with "No such host is known" (os error 11001), while a browser on the same machine reached it. Windows now evaluates the script for the SAP host, the same lookup browsers use, and the answer is reused for a minute. `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` still win over the system settings, and a script that can't be fetched falls back to the previous behaviour. Applies to the CLI on Windows, the desktop app, and the desktop app's update check. `-v` logs the proxy the lookup picked. The README has a new [Proxy](README.md#proxy) section with the full order and limits.
+- **`--user` no longer sends the profile's password for another user.** `sap-odata -p DEV --user BIZ_USER` without `--password` sent DEV's saved password for `BIZ_USER`: a failed logon on that account on every run, and enough of them lock it (`login/fails_to_user_lock`). It now asks for `--password` / `SAP_PASSWORD`; the profile's password is still used when `--user` names the profile's own user.
+
 ## [0.2.1] — 2026-11-01
 
 Fixes for macOS and Linux (saved passwords and Browser SSO sessions now persist in the Keychain / Secret Service), for 403 errors, which were reported as failed logons with an SU53 hint, and for `verify` on draft-enabled RAP services, plus trace and parser hardening and a `skill` command for coding agents. `connections.toml`, the offline library and keyring entries are unchanged. Building the CLI on Linux now also needs the D-Bus headers (`libdbus-1-dev`). Binaries remain unsigned.

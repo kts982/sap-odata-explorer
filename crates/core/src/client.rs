@@ -112,6 +112,7 @@ impl SapClient {
         if let Some(timeout) = read_timeout {
             builder = builder.read_timeout(timeout);
         }
+        let builder = crate::proxy::apply_system_proxy(builder, &connection.base_url);
         let http = builder.build()?;
 
         Ok(Self {
