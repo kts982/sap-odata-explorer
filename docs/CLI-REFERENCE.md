@@ -49,6 +49,14 @@ connection flags (`--service`/`-s`, `--url`, `--client`, `--language`,
 | `--verbose` | `-v` | — | Enable debug logs and print the full HTTP trace to stderr after the command runs |
 
 CLI flags override environment variables, which override profile values.
+A `--user` other than the profile's user needs `--password` (or
+`SAP_PASSWORD`) as well: the profile's saved password is only sent for the
+profile's own user, never for another user, where it would count as a
+failed logon. To run a request as a business user with a developer profile:
+
+```bash
+SAP_PASSWORD='***' sap-odata -p DEV --user BIZ_USER -s API_BUSINESS_PARTNER run A_BusinessPartner --top 5
+```
 
 ## Environment variables
 

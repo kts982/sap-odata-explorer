@@ -910,6 +910,42 @@ fn emit_http_trace_entry(entry: &HttpTraceEntry) {
     }
 }
 
+/// Basic-auth username and password: `--user` / `--password` (or
+/// `SAP_USER` / `SAP_PASSWORD`) override the profile's.
+///
+/// The profile's saved password belongs to the profile's user, so it is
+/// only reused when the username is that user. `--user` naming anyone else
+/// needs its own password: sending the profile's would be a failed logon
+/// for that user, and enough of them lock the account
+/// (`login/fails_to_user_lock`). SAP user names are case-insensitive.
+fn basic_credentials(
+    cli_user: Option<&str>,
+    cli_password: Option<&str>,
+    profile: Option<(&str, &str)>,
+) -> Result<(String, String)> {
+    let username = cli_user
+        .or(profile.map(|(user, _)| user))
+        .ok_or_else(|| {
+            anyhow::anyhow!("no username specified. Use --user, SAP_USER env, --profile, or --sso.")
+        })?
+        .to_string();
+
+    if let Some(password) = cli_password {
+        return Ok((username, password.to_string()));
+    }
+    match profile {
+        Some((profile_user, password)) if profile_user.eq_ignore_ascii_case(&username) => {
+            Ok((username, password.to_string()))
+        }
+        Some((profile_user, _)) => anyhow::bail!(
+            "no password for user '{username}'. The profile's saved password is for              '{profile_user}' and is not sent for another user.              Use --password or SAP_PASSWORD env."
+        ),
+        None => anyhow::bail!(
+            "no password specified. Use --password, SAP_PASSWORD env, --profile, or --sso."
+        ),
+    }
+}
+
 /// Resolve connection from profile, env vars, or CLI flags.
 /// Priority: CLI flags > env vars > profile.
 fn resolve_connection(cli: &Cli) -> Result<SapConnection> {
@@ -983,33 +1019,12 @@ fn resolve_connection(cli: &Cli) -> Result<SapConnection> {
         });
     }
 
-    let username = cli
-        .user
-        .clone()
-        .or_else(|| {
-            profile_conn.as_ref().and_then(|c| match &c.auth {
-                AuthConfig::Basic { username, .. } => Some(username.clone()),
-                AuthConfig::Sso | AuthConfig::Browser => None,
-            })
-        })
-        .ok_or_else(|| {
-            anyhow::anyhow!("no username specified. Use --user, SAP_USER env, --profile, or --sso.")
-        })?;
-
-    let password = cli
-        .password
-        .clone()
-        .or_else(|| {
-            profile_conn.as_ref().and_then(|c| match &c.auth {
-                AuthConfig::Basic { password, .. } => Some(password.clone()),
-                AuthConfig::Sso | AuthConfig::Browser => None,
-            })
-        })
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "no password specified. Use --password, SAP_PASSWORD env, --profile, or --sso."
-            )
-        })?;
+    let profile_basic = profile_conn.as_ref().and_then(|c| match &c.auth {
+        AuthConfig::Basic { username, password } => Some((username.as_str(), password.as_str())),
+        AuthConfig::Sso | AuthConfig::Browser => None,
+    });
+    let (username, password) =
+        basic_credentials(cli.user.as_deref(), cli.password.as_deref(), profile_basic)?;
 
     Ok(SapConnection {
         base_url,
@@ -3281,6 +3296,68 @@ fn print_results_table(rows: &[serde_json::Value]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn creds(r: Result<(String, String)>) -> (String, String) {
+        r.unwrap()
+    }
+
+    #[test]
+    fn basic_credentials_default_to_the_profile() {
+        assert_eq!(
+            creds(basic_credentials(None, None, Some(("DEVELOPER", "dev-pw")))),
+            ("DEVELOPER".into(), "dev-pw".into())
+        );
+    }
+
+    #[test]
+    fn basic_credentials_flags_override_the_profile() {
+        assert_eq!(
+            creds(basic_credentials(
+                Some("BIZUSER"),
+                Some("biz-pw"),
+                Some(("DEVELOPER", "dev-pw"))
+            )),
+            ("BIZUSER".into(), "biz-pw".into())
+        );
+        assert_eq!(
+            creds(basic_credentials(
+                None,
+                Some("new-pw"),
+                Some(("DEVELOPER", "dev-pw"))
+            )),
+            ("DEVELOPER".into(), "new-pw".into())
+        );
+    }
+
+    /// `--user` for someone else must not send the profile user's password:
+    /// each such run would be a failed logon for that user.
+    #[test]
+    fn basic_credentials_never_send_the_profile_password_for_another_user() {
+        let err = basic_credentials(Some("BIZUSER"), None, Some(("DEVELOPER", "dev-pw")))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("BIZUSER"), "{err}");
+        assert!(err.contains("--password"), "{err}");
+        assert!(!err.contains("dev-pw"), "{err}");
+    }
+
+    #[test]
+    fn basic_credentials_reuse_the_profile_password_for_the_same_user_any_case() {
+        assert_eq!(
+            creds(basic_credentials(
+                Some("developer"),
+                None,
+                Some(("DEVELOPER", "dev-pw"))
+            )),
+            ("developer".into(), "dev-pw".into())
+        );
+    }
+
+    #[test]
+    fn basic_credentials_without_profile_need_both_flags() {
+        assert!(basic_credentials(Some("BIZUSER"), None, None).is_err());
+        assert!(basic_credentials(None, Some("pw"), None).is_err());
+    }
 
     /// The embedded skill is a copy of the repo's canonical one. When this
     /// fails, copy `skills/sap-odata-cli/SKILL.md` over
