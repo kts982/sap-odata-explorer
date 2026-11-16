@@ -938,7 +938,7 @@ fn basic_credentials(
             Ok((username, password.to_string()))
         }
         Some((profile_user, _)) => anyhow::bail!(
-            "no password for user '{username}'. The profile's saved password is for              '{profile_user}' and is not sent for another user.              Use --password or SAP_PASSWORD env."
+            "no password for user '{username}'. The profile's saved password is for '{profile_user}' and is not sent for another user. Use --password or SAP_PASSWORD env."
         ),
         None => anyhow::bail!(
             "no password specified. Use --password, SAP_PASSWORD env, --profile, or --sso."
@@ -3339,6 +3339,7 @@ mod tests {
         assert!(err.contains("BIZUSER"), "{err}");
         assert!(err.contains("--password"), "{err}");
         assert!(!err.contains("dev-pw"), "{err}");
+        assert!(!err.contains("  "), "stray whitespace: {err:?}");
     }
 
     #[test]
