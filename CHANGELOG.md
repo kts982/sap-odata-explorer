@@ -2,7 +2,9 @@
 
 All notable changes to this project are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.2.2] — 2026-11-16
+
+The desktop app can read one entity by key, and three fixes that came out of the first user reports: the Windows proxy setup script (PAC) is honoured, a 404 shows SAP's own message instead of "service not found", and `--user` no longer sends the profile's password for another user. `connections.toml`, the offline library and keyring entries are unchanged. Binaries remain unsigned.
 
 ### Added
 
