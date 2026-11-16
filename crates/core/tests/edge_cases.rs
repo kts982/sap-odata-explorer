@@ -186,6 +186,41 @@ async fn http_404_surfaces_as_service_not_found() {
     );
 }
 
+#[tokio::test]
+async fn read_by_unknown_key_reports_saps_message_not_a_missing_service() {
+    // SAP Gateway's 404 for a key no entity has. The service answered, so
+    // the error must carry SAP's message and no guess about the path.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(SERVICE_PATH))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{SERVICE_PATH}/Currencies('ZZZ')")))
+        .respond_with(ResponseTemplate::new(404).set_body_raw(
+            r#"{"error":{"code":"/IWBEP/CM_MGW_RT/020","message":{"lang":"en","value":"Resource not found for segment 'CurrencyType'"}}}"#,
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
+    let client = common::basic_client(&server);
+    let query = sap_odata_core::query::ODataQuery::new("Currencies").key("'ZZZ'");
+    let err = client.query_json(SERVICE_PATH, &query).await.unwrap_err();
+    assert!(
+        !matches!(err, ODataError::ServiceNotFound(_)),
+        "the service was found: {err:?}"
+    );
+    let msg = err.to_string();
+    assert!(msg.starts_with("server returned 404 Not Found"), "{msg}");
+    assert!(
+        msg.contains("SAP error: Resource not found for segment 'CurrencyType'"),
+        "{msg}"
+    );
+    assert!(!msg.contains("may be wrong"), "{msg}");
+}
+
 // ── Malformed metadata ────────────────────────────────────────────────────
 
 #[tokio::test]

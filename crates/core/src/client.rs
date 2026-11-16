@@ -633,6 +633,33 @@ fn is_unknown_service_403(status: StatusCode, body: &str) -> bool {
         && extract_sap_error(body).is_some_and(|m| m.contains("No service found for namespace"))
 }
 
+/// SAP Gateway's answer to a V4 path whose service group is not published
+/// on the system: 404 "Service group '…' not published".
+const V4_GROUP_NOT_PUBLISHED: &str = "/IWBEP/CM_V4_COS/014";
+
+/// A 404 from the OData runtime of a service: it carries an OData error
+/// whose message names what was not found (the entity for a key, an
+/// entity set). That is not "service not found". A 404 without an OData
+/// error (an ICF error page, a proxy) is, and so are the two answers in
+/// which SAP's message says the service itself is missing.
+fn is_resource_404(status: StatusCode, body: &str) -> bool {
+    status == StatusCode::NOT_FOUND
+        && extract_sap_error(body).is_some_and(|m| !m.contains("No service found for namespace"))
+        && extract_sap_error_code(body).as_deref() != Some(V4_GROUP_NOT_PUBLISHED)
+}
+
+/// Append SAP's message, and the further messages of a V4 error, to an
+/// error text.
+fn push_sap_error(detail: &mut String, body: &str) {
+    let Some(msg) = extract_sap_error(body) else {
+        return;
+    };
+    detail.push_str(&format!("\n  SAP error: {msg}"));
+    for extra in extract_sap_error_details(body, &msg) {
+        detail.push_str(&format!("\n  SAP detail: {extra}"));
+    }
+}
+
 fn response_error(
     status: StatusCode,
     url: &str,
@@ -640,17 +667,15 @@ fn response_error(
     body: &str,
     auth: &AuthConfig,
 ) -> ODataError {
-    if status == StatusCode::NOT_FOUND || is_unknown_service_403(status, body) {
+    if (status == StatusCode::NOT_FOUND && !is_resource_404(status, body))
+        || is_unknown_service_403(status, body)
+    {
         let path = url::Url::parse(url)
             .ok()
             .map(|parsed| parsed.path().to_string())
             .unwrap_or_else(|| url.to_string());
         let mut detail = path;
-        if status == StatusCode::FORBIDDEN
-            && let Some(msg) = extract_sap_error(body)
-        {
-            detail.push_str(&format!("\n  SAP error: {msg}"));
-        }
+        push_sap_error(&mut detail, body);
         if let Some(hint) = response_hint(status, url, content_type, body, auth) {
             detail.push_str(&format!("\n  Hint: {hint}"));
         }
@@ -669,9 +694,7 @@ fn response_error(
     }
 
     let mut detail = format!("server returned {status}");
-    if let Some(msg) = extract_sap_error(body) {
-        detail.push_str(&format!("\n  SAP error: {msg}"));
-    }
+    push_sap_error(&mut detail, body);
     if let Some(hint) = response_hint(status, url, content_type, body, auth) {
         detail.push_str(&format!("\n  Hint: {hint}"));
     }
@@ -686,9 +709,7 @@ fn auth_error_detail(
     auth: &AuthConfig,
 ) -> String {
     let mut detail = format!("server returned {status}");
-    if let Some(msg) = extract_sap_error(body) {
-        detail.push_str(&format!("\n  SAP error: {msg}"));
-    }
+    push_sap_error(&mut detail, body);
     if let Some(hint) = response_hint(status, url, content_type, body, auth) {
         detail.push_str(&format!("\n  Hint: {hint}"));
     }
@@ -726,13 +747,27 @@ pub fn response_hint(
                     .to_string(),
             );
         }
-        if path.contains("/sap/opu/odata4") {
+        if extract_sap_error_code(body).as_deref() == Some(V4_GROUP_NOT_PUBLISHED) {
+            return Some(
+                "SAP Gateway has no published V4 service group under this path. Check the path (`services` lists the published V4 services), or publish the group in /IWFND/V4_ADMIN."
+                    .to_string(),
+            );
+        }
+        if is_resource_404(status, body) {
+            // SAP's message says what it did not find. Add only what that
+            // message proves; the path-based guesses below are for a 404
+            // that carries no message.
+            if let Some(name) = segment_named_not_found(url, body) {
+                return Some(format!(
+                    "The service has nothing named '{name}'. `entities -s <svc>` lists its entity sets."
+                ));
+            }
+        } else if path.contains("/sap/opu/odata4") {
             return Some(
                 "V4 OData lookup failed. The service path may be wrong, the entity set may not exist on this service (`entities -s <svc>` lists valid sets), or the V4 catalog SICF node may be unpublished on this system — try pasting the full /sap/opu/odata4/<vendor>/<svc>/<version>/ path instead of the short name. Use `services` to list what's exposed."
                     .to_string(),
             );
-        }
-        if path.contains("/sap/opu/odata") || path.contains("/$metadata") {
+        } else if path.contains("/sap/opu/odata") || path.contains("/$metadata") {
             return Some(
                 "The OData service path may be wrong, inactive, or not registered in /IWFND/MAINT_SERVICE. If the service exists, the entity set name may not — use `entities -s <svc>` to list valid sets."
                     .to_string(),
@@ -814,14 +849,32 @@ pub fn response_hint(
         && !status.is_success()
         && let Some(code) = extract_sap_error_code(body)
     {
-        if !code.contains('/') && code.starts_with("CX_") {
+        if let Some((class, text_id)) = code.rsplit_once('/')
+            && is_exception_text_id(text_id)
+        {
+            // `<exception class>/<text id>`, as the Gateway core sends it
+            // (/IWCOR/CX_OD_URI_SYNTAX_ERROR/005056A5…): not a T100 message.
+            if class
+                .rsplit('/')
+                .next()
+                .is_some_and(|name| name.starts_with("CX_"))
+            {
+                return Some(format!(
+                    "SAP error code {code} is exception class {class} with a text id. SE24 (or ADT) shows the class's texts and where it is raised."
+                ));
+            }
+        } else if is_exception_text_id(&code) {
+            // A text id alone names neither a message nor a class: there
+            // is nothing to look up, so no pointer.
+        } else if !code.contains('/') && code.starts_with("CX_") {
             return Some(format!(
                 "SAP error code {code} is an exception class. SE24 (or ADT) shows its texts and where it is raised."
             ));
+        } else {
+            return Some(format!(
+                "SAP error code {code}. Look the message up in SE91 (or your IDE's SAP message viewer) for the full text and where-used."
+            ));
         }
-        return Some(format!(
-            "SAP error code {code}. Look the message up in SE91 (or your IDE's SAP message viewer) for the full text and where-used."
-        ));
     }
 
     if status.is_server_error() {
@@ -840,6 +893,63 @@ pub fn response_hint(
     }
 
     None
+}
+
+/// The 32-digit hex id of an exception class text. SAP Gateway sends it as
+/// the error code, alone or after the class name.
+fn is_exception_text_id(s: &str) -> bool {
+    s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// The last path segment of a request without a key, when SAP's 404
+/// message names it as what was not found ("Resource not found for
+/// segment 'X'"). With a key in the path the message names an entity
+/// type instead, so nothing is returned.
+fn segment_named_not_found(url: &str, body: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    let path = parsed.path();
+    if path.contains('(') {
+        return None;
+    }
+    let segment = path.trim_end_matches('/').rsplit('/').next()?;
+    if segment.is_empty() || segment.starts_with('$') {
+        return None;
+    }
+    extract_sap_error(body)?
+        .contains(&format!("'{segment}'"))
+        .then(|| segment.to_string())
+}
+
+/// Further messages of a V4 error (`error.details[].message`) that say
+/// something the main message does not. SAP wraps a provider's exception
+/// in a generic main message ("Unspecified provider error occurred. See
+/// Error Context and Call Stack.") and puts the actual one here.
+fn extract_sap_error_details(body: &str, main: &str) -> Vec<String> {
+    const MAX_DETAILS: usize = 3;
+    let mut out: Vec<String> = Vec::new();
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
+        return out;
+    };
+    let Some(details) = json
+        .get("error")
+        .and_then(|e| e.get("details"))
+        .and_then(|d| d.as_array())
+    else {
+        return out;
+    };
+    for entry in details {
+        let Some(text) = entry.get("message").and_then(|m| m.as_str()).map(str::trim) else {
+            continue;
+        };
+        if text.is_empty() || text == main || out.iter().any(|seen| seen == text) {
+            continue;
+        }
+        out.push(text.to_string());
+        if out.len() == MAX_DETAILS {
+            break;
+        }
+    }
+    out
 }
 
 /// Try to extract a SAP message code (e.g. `SY/530`, `/IWBEP/CM_MGW_BUSI/107`)
@@ -1174,6 +1284,163 @@ mod tests {
         .expect("expected a hint");
         assert!(h.contains("SY/530"));
         assert!(h.contains("SE91"));
+    }
+
+    // SAP Gateway's 404 answers, as an ABAP 2025 system sends them.
+    const V2_UNKNOWN_KEY: &str = r#"{"error":{"code":"/IWBEP/CM_MGW_RT/020","message":{"lang":"en","value":"Resource not found for segment 'I_CurrencyType'"},"innererror":{"errordetails":[{"code":"/IWBEP/CX_MGW_BUSI_EXCEPTION","message":"Resource not found for segment 'I_CurrencyType'","severity":"error"}]}}}"#;
+    const V4_UNKNOWN_KEY: &str = r#"{"error":{"code":"/IWBEP/CM_V4S_RUN/000","message":"Unspecified provider error occurred. See Error Context and Call Stack.","details":[{"code":"CX_SADL_CONTRACT_VIOLATION","message":"Resource not found for entity '/DMO/I_CARRIER_STDVH'"}]}}"#;
+    const V4_UNKNOWN_SET: &str = r#"{"error":{"code":"/IWCOR/CX_OD_URI_NOT_MATCHING/005056A509B11EE38DCB75E2A43B5206","message":"Resource not found for segment 'NoSuchSet'"}}"#;
+    const V2_UNKNOWN_SET: &str = r#"{"error":{"code":"005056A509B11EE1B9A8FEC11C21D78E","message":{"lang":"en","value":"Resource not found for the segment 'NoSuchSet'."}}}"#;
+    const V4_GROUP_UNPUBLISHED: &str = r#"{"error":{"code":"/IWBEP/CM_V4_COS/014","message":"Service group '/DMO/UI_NOSUCH_O4' not published"}}"#;
+
+    fn hint_404(url: &str, body: &str) -> Option<String> {
+        response_hint(
+            StatusCode::NOT_FOUND,
+            url,
+            Some("application/json"),
+            body,
+            &basic_auth(),
+        )
+    }
+
+    #[test]
+    fn unknown_key_404_is_not_a_missing_service() {
+        for (url, body) in [
+            (
+                "https://example.com/sap/opu/odata/sap/ZMY_SVC/I_Currency('ZZZ')",
+                V2_UNKNOWN_KEY,
+            ),
+            (
+                "https://example.com/sap/opu/odata4/x/y/srvd/x/y/0001/Airline('ZZZ')",
+                V4_UNKNOWN_KEY,
+            ),
+        ] {
+            let err = response_error(
+                StatusCode::NOT_FOUND,
+                url,
+                Some("application/json"),
+                body,
+                &basic_auth(),
+            );
+            assert!(matches!(err, ODataError::ResponseParse(_)), "got {err:?}");
+            let msg = err.to_string();
+            assert!(msg.starts_with("server returned 404 Not Found"), "{msg}");
+            assert!(msg.contains("Resource not found for"), "{msg}");
+            // SAP answered for the service: no guess about its path.
+            assert!(!msg.contains("may be wrong"), "{msg}");
+            assert!(!msg.contains("SICF"), "{msg}");
+            assert!(!msg.contains("entities -s"), "{msg}");
+        }
+    }
+
+    #[test]
+    fn v4_error_details_follow_the_main_message() {
+        let mut detail = String::new();
+        push_sap_error(&mut detail, V4_UNKNOWN_KEY);
+        assert_eq!(
+            detail,
+            "\n  SAP error: Unspecified provider error occurred. See Error Context and Call Stack.\
+             \n  SAP detail: Resource not found for entity '/DMO/I_CARRIER_STDVH'"
+        );
+    }
+
+    #[test]
+    fn error_details_skip_repeats_of_the_main_message() {
+        let body = r#"{"error":{"code":"X/1","message":"Main","details":[
+            {"message":"Main"},{"message":" "},{"message":"A"},{"message":"A"},
+            {"message":"B"},{"message":"C"},{"message":"D"}
+        ]}}"#;
+        assert_eq!(extract_sap_error_details(body, "Main"), ["A", "B", "C"]);
+        // The main message taken from `details` is not repeated either.
+        let body = r#"{"error":{"code":"X/1","message":"","details":[{"message":"Only"}]}}"#;
+        let main = extract_sap_error(body).unwrap();
+        assert!(extract_sap_error_details(body, &main).is_empty());
+    }
+
+    #[test]
+    fn hint_404_unknown_entity_set_names_it() {
+        for (url, body) in [
+            (
+                "https://example.com/sap/opu/odata4/x/y/srvd/x/y/0001/NoSuchSet?$top=1",
+                V4_UNKNOWN_SET,
+            ),
+            (
+                "https://example.com/sap/opu/odata/sap/ZMY_SVC/NoSuchSet?$top=1",
+                V2_UNKNOWN_SET,
+            ),
+        ] {
+            let h = hint_404(url, body).expect("expected a hint");
+            assert!(h.contains("'NoSuchSet'"), "{h}");
+            assert!(h.contains("entities -s"), "{h}");
+            assert!(!h.contains("SICF"), "{h}");
+        }
+    }
+
+    #[test]
+    fn hint_404_with_a_key_does_not_point_at_entity_sets() {
+        // SAP names the entity type here, not the set: an entity set and
+        // its type can share a name, so a key in the path rules the
+        // entity-set pointer out.
+        let body = r#"{"error":{"code":"/IWBEP/CM_MGW_RT/020","message":{"lang":"en","value":"Resource not found for segment 'Header'"}}}"#;
+        let h = hint_404(
+            "https://example.com/sap/opu/odata/sap/ZMY_SVC/Header('1')",
+            body,
+        )
+        .expect("expected the message pointer");
+        assert!(h.contains("/IWBEP/CM_MGW_RT/020"), "{h}");
+        assert!(h.contains("SE91"), "{h}");
+        assert!(!h.contains("entities -s"), "{h}");
+    }
+
+    #[test]
+    fn unpublished_v4_service_group_is_a_missing_service() {
+        let url =
+            "https://example.com/sap/opu/odata4/dmo/ui_nosuch_o4/srvd/dmo/ui_nosuch/0001/$metadata";
+        let err = response_error(
+            StatusCode::NOT_FOUND,
+            url,
+            Some("application/json"),
+            V4_GROUP_UNPUBLISHED,
+            &basic_auth(),
+        );
+        assert!(matches!(err, ODataError::ServiceNotFound(_)), "got {err:?}");
+        let msg = err.to_string();
+        assert!(msg.contains("SAP error: Service group"), "{msg}");
+        assert!(msg.contains("/IWFND/V4_ADMIN"), "{msg}");
+        assert!(msg.contains("`services`"), "{msg}");
+    }
+
+    #[test]
+    fn hint_exception_class_with_text_id_points_at_se24() {
+        let body = r#"{"error":{"code":"/IWCOR/CX_OD_URI_SYNTAX_ERROR/005056A509B11ED2BDA62D39CDEF40FD","message":"Text hidden for information disclosure."}}"#;
+        let h = response_hint(
+            StatusCode::BAD_REQUEST,
+            "https://example.com/sap/opu/odata4/x/y/srvd/x/y/0001/Airline('AA')?$top=5",
+            Some("application/json"),
+            body,
+            &basic_auth(),
+        )
+        .expect("expected a hint");
+        assert!(
+            h.contains("exception class /IWCOR/CX_OD_URI_SYNTAX_ERROR "),
+            "{h}"
+        );
+        assert!(h.contains("SE24"), "{h}");
+        assert!(!h.contains("SE91"), "{h}");
+    }
+
+    #[test]
+    fn bare_text_id_code_gets_no_lookup_pointer() {
+        // V2 sends the exception text id alone: SE91 has nothing under it.
+        let body = r#"{"error":{"code":"005056A509B11EE1B9A8FEC11C23378E","message":{"lang":"en","value":"System query options '$orderby,$skip,$top,$skiptoken,$inlinecount' are not allowed in the requested URI"}}}"#;
+        let h = response_hint(
+            StatusCode::BAD_REQUEST,
+            "https://example.com/sap/opu/odata/sap/ZMY_SVC/I_Currency('EUR')?$top=5",
+            Some("application/json"),
+            body,
+            &basic_auth(),
+        );
+        assert_eq!(h, None);
     }
 
     #[test]
