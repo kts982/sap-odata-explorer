@@ -120,14 +120,17 @@ export async function executeQuery(asJson = false, opts = {}) {
     }
   } catch (e) {
     if (!scope.active()) return;
-    setStatus('Query error: ' + e);
+    // The backend's message already starts with "Query error:". The status
+    // bar takes its first line; the whole text goes into the results area.
+    const text = String(e);
+    setStatus((text.startsWith('Query error: ') ? text : 'Query error: ' + text).split('\n')[0]);
     hideStatsBar();
     clearQueryResultCache(getActiveTab());
     state.expandedDataStore = {};
     state.lastResultRows = null;
     const message = isBrowserAuthProfile(state.currentProfile) ? browserAuthMessage(e) : String(e);
     document.getElementById('resultsArea').innerHTML =
-      safeHtml`<div class="p-4 text-ox-red text-sm">${message}</div>`;
+      safeHtml`<div class="p-4 text-ox-red text-sm whitespace-pre-wrap">${message}</div>`;
   }
 }
 
