@@ -6,6 +6,8 @@
 //   $filter            — property names and functions; comparison
 //                        operators after a property; and / or after a
 //                        value. Nothing inside a string literal.
+//   key                — for a composite key, the key property names
+//                        still missing (`Name=`).
 // The token at the caret is replaced on accept. Arrow keys move, Enter /
 // Tab accept, Escape closes; Ctrl+Enter still runs the query. Names and
 // labels come from SAP metadata, so every row is built with safeHtml.
@@ -19,7 +21,7 @@ import { getActiveTab, currentDescribeInfo } from './tabs.js';
 import { serviceODataVersion } from './format.js';
 import { suggestionsFor } from './suggest.js';
 
-const FIELD_MODES = { qSelect: 'select', qFilter: 'filter', qOrderby: 'orderby', qExpand: 'expand' };
+const FIELD_MODES = { qKey: 'key', qSelect: 'select', qFilter: 'filter', qOrderby: 'orderby', qExpand: 'expand' };
 
 // ── DOM wiring ──
 

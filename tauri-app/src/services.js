@@ -495,6 +495,7 @@ export async function selectEntity(entitySetName, element) {
   document.getElementById('queryBar').classList.remove('hidden');
   document.getElementById('queryEntitySet').textContent = entitySetName;
 
+  document.getElementById('qKey').value = '';
   document.getElementById('qSelect').value = '';
   document.getElementById('qFilter').value = '';
   document.getElementById('qExpand').value = '';

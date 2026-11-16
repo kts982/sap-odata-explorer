@@ -52,6 +52,23 @@ export function suggestionsFor(mode, text, caret, info, version) {
   const props = new Set((info.properties || []).map(p => p.name));
   const withInsert = (list, suffix = '') => list.map(c => ({ ...c, insert: c.value + (c.value.endsWith('(') || c.value.endsWith(' ') ? '' : suffix) }));
 
+  if (mode === 'key') {
+    // Composite keys only (`Name=value,Name=value`). A single key is
+    // written as the bare value, where a name suggestion would get in the
+    // way of typing it.
+    const keys = Array.isArray(info.keys) ? info.keys : [];
+    if (keys.length < 2) return none;
+    // Not inside an open string literal, and only where a name starts:
+    // at the beginning or after a comma.
+    if ((before.match(/'/g) || []).length % 2 === 1) return none;
+    if (!/(^|,)\s*$/.test(before.slice(0, from))) return none;
+    const used = new Set((text.match(/[A-Za-z_]\w*(?=\s*=)/g) || []));
+    const byName = new Map(propertyCandidates(info).map(c => [c.value, c]));
+    const missing = keys.filter(k => !used.has(k)).map(k => byName.get(k) || { value: k, detail: 'key' });
+    // Keep an `=` that is already there (editing a name in place).
+    const suffix = text.slice(to).startsWith('=') ? '' : '=';
+    return { from, to, items: withInsert(rank(missing, word), suffix) };
+  }
   if (mode === 'expand') {
     return { from, to, items: withInsert(rank(navCandidates(info), word)) };
   }

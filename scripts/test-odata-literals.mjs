@@ -23,7 +23,9 @@ const { formatODataLiteral, containsClause, serviceODataVersion, shellArg, build
 );
 
 let failures = 0;
+let count = 0;
 function check(label, actual, expected) {
+  count++;
   if (JSON.stringify(actual) === JSON.stringify(expected)) {
     console.log(`ok    ${label}`);
   } else {
@@ -152,6 +154,102 @@ check('V2 GUID key prefixed', keyPredicate(['StockItemUUID'], guidRow, types, 'V
 check('string key quoted and escaped', keyPredicate(['Product'], guidRow, types, 'V4'), "Product='O''Brien'");
 check('missing key value → null', keyPredicate(['Missing'], guidRow, types, 'V4'), null);
 
+// Query-bar key field: read one entity by key.
+const { normalizeEntityKey, effectiveQueryParams, encodeKeyPath, buildQueryUrl } = await import(
+  `file://${FORMAT_MODULE.replace(/\\/g, '/')}`
+);
+const person = { keys: ['UserName'], properties: [{ name: 'UserName', edm_type: 'Edm.String' }] };
+const item = {
+  keys: ['SalesOrder', 'Item'],
+  properties: [{ name: 'SalesOrder', edm_type: 'Edm.String' }, { name: 'Item', edm_type: 'Edm.String' }],
+};
+const byGuid = { keys: ['ID'], properties: [{ name: 'ID', edm_type: 'Edm.Guid' }] };
+const byNumber = { keys: ['ID'], properties: [{ name: 'ID', edm_type: 'Edm.Int32' }] };
+const key = (input, info, version = 'V4', set = 'People') => normalizeEntityKey(input, info, set, version);
+check('key: empty field → list read', [key('', person), key('   ', person), key('()', person)], [null, null, null]);
+check('key: quoted string passes through', key("'russellwhyte'", person), "'russellwhyte'");
+check('key: plain value of a single string key is quoted', key('russellwhyte', person), "'russellwhyte'");
+check('key: leading zeros survive as a string', key('0000004711', person), "'0000004711'");
+check('key: apostrophe in a plain value is doubled', key("O'Brien", person), "'O''Brien'");
+check('key: name=value stays as typed', key("UserName='russellwhyte'", person), "UserName='russellwhyte'");
+check('key: pasted EntitySet(…) loses the wrapper', key("People('russellwhyte')", person), "'russellwhyte'");
+check('key: pasted (…) loses the parentheses', key("('russellwhyte')", person), "'russellwhyte'");
+check('key: composite key is sent as typed', key("SalesOrder='1',Item='10'", item), "SalesOrder='1',Item='10'");
+check('key: composite key is never guessed', key('1,10', item), '1,10');
+check(
+  'key: V2 GUID gets its prefix, V4 stays bare',
+  [
+    key('005056a2-1234-1edb-8000-000000000001', byGuid, 'V2'),
+    key("guid'005056a2-1234-1edb-8000-000000000001'", byGuid, 'V2'),
+    key('005056a2-1234-1edb-8000-000000000001', byGuid, 'V4'),
+  ],
+  [
+    "guid'005056a2-1234-1edb-8000-000000000001'",
+    "guid'005056a2-1234-1edb-8000-000000000001'",
+    '005056a2-1234-1edb-8000-000000000001',
+  ],
+);
+check('key: numbers and V2 suffixes are sent as typed', [key('42', byNumber), key('42L', byNumber, 'V2')], ['42', '42L']);
+check('key: no describe info → as typed', key('russellwhyte', null), 'russellwhyte');
+check('key: normalizing twice changes nothing', key(key('russellwhyte', person), person), "'russellwhyte'");
+
+const listParams = {
+  entity_set: 'People',
+  key: null,
+  select: 'UserName',
+  filter: "City eq 'X'",
+  expand: 'Trips',
+  orderby: 'UserName',
+  top: 20,
+  skip: 40,
+  count: true,
+  skiptoken: 'abc',
+};
+check('no key: the list options are untouched', effectiveQueryParams(listParams), listParams);
+check(
+  'key: only $select and $expand are sent',
+  effectiveQueryParams({ ...listParams, key: "'russellwhyte'" }),
+  {
+    entity_set: 'People',
+    key: "'russellwhyte'",
+    select: 'UserName',
+    filter: null,
+    expand: 'Trips',
+    orderby: null,
+    top: null,
+    skip: null,
+    count: false,
+    skiptoken: null,
+  },
+);
+
+// Same encoding as the request: the test_key_* cases in crates/core/src/query.rs.
+check('key path: space', encodeKeyPath("'A B'"), "'A%20B'");
+check('key path: doubled apostrophe', encodeKeyPath("'O''Brien'"), "'O''Brien'");
+check('key path: slash', encodeKeyPath("'A/B'"), "'A%2FB'");
+check('key path: composite delimiters', encodeKeyPath("SalesOrder='A 1',Item=10"), "SalesOrder='A%201',Item=10");
+check('key path: ? # &', encodeKeyPath("'a?b#c&d'"), "'a%3Fb%23c%26d'");
+check('key path: non-ASCII', encodeKeyPath("'München'"), "'M%C3%BCnchen'");
+check('key path: percent', encodeKeyPath("'A%20B'"), "'A%2520B'");
+check('key path: ! * ( )', encodeKeyPath("'a!b*c(d)'"), "'a%21b%2Ac%28d%29'");
+
+check(
+  'copy URL: key read',
+  buildQueryUrl('/sap/opu/odata4/x/0001', { ...listParams, key: "'russell whyte'" }),
+  "/sap/opu/odata4/x/0001/People('russell%20whyte')?$select=UserName&$expand=Trips",
+);
+check(
+  'copy URL: list read',
+  buildQueryUrl('/sap/opu/odata/sap/ZSRV', { entity_set: 'Orders', key: null, filter: "Status eq 'OPEN'", top: 5 }),
+  "/sap/opu/odata/sap/ZSRV/Orders?$filter=Status%20eq%20'OPEN'&$top=5",
+);
+check('copy URL: no service', buildQueryUrl(null, listParams), '');
+check(
+  'copy CLI: key read',
+  buildCliCommand('DEV', '/sap/opu/odata4/x/0001', { ...listParams, key: "'russellwhyte'" }),
+  `sap-odata -p DEV -s /sap/opu/odata4/x/0001 run People --key "'russellwhyte'" --select UserName --expand Trips`,
+);
+
 // "copy for AI" markdown.
 const { describeAsMarkdown } = await import(`file://${FORMAT_MODULE.replace(/\\/g, '/')}`);
 const md = describeAsMarkdown(
@@ -183,5 +281,5 @@ check('markdown: system fields skipped', md.includes('SAP__Messages'), false);
 check('markdown: navigation + annotations', [md.includes('_Items → ItemType (*)'), md.includes('Default sort: ID desc'), md.includes('Capabilities: no $count')], [true, true, true]);
 check('markdown: lint findings without the profile banner', [md.includes('- warn text_missing'), md.includes('profile:')], [true, false]);
 
-console.log(failures ? `\n${failures} failure(s)` : `\nall ${cases.length + 32} assertions passed`);
+console.log(failures ? `\n${failures} failure(s)` : `\nall ${count} assertions passed`);
 process.exit(failures ? 1 : 0);

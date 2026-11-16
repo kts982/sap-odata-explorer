@@ -6,9 +6,11 @@
 // off to renderResults / renderJson for the visible output, and
 // records the run in the per-tab history.
 //
-// `buildODataUrl` is consumed by the "Copy URL" feature in app.js's
-// click delegate. `showStatsBar` / `hideStatsBar` / `formatBytes` are
-// the bottom-bar stats helpers.
+// `readQueryParams` turns the query bar into request parameters; Run,
+// "copy URL" and "copy CLI" all read it, so the three agree on what a
+// filled key field means. `buildODataUrl` is consumed by the "Copy URL"
+// feature in app.js's click delegate. `showStatsBar` / `hideStatsBar` /
+// `formatBytes` are the bottom-bar stats helpers.
 //
 // All imports flow downward — no circular back to app.js.
 
@@ -22,39 +24,52 @@ import { isBrowserAuthProfile, browserAuthMessage } from './auth.js';
 import { addToHistory } from './history.js';
 import { renderJson, renderResults, extractRows } from './results.js';
 import { cacheQueryResult, clearQueryResultCache } from './resultCache.js';
+import {
+  normalizeEntityKey,
+  effectiveQueryParams,
+  buildQueryUrl,
+  serviceODataVersion,
+} from './format.js';
 
 export function buildODataUrl(params) {
-  if (!state.currentServicePath || !params) return '';
-  const parts = [];
-  if (params.select)  parts.push(`$select=${encodeURIComponent(params.select)}`);
-  if (params.filter)  parts.push(`$filter=${encodeURIComponent(params.filter)}`);
-  if (params.expand)  parts.push(`$expand=${encodeURIComponent(params.expand)}`);
-  if (params.orderby) parts.push(`$orderby=${encodeURIComponent(params.orderby)}`);
-  if (params.top)     parts.push(`$top=${params.top}`);
-  if (params.skip)    parts.push(`$skip=${params.skip}`);
-  const qs = parts.length ? '?' + parts.join('&') : '';
-  return `${state.currentServicePath}/${params.entity_set}${qs}`;
+  return buildQueryUrl(state.currentServicePath, params);
 }
 
-// `opts.skiptoken` follows a server-driven next link (pager "next").
+// The query bar as request parameters. With a key the request reads one
+// entity: the list options keep their values in the bar but are not sent
+// (see effectiveQueryParams). `opts.skiptoken` follows a server-driven
+// next link (pager "next").
+export function readQueryParams(opts = {}) {
+  const tab = getActiveTab();
+  const value = id => document.getElementById(id).value;
+  return effectiveQueryParams({
+    entity_set: state.currentEntitySet,
+    key: normalizeEntityKey(
+      value('qKey'),
+      currentDescribeInfo(tab),
+      state.currentEntitySet,
+      serviceODataVersion(tab),
+    ),
+    select:  value('qSelect')  || null,
+    filter:  value('qFilter')  || null,
+    expand:  value('qExpand')  || null,
+    orderby: value('qOrderby') || null,
+    top:     parseInt(value('qTop'))  || null,
+    skip:    parseInt(value('qSkip')) || null,
+    count:   document.getElementById('qCount').checked,
+    skiptoken: opts.skiptoken || null,
+  });
+}
+
 export async function executeQuery(asJson = false, opts = {}) {
   if (!state.currentProfile || !state.currentServicePath || !state.currentEntitySet) {
     setStatus('Select a profile, service, and entity set first');
     return;
   }
 
-  const params = {
-    entity_set: state.currentEntitySet,
-    select:  document.getElementById('qSelect').value  || null,
-    filter:  document.getElementById('qFilter').value  || null,
-    expand:  document.getElementById('qExpand').value  || null,
-    orderby: document.getElementById('qOrderby').value || null,
-    top:     parseInt(document.getElementById('qTop').value)  || null,
-    skip:    parseInt(document.getElementById('qSkip').value) || null,
-    key:     null,
-    count:   document.getElementById('qCount').checked,
-    skiptoken: opts.skiptoken || null,
-  };
+  const params = readQueryParams(opts);
+  // Show the key as it is sent (a plain value may have been quoted).
+  if (params.key) document.getElementById('qKey').value = params.key;
 
   // SAP View pre-flight: when enabled, surface restriction warnings
   // without blocking. Annotations describe what Fiori would do; SAP
@@ -72,7 +87,9 @@ export async function executeQuery(asJson = false, opts = {}) {
     showSapViewWarnings([]);
   }
 
-  setStatus(`Querying ${state.currentEntitySet}...`);
+  setStatus(params.key
+    ? `Reading ${state.currentEntitySet}(${params.key})...`
+    : `Querying ${state.currentEntitySet}...`);
   const queryStart = performance.now();
   const scope = tabScope('query');
 

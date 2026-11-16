@@ -123,7 +123,8 @@ export function validateQueryRestrictions(params, info) {
   }
 
   // required_in_filter: these properties MUST be narrowed in $filter.
-  const required = info.properties.filter(p => p.required_in_filter === true);
+  // Not for a read by key: it sends no $filter and addresses one entity.
+  const required = params.key ? [] : info.properties.filter(p => p.required_in_filter === true);
   if (required.length) {
     const tokens = new Set(extractIdentifiers(params.filter || ''));
     for (const p of required) {

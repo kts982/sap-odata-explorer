@@ -22,7 +22,7 @@ import { selectEntity } from './services.js';
 import { setStatus } from './status.js';
 
 const MAX_UNPINNED = 50;
-const STORED_PARAMS = ['select', 'filter', 'expand', 'orderby', 'top', 'skip', 'count', 'skiptoken'];
+const STORED_PARAMS = ['key', 'select', 'filter', 'expand', 'orderby', 'top', 'skip', 'count', 'skiptoken'];
 
 function storageKey(tab) {
   return tab && tab.profile && tab.servicePath
@@ -86,6 +86,7 @@ export function addToHistory(tab, params, rowCount, elapsed) {
 
 function buildParamSummary(params) {
   const parts = [];
+  if (params.key)     parts.push(`(${params.key})`);
   if (params.select)  parts.push(`$select=${params.select}`);
   if (params.filter)  parts.push(`$filter=${params.filter}`);
   if (params.expand)  parts.push(`$expand=${params.expand}`);
@@ -161,6 +162,7 @@ export async function replayHistory(idx) {
     await selectEntity(h.entitySet, row || null);
     if (getActiveTab() !== tab || state.currentEntitySet !== h.entitySet) return;
   }
+  document.getElementById('qKey').value     = h.params.key     || '';
   document.getElementById('qSelect').value  = h.params.select  || '';
   document.getElementById('qFilter').value  = h.params.filter  || '';
   document.getElementById('qExpand').value  = h.params.expand  || '';

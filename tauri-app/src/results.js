@@ -35,6 +35,7 @@ import {
   hideStatsBar,
   executeQuery,
   buildODataUrl,
+  readQueryParams,
 } from './executor.js';
 import { copyToClipboard } from './clipboard.js';
 import { timedInvoke } from './api.js';
@@ -249,8 +250,14 @@ export function renderResults(data, elapsedMs, params) {
 // Range + prev / next in the stats bar. Paging state lives on the tab so
 // the buttons know what the next request is.
 function renderPager(data, params, rowCount) {
-  const info = pagingInfo(data, params, rowCount);
   const tab = getActiveTab();
+  // One entity read by key: nothing to page through.
+  if (params.key) {
+    if (tab) tab._paging = null;
+    document.getElementById('statPager').classList.add('hidden');
+    return;
+  }
+  const info = pagingInfo(data, params, rowCount);
   if (tab) tab._paging = info;
   const from = info.offset + 1;
   const to = info.offset + rowCount;
@@ -465,16 +472,7 @@ export function copyRowAsJson(storeKey) {
 }
 
 export function copyODataUrl() {
-  const params = {
-    entity_set: state.currentEntitySet,
-    select:  document.getElementById('qSelect').value  || null,
-    filter:  document.getElementById('qFilter').value  || null,
-    expand:  document.getElementById('qExpand').value  || null,
-    orderby: document.getElementById('qOrderby').value || null,
-    top:     parseInt(document.getElementById('qTop').value)  || null,
-    skip:    parseInt(document.getElementById('qSkip').value) || null,
-  };
-  const url = buildODataUrl(params);
+  const url = buildODataUrl(readQueryParams());
   if (url) copyToClipboard(url, 'OData URL');
   else setStatus('No service/entity selected');
 }
@@ -489,16 +487,7 @@ export function copyCliCommand() {
     setStatus('Offline profiles have no data to query — the CLI can\'t run this either');
     return;
   }
-  const params = {
-    entity_set: state.currentEntitySet,
-    select:  document.getElementById('qSelect').value  || null,
-    filter:  document.getElementById('qFilter').value  || null,
-    expand:  document.getElementById('qExpand').value  || null,
-    orderby: document.getElementById('qOrderby').value || null,
-    top:     parseInt(document.getElementById('qTop').value)  || null,
-    skip:    parseInt(document.getElementById('qSkip').value) || null,
-  };
-  copyToClipboard(buildCliCommand(state.currentProfile, state.currentServicePath, params), 'CLI command');
+  copyToClipboard(buildCliCommand(state.currentProfile, state.currentServicePath, readQueryParams()), 'CLI command');
 }
 
 // ══════════════════════════════════════════════════════════════

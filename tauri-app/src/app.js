@@ -255,6 +255,7 @@ document.addEventListener('keydown', (e) => {
     // Only if focus is somewhere in the query bar or results area
     const inQueryZone =
       active && (
+        active.id === 'qKey' ||
         active.id === 'qSelect' ||
         active.id === 'qFilter' ||
         active.id === 'qExpand' ||

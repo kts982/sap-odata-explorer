@@ -66,5 +66,24 @@ check('top-level property insert chains to operators', top.insert, 'EWMWarehouse
 const inFn = suggestionsFor('filter', 'startswith(EWMWare', 18, info, 'V4').items[0];
 check('property inside a function call has no trailing space', inFn.insert, 'EWMWarehouse');
 
+// Key field: the names of a composite key.
+const composite = {
+  keys: ['SalesOrder', 'SalesOrderItem', 'IsActiveEntity'],
+  properties: [
+    { name: 'SalesOrder', label: 'Sales Order', edm_type: 'Edm.String' },
+    { name: 'SalesOrderItem', label: 'Item', edm_type: 'Edm.String' },
+    { name: 'IsActiveEntity', label: '', edm_type: 'Edm.Boolean' },
+    { name: 'Material', label: 'Material', edm_type: 'Edm.String' },
+  ],
+};
+const keyItems = (text, caret = text.length, i = composite) => suggestionsFor('key', text, caret, i, 'V4').items;
+check('key: key properties only, by prefix', keyItems('Sal').map(i => i.value), ['SalesOrder', 'SalesOrderItem']);
+check('key: insert ends with =', keyItems('Is')[0].insert, 'IsActiveEntity=');
+check('key: after a comma, the names still missing', keyItems("SalesOrder='1',").map(i => i.value), ['SalesOrderItem', 'IsActiveEntity']);
+check('key: nothing inside a string literal', keyItems("SalesOrder='Sal"), []);
+check('key: nothing while typing a value', keyItems('SalesOrder=Is'), []);
+check('key: an existing = is kept', suggestionsFor('key', 'Is=true', 2, composite, 'V4').items[0].insert, 'IsActiveEntity');
+check('key: single key → no suggestions', keyItems('Pro', 3, { keys: ['Product'], properties: info.properties }), []);
+
 console.log(failures ? `\n${failures} failure(s)` : `\nall ${count} assertions passed`);
 process.exit(failures ? 1 : 0);

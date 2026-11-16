@@ -215,11 +215,13 @@ export function shellArg(value) {
 
 // The `sap-odata … run …` command equivalent to a desktop query. `-s` is a
 // connection flag and must precede the subcommand.
-export function buildCliCommand(profile, servicePath, params) {
+export function buildCliCommand(profile, servicePath, rawParams) {
+  const params = effectiveQueryParams(rawParams);
   const parts = ['sap-odata', '-p', shellArg(profile), '-s', shellArg(servicePath), 'run', shellArg(params.entity_set)];
   const opt = (flag, v) => {
     if (v !== null && v !== undefined && v !== '') parts.push(flag, shellArg(v));
   };
+  opt('--key', params.key);
   opt('--select', params.select);
   opt('--filter', params.filter);
   opt('--expand', params.expand);
@@ -227,6 +229,70 @@ export function buildCliCommand(profile, servicePath, params) {
   opt('--top', params.top);
   opt('--skip', params.skip);
   return parts.join(' ');
+}
+
+// What the query bar's key field addresses, as the text between the
+// parentheses of `EntitySet(…)`, or null when the field is empty. Raw OData
+// key syntax passes through (`'CUST01'`, `SalesOrder='1',Item=10`). Two
+// conveniences on top:
+//   - a pasted `EntitySet('CUST01')` or `('CUST01')` loses the wrapper;
+//   - for an entity with one key property, a plain value becomes the
+//     literal of that property's type where that is unambiguous: a string
+//     is quoted (`CUST01` → `'CUST01'`), a GUID gets the V2 prefix.
+// Numbers, dates and composite keys are sent as typed.
+export function normalizeEntityKey(input, info, entitySet, version) {
+  let key = String(input ?? '').trim();
+  if (entitySet && key.startsWith(`${entitySet}(`) && key.endsWith(')')) {
+    key = key.slice(entitySet.length);
+  }
+  if (key.startsWith('(') && key.endsWith(')')) key = key.slice(1, -1).trim();
+  if (!key) return null;
+  const keys = info && Array.isArray(info.keys) ? info.keys : [];
+  // `Name=value` is key syntax already, whatever the name.
+  if (keys.length !== 1 || /^[A-Za-z_]\w*\s*=/.test(key)) return key;
+  const prop = (info.properties || []).find(p => p.name === keys[0]);
+  const type = prop ? String(prop.edm_type || '').replace(/^Edm\./, '') : '';
+  if (type === 'String') {
+    return /^'.*'$/s.test(key) ? key : formatODataLiteral(key, 'Edm.String', version);
+  }
+  if (type === 'Guid') return formatODataLiteral(key, 'Edm.Guid', version);
+  return key;
+}
+
+// A read by key returns one entity, so only $select and $expand apply.
+// The list options ($filter, $orderby, $top, $skip, the count, a next-link
+// token) are dropped rather than sent along: they don't apply to a single
+// entity, and a server may reject the request for them.
+export function effectiveQueryParams(params) {
+  if (!params || !params.key) return params;
+  return { ...params, filter: null, orderby: null, top: null, skip: null, count: false, skiptoken: null };
+}
+
+// The key between `(` and `)` of a URL path, encoded as the request sends
+// it (KEY_PATH in crates/core/src/query.rs): `'`, `=` and `,` are OData
+// key syntax and stay literal, everything else outside the unreserved set
+// is percent-encoded.
+export function encodeKeyPath(key) {
+  return encodeURIComponent(key)
+    .replace(/[!*()]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
+    .replace(/%3D/g, '=')
+    .replace(/%2C/g, ',');
+}
+
+// Service-relative URL of a query-bar request ("copy URL").
+export function buildQueryUrl(servicePath, rawParams) {
+  if (!servicePath || !rawParams) return '';
+  const params = effectiveQueryParams(rawParams);
+  const parts = [];
+  if (params.select)  parts.push(`$select=${encodeURIComponent(params.select)}`);
+  if (params.filter)  parts.push(`$filter=${encodeURIComponent(params.filter)}`);
+  if (params.expand)  parts.push(`$expand=${encodeURIComponent(params.expand)}`);
+  if (params.orderby) parts.push(`$orderby=${encodeURIComponent(params.orderby)}`);
+  if (params.top)     parts.push(`$top=${params.top}`);
+  if (params.skip)    parts.push(`$skip=${params.skip}`);
+  const key = params.key ? `(${encodeKeyPath(params.key)})` : '';
+  const qs = parts.length ? '?' + parts.join('&') : '';
+  return `${servicePath}/${params.entity_set}${key}${qs}`;
 }
 
 // `Key1=lit1,Key2=lit2` addressing one result row, from the entity's key

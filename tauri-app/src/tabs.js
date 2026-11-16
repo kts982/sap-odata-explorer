@@ -151,6 +151,7 @@ export function saveCurrentTabState() {
   const tab = getActiveTab();
   if (!tab) return;
   // Save query bar values
+  tab._qKey     = document.getElementById('qKey').value;
   tab._qSelect  = document.getElementById('qSelect').value;
   tab._qFilter  = document.getElementById('qFilter').value;
   tab._qExpand  = document.getElementById('qExpand').value;
@@ -235,6 +236,7 @@ export function restoreTabUI() {
   if (tab._queryBarHidden === false) {
     document.getElementById('queryBar').classList.remove('hidden');
     document.getElementById('queryEntitySet').textContent = tab._queryEntitySet || '';
+    document.getElementById('qKey').value     = tab._qKey     || '';
     document.getElementById('qSelect').value  = tab._qSelect  || '';
     document.getElementById('qFilter').value  = tab._qFilter  || '';
     document.getElementById('qExpand').value  = tab._qExpand  || '';
@@ -243,6 +245,7 @@ export function restoreTabUI() {
     document.getElementById('qSkip').value    = tab._qSkip    || '';
   } else {
     document.getElementById('queryBar').classList.add('hidden');
+    document.getElementById('qKey').value     = '';
     document.getElementById('qSelect').value  = '';
     document.getElementById('qFilter').value  = '';
     document.getElementById('qExpand').value  = '';

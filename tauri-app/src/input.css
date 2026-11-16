@@ -91,6 +91,13 @@ input:focus, select:focus {
   box-shadow: 0 0 0 1px rgba(229, 162, 0, 0.15);
 }
 
+/* A key in the query bar reads one entity, and the list options ($filter,
+   $orderby, top, skip, count) are not sent with it. They recede while the
+   key field holds a value, and keep their content for when it is cleared.
+   Pure CSS, so every way the field gets a value (typing, history replay,
+   tab switch) is covered without a call site. */
+#queryBar:has(#qKey:not(:placeholder-shown)) .list-only { opacity: 0.35; }
+
 /* Buttons */
 .btn-primary {
   background: linear-gradient(135deg, #e5a200 0%, #c48b00 100%);

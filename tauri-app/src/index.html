@@ -121,6 +121,11 @@
           <div class="flex items-center gap-1.5 mr-1">
             <div class="w-1.5 h-1.5 rounded-full bg-ox-green"></div>
             <span id="queryEntitySet" class="text-xs font-mono font-medium text-ox-text"></span>
+            <span class="text-xs font-mono text-ox-dim -mr-1">(</span>
+            <input id="qKey" type="text" placeholder="key" spellcheck="false"
+              title="Read one entity by its key instead of the list: 'CUST01', or SalesOrder='1',Item='10' for a composite key. A plain value for a single string key is quoted for you. With a key, only $select and $expand are sent."
+              class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-32 outline-hidden" />
+            <span class="text-xs font-mono text-ox-dim -ml-1">)</span>
           </div>
           <input id="qSelect" type="text" placeholder="$select" title="Click properties above to add"
             class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-44 outline-hidden" />
@@ -131,16 +136,16 @@
             class="hidden text-[10px] font-semibold tracking-wide px-1.5 py-1 rounded-sm text-ox-electric border border-ox-electric/50 hover:bg-ox-electric/10 hover:border-ox-electric transition-colors"
             title="Populate $filter from UI.SelectionVariant defaults">Fiori filter</button>
           <input id="qFilter" type="text" placeholder="$filter"
-            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-52 outline-hidden" />
+            class="list-only bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-52 outline-hidden" />
           <input id="qExpand" type="text" placeholder="$expand" title="Click nav properties above to add"
             class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-36 outline-hidden" />
           <input id="qOrderby" type="text" placeholder="$orderby"
-            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-32 outline-hidden" />
+            class="list-only bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-32 outline-hidden" />
           <input id="qTop" type="number" placeholder="top" value="20"
-            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-16 outline-hidden" />
+            class="list-only bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-16 outline-hidden" />
           <input id="qSkip" type="number" placeholder="skip"
-            class="bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-16 outline-hidden" />
-          <label class="flex items-center gap-1 text-[10px] font-mono text-ox-dim cursor-pointer" title="Ask the server for the total row count ($count / $inlinecount) — can be slow on very large sets">
+            class="list-only bg-ox-surface text-ox-text text-xs font-mono border border-ox-border rounded-sm px-2 py-1 w-16 outline-hidden" />
+          <label class="list-only flex items-center gap-1 text-[10px] font-mono text-ox-dim cursor-pointer" title="Ask the server for the total row count ($count / $inlinecount) — can be slow on very large sets">
             <input id="qCount" type="checkbox" class="accent-ox-amber" /> count
           </label>
           <button id="btnRun" class="btn-primary text-xs px-3 py-1 rounded-sm">Run</button>

@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Format loosely follows 
 
 ## [Unreleased]
 
+### Added
+
+- **Read one entity by key in the desktop app** ([#32](https://github.com/kts982/sap-odata-explorer/issues/32)). The query bar has a key field next to the entity set name: `'russellwhyte'` there sends `GET People('russellwhyte')` instead of the list read. Some services implement the read of a single entity but not of the entity set, and their data could not be shown at all. The field takes OData key syntax (`'CUST01'`, `SalesOrder='1',Item='10'`). For an entity with one string key a plain value is quoted for you, a pasted `People('russellwhyte')` works too, and for a composite key the autocomplete offers the key names still missing. With a key, only `$select` and `$expand` are sent: `$filter`, `$orderby`, top, skip and count don't apply to one entity, so they are dimmed and keep their values for when the key is cleared. **URL**, **CLI** (as `--key`), **{ }** and the history all follow the key.
+
 ### Fixes
 
 - **The Windows proxy setup script (PAC) and "Automatically detect settings" (WPAD) are honoured** ([#29](https://github.com/kts982/sap-odata-explorer/issues/29)). Only the manual Windows proxy was read, so on a network that hands out its proxy through a PAC file the SAP host failed with "No such host is known" (os error 11001), while a browser on the same machine reached it. Windows now evaluates the script for the SAP host, the same lookup browsers use, and the answer is reused for a minute. `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` still win over the system settings, and a script that can't be fetched falls back to the previous behaviour. Applies to the CLI on Windows, the desktop app, and the desktop app's update check. `-v` logs the proxy the lookup picked. The README has a new [Proxy](README.md#proxy) section with the full order and limits.
